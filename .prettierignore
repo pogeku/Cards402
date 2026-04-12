@@ -7,3 +7,4 @@ contract/target
 sdk/coverage
 web/test-results
 web/playwright-report
+contract/api/*.d.ts

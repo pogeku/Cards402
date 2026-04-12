@@ -35,6 +35,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - name: Install backend deps
+        working-directory: backend
+        run: npm ci
       - name: Backend JS type check (opt-in files with @ts-check)
         working-directory: backend
         run: npm run typecheck
