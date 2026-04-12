@@ -15,7 +15,7 @@ import {
   importWalletPrivateKey,
   signTransaction as owsSign,
   type WalletInfo,
-} from '@open-wallet-standard/core';
+} from '@ctx.com/stellar-ows-core';
 
 import {
   Keypair,
