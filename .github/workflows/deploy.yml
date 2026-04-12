@@ -27,14 +27,14 @@ jobs:
             echo "=== Pulling latest ==="
             git pull origin main
 
-            echo "=== Backend ==="
+            echo "=== Root workspace (installs web + sdk) ==="
+            npm ci
+
+            echo "=== Build SDK ==="
+            npm run build -w sdk
+
+            echo "=== Backend (separate package, not a workspace) ==="
             cd backend && npm ci --omit=dev && cd ..
-
-            echo "=== SDK ==="
-            cd sdk && npm ci --production=false && npm run build && cd ..
-
-            echo "=== Web ==="
-            cd web && npm ci --ignore-scripts && cd ..
 
             echo "=== Restarting services ==="
             pm2 describe cards402-api > /dev/null 2>&1 && pm2 restart cards402-api || \
