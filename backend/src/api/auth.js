@@ -226,7 +226,10 @@ router.get('/me', (req, res) => {
 
   if (!row) return res.status(401).json({ error: 'unauthorized' });
 
-  res.json(row);
+  // Wrap in { user } to match /auth/verify's response shape — both web
+  // clients read data.user.role, so a flat response made /admin think a
+  // real owner was a non-owner and redirect them to /dashboard.
+  res.json({ user: row });
 });
 
 module.exports = router;
