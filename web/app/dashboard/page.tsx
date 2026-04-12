@@ -326,19 +326,6 @@ function CreateKeyModal({
               placeholder="e.g. 50.00 (blank = never)"
             />
           </div>
-          <p
-            style={{
-              color: 'var(--muted)',
-              fontSize: '0.75rem',
-              lineHeight: 1.55,
-              margin: 0,
-              paddingTop: '0.25rem',
-            }}
-          >
-            Refunds automatically go back to whichever Stellar address paid the failed order — no
-            wallet address needed here. Delivery notifications show up in this dashboard; attach a
-            webhook later from the key&apos;s Edit screen if you want push delivery too.
-          </p>
           {err && <p style={{ color: '#f87171', fontSize: '0.8125rem', margin: 0 }}>{err}</p>}
         </div>
         <div
