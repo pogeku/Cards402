@@ -50,12 +50,20 @@ console.log('Card:', card.number, 'CVV:', card.cvv, 'Exp:', card.expiry);
 
 ## Quick reference
 
-| Action               | Command                                         |
-| -------------------- | ----------------------------------------------- |
-| Check wallet balance | `ows wallet get --name my-agent`                |
-| Check spend budget   | `curl $API_URL/usage -H "X-Api-Key: $KEY"`      |
-| Check order status   | `curl $API_URL/orders/$ID -H "X-Api-Key: $KEY"` |
-| List recent orders   | `curl $API_URL/orders -H "X-Api-Key: $KEY"`     |
+| Action               | Command                                                   |
+| -------------------- | --------------------------------------------------------- |
+| Check wallet balance | `ows wallet get --name my-agent`                          |
+| Check spend budget   | `curl $API_URL/usage -H "X-Api-Key: $KEY"`                |
+| Stream order updates | `curl -N $API_URL/orders/$ID/stream -H "X-Api-Key: $KEY"` |
+| Get order snapshot   | `curl $API_URL/orders/$ID -H "X-Api-Key: $KEY"`           |
+| List recent orders   | `curl $API_URL/orders -H "X-Api-Key: $KEY"`               |
+
+The SDK's `purchaseCardOWS` subscribes to the live SSE stream under the
+hood — one open connection, push notifications, closes cleanly when the
+card is ready. No polling, no webhook endpoint to host. If you're
+calling the API without the SDK, open `GET /orders/{id}/stream` with
+`Accept: text/event-stream` and read events until you see
+`phase: "ready"`. Full protocol details: https://cards402.com/agents.txt
 
 ## Errors
 

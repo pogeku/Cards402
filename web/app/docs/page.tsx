@@ -111,7 +111,8 @@ function CodeBlock({ label, children }: { label?: string; children: string }) {
 const navItems = [
   { href: '#authentication', label: 'Authentication' },
   { href: '#create-order', label: 'Create order' },
-  { href: '#poll-order', label: 'Poll order' },
+  { href: '#stream-order', label: 'Stream order (SSE)' },
+  { href: '#poll-order', label: 'Poll order (fallback)' },
   { href: '#order-statuses', label: 'Order statuses' },
   { href: '#webhooks', label: 'Webhooks' },
   { href: '#errors', label: 'Error codes' },
@@ -552,12 +553,90 @@ Content-Type: application/json
         </Section>
 
         {/* ── Poll order ── */}
-        <Section id="poll-order">
-          <SectionTitle>Poll order</SectionTitle>
+        <Section id="stream-order">
+          <SectionTitle>Stream order (SSE) — preferred</SectionTitle>
           <Para>
-            Poll the status of an order. When <Code>status</Code> is{' '}
-            <Code>&quot;delivered&quot;</Code>, the response includes the card object with PAN, CVV,
-            and expiry.
+            Subscribe to live phase updates over Server-Sent Events. One open connection, pushed to
+            on every transition, closed cleanly when the order reaches a terminal phase. Prefer this
+            over polling for anything that runs as a long-lived process.
+          </Para>
+
+          <div
+            style={{
+              background: 'var(--surface)',
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              padding: '0.875rem 1.125rem',
+              marginBottom: '1.25rem',
+              fontFamily: 'var(--font-mono)',
+              fontSize: '0.875rem',
+            }}
+          >
+            <span style={{ color: '#60a5fa', fontWeight: 700 }}>GET</span>
+            <span style={{ color: 'var(--muted)', marginLeft: '0.75rem' }}>/orders/:id/stream</span>
+          </div>
+
+          <Para>
+            Each event carries the full order state (same JSON shape as <Code>GET /orders/:id</Code>
+            ) as its <Code>data:</Code> payload, so a client that reconnects always sees the latest
+            phase on the first message — no <Code>Last-Event-ID</Code> handling required.
+          </Para>
+
+          <CodeBlock label="Stream">
+            {`: connected
+
+id: 1776023489012
+event: phase
+data: {"order_id":"a3f7c2d1-...","status":"pending_payment","phase":"awaiting_payment","amount_usdc":"25.00","updated_at":"2026-04-08T12:00:00Z"}
+
+id: 1776023510234
+event: phase
+data: {"order_id":"a3f7c2d1-...","status":"ordering","phase":"processing","updated_at":"2026-04-08T12:00:21Z"}
+
+id: 1776023534567
+event: phase
+data: {"order_id":"a3f7c2d1-...","status":"delivered","phase":"ready","amount_usdc":"25.00","card":{"number":"4111 2345 6789 0123","cvv":"847","expiry":"12/27","brand":"Visa"},"updated_at":"2026-04-08T12:00:45Z"}`}
+          </CodeBlock>
+
+          <CodeBlock label="Minimal client (Node 18+ / browser)">
+            {`const res = await fetch(\`\${apiUrl}/orders/\${orderId}/stream\`, {
+  headers: { 'X-Api-Key': key, Accept: 'text/event-stream' },
+});
+const reader = res.body.getReader();
+const decoder = new TextDecoder();
+let buf = '';
+while (true) {
+  const { value, done } = await reader.read();
+  if (done) break;
+  buf += decoder.decode(value, { stream: true });
+  let i;
+  while ((i = buf.indexOf('\\n\\n')) !== -1) {
+    const event = buf.slice(0, i); buf = buf.slice(i + 2);
+    const line = event.split('\\n').find((l) => l.startsWith('data: '));
+    if (!line) continue;
+    const state = JSON.parse(line.slice(6));
+    if (state.phase === 'ready') { console.log(state.card); return; }
+    if (['failed','refunded','expired','rejected'].includes(state.phase)) {
+      throw new Error(state.error ?? state.phase);
+    }
+  }
+}`}
+          </CodeBlock>
+
+          <Para>
+            The cards402 SDK&apos;s <Code>waitForCard()</Code> already uses this path with polling
+            as an automatic fallback, so SDK users get SSE for free. The server emits an SSE comment
+            (<Code>: keepalive</Code>) every 15s to prevent intermediate proxies from idle-killing
+            the connection.
+          </Para>
+        </Section>
+
+        <Section id="poll-order">
+          <SectionTitle>Poll order (fallback)</SectionTitle>
+          <Para>
+            Poll the status of an order when SSE isn&apos;t an option (e.g. middleboxes that strip{' '}
+            <Code>text/event-stream</Code>). The response is the same shape as each SSE event&apos;s{' '}
+            <Code>data:</Code> payload.
           </Para>
 
           <div

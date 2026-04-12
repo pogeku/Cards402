@@ -38,14 +38,48 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get order details (poll for status)
+         * Get order details (poll fallback)
          * @description Returns the current state of an order. When `phase` is `ready`,
          *     the `card` object contains the virtual card details.
          *
-         *     Recommended polling interval: 3 seconds. Typical fulfillment
-         *     time: 30–60 seconds after payment lands.
+         *     Prefer `/orders/{orderId}/stream` (Server-Sent Events) for live
+         *     updates — one open connection gets pushed to on every phase
+         *     transition until terminal. Use this poll endpoint only as a
+         *     fallback for clients that can't consume `text/event-stream`.
          */
         get: operations["getOrder"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/orders/{orderId}/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Subscribe to live order phase updates (SSE)
+         * @description Server-Sent Events stream of phase transitions for a single order.
+         *     The server sends an immediate event with the current phase on
+         *     connection, then emits a new event every time the order's
+         *     `updated_at` changes, and closes the stream cleanly when the
+         *     order reaches a terminal phase (`ready`, `failed`, `refunded`,
+         *     `expired`, `rejected`).
+         *
+         *     Each event carries the full `OrderStatus` shape as its `data:`
+         *     payload, so a client that reconnects always sees the latest
+         *     state on the first message — no `Last-Event-ID` replay required.
+         *
+         *     Keep-alive: the server emits an SSE comment line every 15s so
+         *     intermediate proxies don't idle-kill the connection.
+         */
+        get: operations["streamOrder"];
         put?: never;
         post?: never;
         delete?: never;
@@ -431,6 +465,30 @@ export interface operations {
                     "application/json": components["schemas"]["OrderStatus"];
                 };
             };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    streamOrder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description SSE stream */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
         };
     };

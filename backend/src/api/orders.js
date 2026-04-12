@@ -429,16 +429,9 @@ const PHASE = {
   refunded: 'refunded',
 };
 
-// GET /orders/:id — poll status, returns card details when delivered
-router.get('/:id', orderPollLimiter, (req, res) => {
-  const order = /** @type {any} */ (
-    db
-      .prepare(`SELECT * FROM orders WHERE id = ? AND api_key_id = ?`)
-      .get(req.params.id, req.apiKey.id)
-  );
-
-  if (!order) return res.status(404).json({ error: 'order_not_found' });
-
+// Build the public-facing payload for an order row. Shared by GET /:id and
+// GET /:id/stream so both return exactly the same shape.
+function buildOrderResponse(order) {
   const response = {
     order_id: order.id,
     status: order.status,
@@ -459,7 +452,6 @@ router.get('/:id', orderPollLimiter, (req, res) => {
     response.expires_at = approval?.expires_at ?? null;
   }
 
-  // For pending_payment: include VCC payment instructions so agent can pay
   if (order.status === 'pending_payment' && order.vcc_payment_json) {
     try {
       response.payment = JSON.parse(order.vcc_payment_json);
@@ -501,7 +493,106 @@ router.get('/:id', orderPollLimiter, (req, res) => {
     }
   }
 
-  res.json(response);
+  return response;
+}
+
+const TERMINAL_STATUSES = new Set(['delivered', 'failed', 'refunded', 'expired', 'rejected']);
+
+// GET /orders/:id/stream — SSE stream of phase transitions.
+//
+// Replaces HTTP polling for long-lived agents: one open connection gets
+// pushed every state change until the order reaches a terminal phase, at
+// which point the server closes the stream. Internal implementation is a
+// 500ms SQLite tick per connection (cheap at our current scale; swap for an
+// in-process EventEmitter later if fanout grows).
+//
+// Client protocol (standard SSE):
+//   event: phase
+//   id: <ms-since-epoch of updated_at>
+//   data: <same JSON body as GET /orders/:id>
+//
+// Reconnection: each event carries the full current state, so a client can
+// reopen the stream at any time and rebuild its view from the first event
+// without needing Last-Event-ID replay.
+router.get('/:id/stream', (req, res) => {
+  const orderId = req.params.id;
+  const keyId = req.apiKey.id;
+
+  const initial = /** @type {any} */ (
+    db.prepare(`SELECT * FROM orders WHERE id = ? AND api_key_id = ?`).get(orderId, keyId)
+  );
+  if (!initial) {
+    return res.status(404).json({ error: 'order_not_found' });
+  }
+
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no', // tell nginx to pass bytes straight through
+  });
+  res.flushHeaders?.();
+  res.write(': connected\n\n');
+
+  let lastUpdated = '';
+  let closed = false;
+
+  function emit(row) {
+    const payload = buildOrderResponse(row);
+    const id = Date.parse(row.updated_at) || Date.now();
+    res.write(`id: ${id}\nevent: phase\ndata: ${JSON.stringify(payload)}\n\n`);
+    return TERMINAL_STATUSES.has(row.status);
+  }
+
+  // Initial state — so reconnects always see current phase on first message.
+  lastUpdated = initial.updated_at;
+  if (emit(initial)) {
+    res.end();
+    return;
+  }
+
+  const tick = setInterval(() => {
+    if (closed) return;
+    const row = /** @type {any} */ (
+      db.prepare(`SELECT * FROM orders WHERE id = ? AND api_key_id = ?`).get(orderId, keyId)
+    );
+    if (!row) {
+      clearInterval(tick);
+      clearInterval(keepalive);
+      res.end();
+      return;
+    }
+    if (row.updated_at !== lastUpdated) {
+      lastUpdated = row.updated_at;
+      if (emit(row)) {
+        clearInterval(tick);
+        clearInterval(keepalive);
+        res.end();
+      }
+    }
+  }, 500);
+
+  // SSE comment ping every 15s so intermediate proxies don't idle-kill.
+  const keepalive = setInterval(() => {
+    if (!closed) res.write(': keepalive\n\n');
+  }, 15000);
+
+  req.on('close', () => {
+    closed = true;
+    clearInterval(tick);
+    clearInterval(keepalive);
+  });
+});
+
+// GET /orders/:id — poll status, returns card details when delivered
+router.get('/:id', orderPollLimiter, (req, res) => {
+  const order = /** @type {any} */ (
+    db
+      .prepare(`SELECT * FROM orders WHERE id = ? AND api_key_id = ?`)
+      .get(req.params.id, req.apiKey.id)
+  );
+  if (!order) return res.status(404).json({ error: 'order_not_found' });
+  res.json(buildOrderResponse(order));
 });
 
 // Notify owner via Discord + email when an approval is needed

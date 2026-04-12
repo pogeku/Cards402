@@ -236,33 +236,80 @@ Step 2 — Send payment via the Soroban contract:
   Horizon:     https://horizon.stellar.org
   Network:     Public (mainnet passphrase: "Public Global Stellar Network ; September 2015")
 
-Step 3 — Poll for the card:
+Step 3 — Subscribe to the card via SSE (preferred):
 
-  GET https://api.cards402.com/v1/orders/<order_id>
-  Headers: X-Api-Key: cards402_<your key>
+  GET https://api.cards402.com/v1/orders/<order_id>/stream
+  Headers:
+    X-Api-Key: cards402_<your key>
+    Accept: text/event-stream
 
-  Poll every 3-5 seconds. Check the "phase" field (not "status"):
+  Standard Server-Sent Events. The server pushes an event immediately
+  with the current phase, then a new event on every phase transition,
+  and closes the stream cleanly at a terminal phase. No polling needed,
+  no webhook endpoint to host — the connection uses the same API key
+  you already have.
 
+  Event shape (each event terminated by a blank line):
+
+    id: 1776023489012
+    event: phase
+    data: {"order_id":"a3f7c2d1-...","phase":"awaiting_payment","amount_usdc":"10.00","updated_at":"..."}
+
+    id: 1776023510234
+    event: phase
+    data: {"order_id":"a3f7c2d1-...","phase":"processing","updated_at":"..."}
+
+    id: 1776023534567
+    event: phase
+    data: {"order_id":"a3f7c2d1-...","phase":"ready","card":{"number":"4111...","cvv":"123","expiry":"12/27","brand":"Visa"},"updated_at":"..."}
+
+  Phases (check the "phase" field, not "status"):
     phase: "awaiting_payment"  → payment not yet detected, keep waiting
     phase: "processing"        → payment confirmed, card being prepared
-    phase: "ready"             → card ready, see "card" object in response
+    phase: "ready"             → card ready, see "card" object in event data
     phase: "failed"            → fulfillment failed; refund has been queued
     phase: "refunded"          → funds returned to your wallet address
     phase: "expired"           → 2-hour window passed; no funds were taken
 
-  When phase === "ready":
-    {
-      "order_id": "a3f7c2d1-...",
-      "phase": "ready",
-      "card": {
-        "number": "4111111111111111",
-        "cvv": "123",
-        "expiry": "12/27",
-        "brand": "Visa"
+  Reconnection: each event carries the full current state, so reopening
+  the stream at any time gives you the latest phase on the first message.
+  No Last-Event-ID handling required.
+
+  Keep-alive: the server emits an SSE comment every 15s so intermediate
+  proxies don't idle-kill the connection. Ignore lines starting with ':'.
+
+  Minimal JavaScript client (works in Node 18+ and browsers):
+    const res = await fetch(streamUrl, {
+      headers: { 'X-Api-Key': key, Accept: 'text/event-stream' },
+    });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n\n')) !== -1) {
+        const event = buf.slice(0, i); buf = buf.slice(i + 2);
+        const line = event.split('\n').find(l => l.startsWith('data: '));
+        if (!line) continue;
+        const state = JSON.parse(line.slice(6));
+        if (state.phase === 'ready') { console.log(state.card); return; }
+        if (['failed','refunded','expired','rejected'].includes(state.phase)) throw state;
       }
     }
 
-  Timeout: stop polling after 5 minutes if still not ready; contact support.
+Step 3 (fallback) — Poll if you can't do SSE:
+
+  GET https://api.cards402.com/v1/orders/<order_id>
+  Headers: X-Api-Key: cards402_<your key>
+
+  Poll every 3-5 seconds. Same response shape as the SSE event data.
+  Use this only if your environment strips text/event-stream (rare).
+
+  Timeout: stop polling after 5 minutes if still not ready; check the
+  dashboard for the order's state.
 
 ────────────────────────────────────────────────────────────────────────────────
 WALLET SETUP AND FUNDING
@@ -327,7 +374,9 @@ Auth:     X-Api-Key: cards402_<your key>
 Endpoints:
 
   POST   /v1/orders              Create an order
-  GET    /v1/orders/:id          Get order status (and card when ready)
+  GET    /v1/orders/:id/stream   Live SSE stream of phase transitions (preferred)
+  GET    /v1/orders/:id          Poll order status (fallback; same shape as
+                                 the SSE event data)
   GET    /v1/orders              List your orders (query: status, limit)
   GET    /v1/usage               Spend summary and budget
 
@@ -415,10 +464,13 @@ RATE LIMITS
 ────────────────────────────────────────────────────────────────────────────────
 
   Order creation: 60 per hour per API key
-  Status polling: 600 per minute per API key
+  Status polling: 600 per minute per API key (SSE streams don't count —
+                  one open connection replaces ~20 polls)
   Admin endpoints: rate limited by IP
 
-Recommended polling interval: 3-5 seconds.
+If you must poll, 3-5 seconds is the recommended interval. SSE is
+strictly better for the normal card-purchase flow: open one connection,
+await the ready event, done.
 
 ────────────────────────────────────────────────────────────────────────────────
 CONTACT

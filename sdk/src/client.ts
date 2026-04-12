@@ -11,6 +11,7 @@ export {
 } from './errors';
 import {
   parseApiError,
+  Cards402Error as Cards402ErrorCtor,
   OrderFailedError,
   WaitTimeoutError,
   AuthError as AuthErrorCtor,
@@ -199,10 +200,103 @@ export class Cards402Client {
     return res.json() as Promise<OrderStatus>;
   }
 
-  // Poll until card is ready. Throws typed errors on failure or timeout.
+  // Wait until the card is ready. Uses SSE (GET /orders/:id/stream) by
+  // default — one open connection pushed to as the phase changes — and
+  // falls back to HTTP polling if SSE fails for any reason (old backend,
+  // hostile middlebox stripping text/event-stream, etc.).
   async waitForCard(
     orderId: string,
-    { timeoutMs = 300000, intervalMs = 3000 } = {},
+    { timeoutMs = 300000, intervalMs = 3000 }: { timeoutMs?: number; intervalMs?: number } = {},
+  ): Promise<CardDetails> {
+    try {
+      return await this.waitForCardStream(orderId, timeoutMs);
+    } catch (err) {
+      // Typed order-lifecycle errors must propagate unchanged — the stream
+      // correctly reported a terminal failure / expiry / timeout.
+      if (
+        err instanceof OrderFailedError ||
+        err instanceof WaitTimeoutError ||
+        err instanceof Cards402ErrorCtor
+      ) {
+        throw err;
+      }
+      // Anything else (network, parse, 406, etc.) — fall back to polling.
+      return this.waitForCardPoll(orderId, timeoutMs, intervalMs);
+    }
+  }
+
+  // SSE fast path.
+  private async waitForCardStream(orderId: string, timeoutMs: number): Promise<CardDetails> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${this.baseUrl}/orders/${orderId}/stream`, {
+        headers: { 'X-Api-Key': this.apiKey, Accept: 'text/event-stream' },
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        if (res.status === 404) throw new OrderFailedError(orderId, 'order_not_found', undefined);
+        if (res.status === 401) throw new AuthErrorCtor();
+        // Fall back to polling on any other non-2xx.
+        throw new Error(`stream http ${res.status}`);
+      }
+      if (!res.body) throw new Error('stream has no body');
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // Split on blank lines — each SSE event is terminated by \n\n.
+        let idx: number;
+        while ((idx = buffer.indexOf('\n\n')) !== -1) {
+          const raw = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          const dataLine = raw.split('\n').find((line) => line.startsWith('data: '));
+          if (!dataLine) continue;
+          const json = dataLine.slice(6);
+          let payload: OrderStatus;
+          try {
+            payload = JSON.parse(json) as OrderStatus;
+          } catch {
+            continue;
+          }
+
+          if (payload.phase === 'ready' && payload.card) {
+            return payload.card;
+          }
+          if (
+            payload.phase === 'failed' ||
+            payload.phase === 'refunded' ||
+            payload.phase === 'rejected'
+          ) {
+            throw new OrderFailedError(orderId, payload.error ?? payload.phase, payload.refund);
+          }
+          if (payload.phase === 'expired') {
+            throw new OrderFailedError(
+              orderId,
+              'Payment window expired — no funds were taken',
+              undefined,
+            );
+          }
+        }
+      }
+      // Stream ended without a terminal event — treat as timeout.
+      throw new WaitTimeoutError(orderId, timeoutMs);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // Legacy polling path — kept as the fallback so old backends still work.
+  private async waitForCardPoll(
+    orderId: string,
+    timeoutMs: number,
+    intervalMs: number,
   ): Promise<CardDetails> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
