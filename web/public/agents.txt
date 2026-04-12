@@ -36,7 +36,9 @@ PREREQUISITES
 
 Before purchasing a card you need:
 
-  1. A cards402 API key — get one at https://cards402.com (or contact api@cards402.com)
+  1. A cards402 API key — create one at https://cards402.com/dashboard
+     Sign in with your email (6-digit code sent to the inbox), open the
+     Keys tab, click New key. The raw token is shown once in a modal.
      Format: cards402_<48 hex chars>
      Used as: X-Api-Key header
 
@@ -87,12 +89,21 @@ The cards402 MCP server exposes four tools that handle the entire flow:
 Setup:
 
   1. Install the MCP server:
-       npx -y cards402 --mcp
+       npx -y cards402-mcp
      or add to your MCP config:
-       { "command": "npx", "args": ["-y", "cards402", "--mcp"] }
+       {
+         "mcpServers": {
+           "cards402": {
+             "command": "npx",
+             "args": ["-y", "cards402-mcp"],
+             "env": { "CARDS402_API_KEY": "cards402_<your key>" }
+           }
+         }
+       }
 
   2. Set environment variables for the MCP server process:
-       CARDS402_API_KEY     = cards402_<your key>
+       CARDS402_API_KEY     = cards402_<your key>        (required)
+       CARDS402_BASE_URL    = https://api.cards402.com/v1 (default; override for testing)
        OWS_WALLET_NAME      = my-agent-wallet  (any name you choose)
        OWS_WALLET_PASSPHRASE = <optional extra encryption>
 
@@ -143,34 +154,55 @@ Step 1 — Create an order:
   Headers:
     X-Api-Key: cards402_<your key>
     Content-Type: application/json
-    Idempotency-Key: <random UUID>  (prevents duplicate orders on retry)
+    Idempotency-Key: <random UUID>  (recommended — prevents duplicate
+                                     orders on retry; cached for 24h)
   Body:
-    { "amount_usdc": "10.00", "payment_asset": "xlm" }
+    { "amount_usdc": "10.00" }
+
+  Optional body fields:
+    webhook_url   HTTPS URL called when the card is ready or failed
+    metadata      Arbitrary JSON stored with the order
+
+  Note: there is no payment_asset in the request. You choose asset
+  at payment time by calling pay_xlm or pay_usdc on the contract.
 
   Response (201):
     {
       "order_id": "a3f7c2d1-...",
       "status": "pending_payment",
+      "phase": "awaiting_payment",
+      "amount_usdc": "10.00",
       "payment": {
-        "network": "stellar",
-        "contract": "CAAAA...<receiver contract>",
-        "function": "pay_xlm",
-        "xlm_amount": "67.3422",
-        "order_id": "a3f7c2d1-..."
-      }
+        "type": "soroban_contract",
+        "contract_id": "CAAAA...<receiver contract>",
+        "order_id": "a3f7c2d1-...",
+        "usdc": {
+          "amount": "10.0000000",
+          "asset": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+        },
+        "xlm": {
+          "amount": "67.3422"
+        }
+      },
+      "poll_url": "/v1/orders/a3f7c2d1-...",
+      "budget": { "spent_usdc": "0", "limit_usdc": null, "remaining_usdc": null }
     }
 
   Note: the XLM amount is quoted at the current rate and locked for 2 hours.
+  If you pay with USDC, send exactly payment.usdc.amount. If you pay with
+  XLM, send exactly payment.xlm.amount.
 
 Step 2 — Send payment via the Soroban contract:
 
-  Invoke the receiver contract on Stellar mainnet:
+  Invoke the receiver contract on Stellar mainnet with one of:
+    pay_usdc   to pay in USDC (agent must hold USDC with trustline)
+    pay_xlm    to pay in XLM  (simpler — no trustline)
 
-    Contract ID: from payment.contract in the response above
-    Function:    pay_xlm  (or pay_usdc for USDC payments)
+    Contract ID: from payment.contract_id in the response above
     Arguments:
       from:     Address — your Stellar wallet address (G...)
-      amount:   i128    — amount in stroops (1 XLM = 10,000,000 stroops)
+      amount:   i128    — amount in stroops / micro-USDC (7 decimals)
+                         1 XLM or 1 USDC = 10_000_000 stroops
                          e.g. 67.3422 XLM = 673422000 stroops
       order_id: Bytes   — the order UUID as UTF-8 bytes (not as a string type)
 
@@ -178,20 +210,21 @@ Step 2 — Send payment via the Soroban contract:
     stellar contract invoke \
       --network mainnet \
       --source <your-secret-key> \
-      --id <contract-id-from-response> \
+      --id <payment.contract_id> \
       -- pay_xlm \
       --from <your-G-address> \
       --amount <stroops> \
       --order_id <order-uuid-as-hex-bytes>
 
   Using stellar-sdk (JavaScript):
-    const contract = new Contract(payment.contract);
+    const contract = new Contract(payment.contract_id);
+    const xlmAmount = payment.xlm.amount;
     const amountStroops = BigInt(Math.round(parseFloat(xlmAmount) * 10_000_000));
     const tx = new TransactionBuilder(account, { fee: '1000000', networkPassphrase: Networks.PUBLIC })
       .addOperation(contract.call('pay_xlm',
         new Address(publicKey).toScVal(),
         nativeToScVal(amountStroops, { type: 'i128' }),
-        nativeToScVal(Buffer.from(orderId, 'utf-8'), { type: 'bytes' }),
+        nativeToScVal(Buffer.from(payment.order_id, 'utf-8'), { type: 'bytes' }),
       ))
       .setTimeout(60)
       .build();
@@ -304,13 +337,18 @@ Request headers for all endpoints:
 
 POST /v1/orders request body:
   {
-    "amount_usdc":   "10.00",      // required — card value in USD
-    "payment_asset": "xlm",        // optional — "xlm" or "usdc" (default: "usdc")
-    "webhook_url":   "https://..."  // optional — called when card is ready or failed
+    "amount_usdc":  "10.00",       // required — card value in USD (max $1000)
+    "webhook_url":  "https://...",  // optional — called when card is ready or failed
+    "metadata":     { }             // optional — arbitrary JSON stored with the order
   }
+
+  Asset choice happens at payment time, not at order creation — the response
+  carries both payment.usdc.amount and payment.xlm.amount. Call pay_usdc or
+  pay_xlm on the contract with whichever asset you're paying in.
 
 GET /v1/orders/:id response phases:
   awaiting_payment → processing → ready | failed | refunded | expired
+  awaiting_approval (only when the order needs owner approval first)
 
 ────────────────────────────────────────────────────────────────────────────────
 ERROR CODES AND RECOVERY
@@ -323,7 +361,8 @@ HTTP 400:
 
 HTTP 401:
   missing_api_key        — no X-Api-Key header
-  invalid_api_key        — key not found or disabled; contact api@cards402.com
+  invalid_api_key        — key not found or disabled; sign in at
+                           https://cards402.com/dashboard to check or rotate it
 
 HTTP 403:
   spend_limit_exceeded   — your key has a spend limit; contact your operator
@@ -364,8 +403,12 @@ Expiry:
   take no funds. Create a new order to retry.
 
 Card validity:
-  Delivered card details are stored by cards402 for 90 days for dispute purposes.
-  Use card details promptly after receiving them.
+  Card details (PAN, CVV, expiry) are returned once when the order reaches
+  phase "ready" and remain fetchable from GET /v1/orders/:id while retention
+  allows. Save them to your secrets store on receipt; retention policy is
+  subject to change. Visa prepaid cards typically remain valid for 3+ years
+  from issue date — the validity date on the card itself is what matters for
+  the merchant charge.
 
 ────────────────────────────────────────────────────────────────────────────────
 RATE LIMITS
