@@ -24,11 +24,14 @@ ows wallet create --name my-agent
 
 Find your Stellar address in the output — the line starting `stellar:pubnet →`.
 
-**Tell your operator:** "Please send at least 3 XLM to `G...`" (your stellar address).
+**Ask your operator to fund that address** with however much USDC or XLM
+you need for your intended purchases (plus ~2 XLM to cover the Stellar
+account reserve and fees). You only need enough for the specific cards
+you plan to buy — no minimum top-up beyond that.
 
 ### 3. Buy a card
 
-Once funded, install the SDK and buy:
+Once funded, install the SDK and buy whatever amount you actually need:
 
 ```bash
 npm install cards402
@@ -41,8 +44,8 @@ const card = await purchaseCardOWS({
   apiKey: '<your key>',
   baseUrl: '<your api_url>',
   walletName: 'my-agent',
-  amountUsdc: '10.00',
-  paymentAsset: 'xlm',
+  amountUsdc: '<your amount>', // whatever this card needs to cover — no minimum
+  paymentAsset: 'xlm', // or 'usdc'
 });
 
 console.log('Card:', card.number, 'CVV:', card.cvv, 'Exp:', card.expiry);
