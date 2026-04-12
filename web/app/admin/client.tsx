@@ -1699,6 +1699,13 @@ export function AdminClient() {
   const [showAuditLog, setShowAuditLog] = useState(false);
   const [walletBalances, setWalletBalances] = useState<Record<string, WalletBalance | null>>({});
 
+  const [treasury, setTreasury] = useState<{
+    public_key: string;
+    network: string;
+    balance: WalletBalance | null;
+  } | null>(null);
+  const [treasuryCopied, setTreasuryCopied] = useState(false);
+
   const [dashboardTenants, setDashboardTenants] = useState<DashboardTenant[]>([]);
   const [webhooks, setWebhooks] = useState<WebhookEntry[]>([]);
   const [unmatchedPayments, setUnmatchedPayments] = useState<UnmatchedPayment[]>([]);
@@ -1987,6 +1994,35 @@ export function AdminClient() {
   useEffect(() => {
     if (showAuditLog && authed) fetchAuditLog();
   }, [showAuditLog, authed, fetchAuditLog]);
+
+  // Treasury wallet: fetch the address from the backend once, then poll
+  // Horizon directly for the balance every 60s. The balance fetch runs
+  // client-side to keep the backend off the network hot path.
+  useEffect(() => {
+    if (!authed) return;
+    let cancelled = false;
+
+    async function refreshTreasury() {
+      try {
+        const res = await fetch(`${API_BASE}/admin/platform-wallet`);
+        if (!res.ok) return;
+        const data: { public_key: string; network: string } = await res.json();
+        const balance = await fetchHorizonBalance(data.public_key);
+        if (!cancelled) {
+          setTreasury({ public_key: data.public_key, network: data.network, balance });
+        }
+      } catch {
+        /* ignore — card just won't update this tick */
+      }
+    }
+
+    refreshTreasury();
+    const id = setInterval(refreshTreasury, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [authed]);
 
   // Fetch live Stellar balances for any key that has a wallet_public_key
   useEffect(() => {
@@ -2564,6 +2600,125 @@ export function AdminClient() {
             }}
           >
             {error}
+          </div>
+        )}
+
+        {/* Treasury wallet */}
+        {treasury && (
+          <div
+            style={{
+              background: 'var(--surface)',
+              border: '1px solid var(--border)',
+              borderRadius: 12,
+              marginBottom: '1.5rem',
+              padding: '1.25rem 1.5rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '1rem',
+            }}
+          >
+            <div>
+              <div
+                style={{
+                  fontSize: '0.6875rem',
+                  color: 'var(--muted)',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.08em',
+                  marginBottom: '0.375rem',
+                }}
+              >
+                Treasury wallet ({treasury.network}) — top-up address
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <code
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: '0.8125rem',
+                    color: 'var(--fg)',
+                    wordBreak: 'break-all',
+                  }}
+                >
+                  {treasury.public_key}
+                </code>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(treasury.public_key);
+                    setTreasuryCopied(true);
+                    setTimeout(() => setTreasuryCopied(false), 1500);
+                  }}
+                  style={{
+                    background: 'transparent',
+                    border: '1px solid var(--border)',
+                    color: 'var(--muted)',
+                    padding: '0.25rem 0.625rem',
+                    borderRadius: 6,
+                    fontSize: '0.6875rem',
+                    cursor: 'pointer',
+                    fontFamily: 'var(--font-mono)',
+                  }}
+                >
+                  {treasuryCopied ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+              <div
+                style={{
+                  fontSize: '0.6875rem',
+                  color: 'var(--muted)',
+                  marginTop: '0.5rem',
+                  maxWidth: 560,
+                }}
+              >
+                Send USDC or XLM to this address to fund refunds. Balances poll Horizon every 60s.
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '1.5rem' }}>
+              <div style={{ textAlign: 'right' }}>
+                <div
+                  style={{
+                    fontSize: '0.6875rem',
+                    color: 'var(--muted)',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.08em',
+                  }}
+                >
+                  USDC
+                </div>
+                <div
+                  style={{
+                    fontSize: '1.5rem',
+                    fontWeight: 700,
+                    color: 'var(--green)',
+                    fontFamily: 'var(--font-mono)',
+                  }}
+                >
+                  {treasury.balance ? treasury.balance.usdc : '—'}
+                </div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div
+                  style={{
+                    fontSize: '0.6875rem',
+                    color: 'var(--muted)',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.08em',
+                  }}
+                >
+                  XLM
+                </div>
+                <div
+                  style={{
+                    fontSize: '1.5rem',
+                    fontWeight: 700,
+                    color: 'var(--fg)',
+                    fontFamily: 'var(--font-mono)',
+                  }}
+                >
+                  {treasury.balance ? treasury.balance.xlm : '—'}
+                </div>
+              </div>
+            </div>
           </div>
         )}
 

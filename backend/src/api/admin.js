@@ -146,6 +146,27 @@ router.get('/stats', (req, res) => {
   res.json({ ...totals, active_keys: activeKeys.count });
 });
 
+// GET /admin/platform-wallet — treasury wallet public key + network.
+// The owner tops up this address off-chain to fund USDC/XLM refunds.
+// Balance is fetched client-side directly from Horizon so the backend
+// doesn't have to touch the network on every poll.
+router.get('/platform-wallet', (req, res) => {
+  try {
+    const { Keypair } = require('@stellar/stellar-sdk');
+    const secret = process.env.STELLAR_XLM_SECRET;
+    if (!secret) {
+      return res.status(503).json({ error: 'stellar_secret_not_configured' });
+    }
+    const keypair = Keypair.fromSecret(secret);
+    res.json({
+      public_key: keypair.publicKey(),
+      network: process.env.STELLAR_NETWORK || 'mainnet',
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'derive_failed', message: err.message });
+  }
+});
+
 // GET /admin/system — system state (frozen, consecutive failures)
 router.get('/system', (req, res) => {
   const rows = /** @type {any[]} */ (db.prepare(`SELECT key, value FROM system_state`).all());
