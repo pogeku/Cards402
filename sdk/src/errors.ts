@@ -27,7 +27,10 @@ export class Cards402Error extends Error {
 
 /** The API key's spend limit has been reached. */
 export class SpendLimitError extends Cards402Error {
-  constructor(public readonly limit: string, public readonly spent: string) {
+  constructor(
+    public readonly limit: string,
+    public readonly spent: string,
+  ) {
     super(
       `Spend limit exceeded: $${spent} spent of $${limit} limit. Ask your operator to raise the limit or wait for the next reset period.`,
       'spend_limit_exceeded',
@@ -62,7 +65,9 @@ export class ServiceUnavailableError extends Cards402Error {
 
 /** XLM price feed is unavailable — retry or use USDC. */
 export class PriceUnavailableError extends Cards402Error {
-  constructor(message = 'XLM price is temporarily unavailable. Retry shortly, or use payment_asset: "usdc".') {
+  constructor(
+    message = 'XLM price is temporarily unavailable. Retry shortly, or use payment_asset: "usdc".',
+  ) {
     super(message, 'price_unavailable', 503);
     this.name = 'PriceUnavailableError';
     Object.setPrototypeOf(this, new.target.prototype);
@@ -101,7 +106,11 @@ export class OrderFailedError extends Cards402Error {
     const refundNote = refund
       ? ` Your payment is being refunded (txid: ${refund.stellar_txid}).`
       : ' A refund will be processed if payment was received.';
-    super(`Order ${orderId} failed: ${reason}.${refundNote}`, 'order_failed', 200, { orderId, reason, refund });
+    super(`Order ${orderId} failed: ${reason}.${refundNote}`, 'order_failed', 200, {
+      orderId,
+      reason,
+      refund,
+    });
     this.name = 'OrderFailedError';
     Object.setPrototypeOf(this, new.target.prototype);
   }
@@ -109,7 +118,10 @@ export class OrderFailedError extends Cards402Error {
 
 /** Waiting for a card timed out — order may still be processing. */
 export class WaitTimeoutError extends Cards402Error {
-  constructor(public readonly orderId: string, timeoutMs: number) {
+  constructor(
+    public readonly orderId: string,
+    timeoutMs: number,
+  ) {
     super(
       `Timed out waiting for card after ${timeoutMs / 1000}s (order: ${orderId}). ` +
         'Poll GET /v1/orders/:id to check status — it may still complete.',

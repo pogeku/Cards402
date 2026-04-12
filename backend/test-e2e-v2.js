@@ -7,8 +7,14 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const db = require('./src/db');
 const {
-  Keypair, Networks, TransactionBuilder, Contract,
-  nativeToScVal, Address, rpc, BASE_FEE,
+  Keypair,
+  Networks,
+  TransactionBuilder,
+  Contract,
+  nativeToScVal,
+  Address,
+  rpc,
+  BASE_FEE,
 } = require('@stellar/stellar-sdk');
 
 const AMOUNT = process.argv[2] || '0.02';
@@ -30,10 +36,12 @@ async function main() {
   const keyHash = await bcrypt.hash(testToken, 10);
   const keyId = crypto.randomUUID();
   const keyPrefix = testToken.slice(9, 21);
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO api_keys (id, key_hash, key_prefix, label, mode, enabled)
     VALUES (?, ?, ?, 'e2e-test-v2', 'live', 1)
-  `).run(keyId, keyHash, keyPrefix);
+  `,
+  ).run(keyId, keyHash, keyPrefix);
   console.log(`[1] Created test API key ${keyId.slice(0, 8)}`);
 
   let orderId;
@@ -71,13 +79,18 @@ async function main() {
     const account = await server.getAccount(keypair.publicKey());
     const contract = new Contract(RECEIVER_CONTRACT_ID);
 
-    const tx = new TransactionBuilder(account, { fee: '1000000', networkPassphrase: NETWORK_PASSPHRASE })
-      .addOperation(contract.call(
-        'pay_xlm',
-        new Address(keypair.publicKey()).toScVal(),
-        nativeToScVal(stroops, { type: 'i128' }),
-        nativeToScVal(Buffer.from(orderId, 'utf-8'), { type: 'bytes' }),
-      ))
+    const tx = new TransactionBuilder(account, {
+      fee: '1000000',
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
+      .addOperation(
+        contract.call(
+          'pay_xlm',
+          new Address(keypair.publicKey()).toScVal(),
+          nativeToScVal(stroops, { type: 'i128' }),
+          nativeToScVal(Buffer.from(orderId, 'utf-8'), { type: 'bytes' }),
+        ),
+      )
       .setTimeout(300)
       .build();
 
@@ -91,11 +104,13 @@ async function main() {
     // TRY_AGAIN_LATER = fee bump or retry needed; retry once after a short wait
     if (sendResult.status === 'TRY_AGAIN_LATER') {
       console.log('    TX: TRY_AGAIN_LATER — retrying in 5s...');
-      await new Promise(r => setTimeout(r, 5000));
+      await new Promise((r) => setTimeout(r, 5000));
       sendResult = await server.sendTransaction(preparedTx);
     }
-    if (sendResult.status === 'ERROR') throw new Error(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`);
-    if (sendResult.status === 'TRY_AGAIN_LATER') throw new Error('Soroban network busy (TRY_AGAIN_LATER after retry)');
+    if (sendResult.status === 'ERROR')
+      throw new Error(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`);
+    if (sendResult.status === 'TRY_AGAIN_LATER')
+      throw new Error('Soroban network busy (TRY_AGAIN_LATER after retry)');
 
     console.log(`    TX hash: ${sendResult.hash}`);
     console.log(`    Status:  ${sendResult.status}`);
@@ -106,7 +121,7 @@ async function main() {
     let txStatus = 'PENDING';
     const txDeadline = Date.now() + 60000;
     while (Date.now() < txDeadline) {
-      await new Promise(r => setTimeout(r, 3000));
+      await new Promise((r) => setTimeout(r, 3000));
       try {
         const check = await server.getTransaction(sendResult.hash);
         if (check.status === 'SUCCESS' || check.status === 'FAILED') {
@@ -115,7 +130,10 @@ async function main() {
         }
         process.stdout.write('.');
       } catch (parseErr) {
-        if (parseErr.message?.includes('Bad union switch') || parseErr.message?.includes('bad union switch')) {
+        if (
+          parseErr.message?.includes('Bad union switch') ||
+          parseErr.message?.includes('bad union switch')
+        ) {
           // Newer protocol XDR — SDK can't parse the result but TX has landed.
           // The watcher will confirm delivery via order status.
           txStatus = 'SUCCESS';
@@ -134,7 +152,7 @@ async function main() {
     let card;
 
     while (Date.now() < deadline) {
-      await new Promise(r => setTimeout(r, 4000));
+      await new Promise((r) => setTimeout(r, 4000));
 
       const statusRes = await fetch(`${CARDS402_BASE}/v1/orders/${orderId}`, {
         headers: { 'x-api-key': testToken },
@@ -158,7 +176,6 @@ async function main() {
     console.log(`Expiry: ${card.expiry}`);
     console.log(`Brand:  ${card.brand}`);
     console.log('(CVV not logged)\n');
-
   } finally {
     // ── Cleanup test API key ───────────────────────────────────────────────────
     db.prepare(`DELETE FROM api_keys WHERE id = ?`).run(keyId);
@@ -166,7 +183,7 @@ async function main() {
   }
 }
 
-main().catch(err => {
+main().catch((err) => {
   console.error(`\nFATAL: ${err.message}`);
   process.exit(1);
 });

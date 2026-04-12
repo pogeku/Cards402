@@ -3,6 +3,7 @@
 Check the status of a cards402 virtual card order, or get a full spend summary.
 
 ## Usage
+
 /check-vcc [order_id|budget]
 
 ## Instructions
@@ -12,6 +13,7 @@ When invoked with an order ID:
 1. Check if `CARDS402_API_KEY` is set. If not, prompt the user to set it.
 
 2. Fetch the order:
+
    ```typescript
    import { Cards402Client } from 'cards402';
 
@@ -28,6 +30,7 @@ When invoked with an order ID:
    - `expired` — payment window expired, no funds taken
 
 4. If `phase === 'ready'`, display card details:
+
    ```
    ✅ Virtual Visa Card Ready
 
@@ -43,6 +46,7 @@ const usage = await client.getUsage();
 ```
 
 Display:
+
 ```
 💳 Budget for <label>:
 $<spent> spent of $<limit> limit — $<remaining> remaining
@@ -55,4 +59,5 @@ Orders: <total> total
 ```
 
 ## Environment variables needed
+
 - `CARDS402_API_KEY` — your cards402 API key

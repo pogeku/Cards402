@@ -17,13 +17,23 @@ const vccClient = require('../../src/vcc-client');
 
 // Seed an order with an explicit timestamp so we can test age-based logic.
 // SQLite datetime format: 'YYYY-MM-DD HH:MM:SS'
-function seedOrderAt({ status = 'pending_payment', payment_asset = 'usdc', minutesAgo = 0, vcc_job_id = null } = {}) {
+function seedOrderAt({
+  status = 'pending_payment',
+  payment_asset = 'usdc',
+  minutesAgo = 0,
+  vcc_job_id = null,
+} = {}) {
   const id = uuidv4();
-  const created = new Date(Date.now() - minutesAgo * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
-  db.prepare(`
+  const created = new Date(Date.now() - minutesAgo * 60 * 1000)
+    .toISOString()
+    .replace('T', ' ')
+    .slice(0, 19);
+  db.prepare(
+    `
     INSERT INTO orders (id, status, amount_usdc, payment_asset, api_key_id, vcc_job_id, created_at, updated_at)
     VALUES (?, ?, '10.00', ?, NULL, ?, ?, ?)
-  `).run(id, status, payment_asset, vcc_job_id || null, created, created);
+  `,
+  ).run(id, status, payment_asset, vcc_job_id || null, created, created);
   return id;
 }
 
@@ -64,7 +74,10 @@ describe('expireStaleOrders', () => {
     const delivId = seedOrderAt({ status: 'delivered', minutesAgo: 200 });
     const failId = seedOrderAt({ status: 'failed', minutesAgo: 200 });
     expireStaleOrders();
-    assert.equal(db.prepare(`SELECT status FROM orders WHERE id = ?`).get(delivId).status, 'delivered');
+    assert.equal(
+      db.prepare(`SELECT status FROM orders WHERE id = ?`).get(delivId).status,
+      'delivered',
+    );
     assert.equal(db.prepare(`SELECT status FROM orders WHERE id = ?`).get(failId).status, 'failed');
   });
 
@@ -116,33 +129,51 @@ describe('recoverStuckOrders', () => {
   it('does NOT recover orders without vcc_job_id', async () => {
     const id = seedOrderAt({ status: 'pending_payment', minutesAgo: 15 }); // no vcc_job_id
     let polled = false;
-    vccClient.getVccJobStatus = async () => { polled = true; return { status: 'failed' }; };
+    vccClient.getVccJobStatus = async () => {
+      polled = true;
+      return { status: 'failed' };
+    };
     await recoverStuckOrders();
     assert.equal(polled, false, 'should not poll VCC for orders without vcc_job_id');
-    assert.equal(db.prepare(`SELECT status FROM orders WHERE id = ?`).get(id).status, 'pending_payment');
+    assert.equal(
+      db.prepare(`SELECT status FROM orders WHERE id = ?`).get(id).status,
+      'pending_payment',
+    );
   });
 
   it('does NOT recover recently-updated orders (<10 min)', async () => {
     const id = seedOrderAt({ status: 'pending_payment', minutesAgo: 5, vcc_job_id: 'vcc-job-3' });
     let polled = false;
-    vccClient.getVccJobStatus = async () => { polled = true; return { status: 'failed' }; };
+    vccClient.getVccJobStatus = async () => {
+      polled = true;
+      return { status: 'failed' };
+    };
     await recoverStuckOrders();
     assert.equal(polled, false, 'should not poll VCC for recently-updated orders');
-    assert.equal(db.prepare(`SELECT status FROM orders WHERE id = ?`).get(id).status, 'pending_payment');
+    assert.equal(
+      db.prepare(`SELECT status FROM orders WHERE id = ?`).get(id).status,
+      'pending_payment',
+    );
   });
 
   it('leaves in-progress orders alone', async () => {
     const id = seedOrderAt({ status: 'pending_payment', minutesAgo: 15, vcc_job_id: 'vcc-job-4' });
     vccClient.getVccJobStatus = async () => ({ status: 'queued' }); // still in progress
     await recoverStuckOrders();
-    assert.equal(db.prepare(`SELECT status FROM orders WHERE id = ?`).get(id).status, 'pending_payment');
+    assert.equal(
+      db.prepare(`SELECT status FROM orders WHERE id = ?`).get(id).status,
+      'pending_payment',
+    );
   });
 
   it('does not touch delivered or expired orders', async () => {
     const delivId = seedOrderAt({ status: 'delivered', minutesAgo: 60, vcc_job_id: 'vcc-job-5' });
     const expId = seedOrderAt({ status: 'expired', minutesAgo: 60, vcc_job_id: 'vcc-job-6' });
     await recoverStuckOrders();
-    assert.equal(db.prepare(`SELECT status FROM orders WHERE id = ?`).get(delivId).status, 'delivered');
+    assert.equal(
+      db.prepare(`SELECT status FROM orders WHERE id = ?`).get(delivId).status,
+      'delivered',
+    );
     assert.equal(db.prepare(`SELECT status FROM orders WHERE id = ?`).get(expId).status, 'expired');
   });
 
@@ -162,12 +193,17 @@ describe('pruneIdempotencyKeys', () => {
   beforeEach(() => resetDb());
 
   function insertIdempotencyKey(hoursAgo = 0) {
-    const ts = new Date(Date.now() - hoursAgo * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+    const ts = new Date(Date.now() - hoursAgo * 60 * 60 * 1000)
+      .toISOString()
+      .replace('T', ' ')
+      .slice(0, 19);
     const key = uuidv4();
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO idempotency_keys (key, api_key_id, response_status, response_body, created_at)
       VALUES (?, 'test-key-id', 200, '{}', ?)
-    `).run(key, ts);
+    `,
+    ).run(key, ts);
     return key;
   }
 
@@ -189,7 +225,10 @@ describe('pruneIdempotencyKeys', () => {
     const oldKey = insertIdempotencyKey(48);
     const recentKey = insertIdempotencyKey(1);
     pruneIdempotencyKeys();
-    assert.equal(db.prepare(`SELECT key FROM idempotency_keys WHERE key = ?`).get(oldKey), undefined);
+    assert.equal(
+      db.prepare(`SELECT key FROM idempotency_keys WHERE key = ?`).get(oldKey),
+      undefined,
+    );
     assert.ok(db.prepare(`SELECT key FROM idempotency_keys WHERE key = ?`).get(recentKey));
   });
 

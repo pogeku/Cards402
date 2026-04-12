@@ -24,7 +24,7 @@ async function main() {
   const deadline = Date.now() + 300000; // 5 min
 
   while (Date.now() < deadline) {
-    await new Promise(r => setTimeout(r, 5000));
+    await new Promise((r) => setTimeout(r, 5000));
     const o = await ctxClient.getGiftCard(ctxOrderId);
     console.log(`  Status: ${o.fulfilmentStatus} / ${o.paymentStatus}`);
 
@@ -44,4 +44,7 @@ async function main() {
   throw new Error('Timed out waiting for CTX fulfilment');
 }
 
-main().catch(err => { console.error('Error:', err.message); process.exit(1); });
+main().catch((err) => {
+  console.error('Error:', err.message);
+  process.exit(1);
+});

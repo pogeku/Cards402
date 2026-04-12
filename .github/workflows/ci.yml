@@ -206,7 +206,8 @@ jobs:
   notify:
     name: Notify
     runs-on: ubuntu-latest
-    needs: [lint, typecheck, test, audit, build, backend-smoke, contract-build, e2e, secret-scan, sast]
+    needs:
+      [lint, typecheck, test, audit, build, backend-smoke, contract-build, e2e, secret-scan, sast]
     if: always()
     steps:
       - name: Discord notification

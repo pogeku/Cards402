@@ -1,10 +1,7 @@
 #!/usr/bin/env node
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js';
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import {
   createOWSWallet,
   getOWSPublicKey,
@@ -26,20 +23,16 @@ const OWS_WALLET_PASSPHRASE = process.env.OWS_WALLET_PASSPHRASE ?? undefined;
 const OWS_VAULT_PATH = process.env.OWS_VAULT_PATH ?? undefined;
 
 if (!API_KEY) {
-  process.stderr.write(
-    'Warning: CARDS402_API_KEY is not set. Get one at https://cards402.com\n'
-  );
+  process.stderr.write('Warning: CARDS402_API_KEY is not set. Get one at https://cards402.com\n');
 }
 
 if (!OWS_WALLET_NAME) {
-  process.stderr.write(
-    'Warning: OWS_WALLET_NAME is not set. Run setup_wallet for instructions.\n'
-  );
+  process.stderr.write('Warning: OWS_WALLET_NAME is not set. Run setup_wallet for instructions.\n');
 }
 
 const server = new Server(
   { name: 'cards402', version: PKG_VERSION },
-  { capabilities: { tools: {} } }
+  { capabilities: { tools: {} } },
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -91,7 +84,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'check_budget',
       description:
-        'Check this agent\'s spend summary — how much has been spent, the configured limit, and how much budget remains. Use this to report spending to your owner or to decide whether you can afford a card.',
+        "Check this agent's spend summary — how much has been spent, the configured limit, and how much budget remains. Use this to report spending to your owner or to decide whether you can afford a card.",
       inputSchema: {
         type: 'object',
         properties: {},
@@ -165,7 +158,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
             lines.push(`USDC trustline: could not add (${errMsg.slice(0, 120)})`);
-            lines.push('  This may mean the trustline already exists, or XLM balance is too low for fees.');
+            lines.push(
+              '  This may mean the trustline already exists, or XLM balance is too low for fees.',
+            );
             accountStatus = usdcNum > 0 ? 'ready' : 'funded_no_trustline';
           }
           // Re-fetch balance after trustline op
@@ -207,7 +202,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
-        if (errMsg.includes('404') || errMsg.toLowerCase().includes('not found') || errMsg.includes('request failed')) {
+        if (
+          errMsg.includes('404') ||
+          errMsg.toLowerCase().includes('not found') ||
+          errMsg.includes('request failed')
+        ) {
           // Account does not exist on-chain yet (not activated)
           accountStatus = 'not_activated';
           lines.push('');
@@ -223,8 +222,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       lines.push('');
       lines.push('Environment variables:');
       lines.push(`  OWS_WALLET_NAME       — wallet identifier (set: "${OWS_WALLET_NAME}")`);
-      lines.push(`  OWS_WALLET_PASSPHRASE — encryption passphrase (${OWS_WALLET_PASSPHRASE ? 'set' : 'not set'})`);
-      lines.push(`  OWS_VAULT_PATH        — vault file path (${OWS_VAULT_PATH ?? 'default: ~/.ows/vault'})`);
+      lines.push(
+        `  OWS_WALLET_PASSPHRASE — encryption passphrase (${OWS_WALLET_PASSPHRASE ? 'set' : 'not set'})`,
+      );
+      lines.push(
+        `  OWS_VAULT_PATH        — vault file path (${OWS_VAULT_PATH ?? 'default: ~/.ows/vault'})`,
+      );
       lines.push('  CARDS402_API_KEY      — your cards402 API key');
 
       if (accountStatus === 'not_activated' || accountStatus === 'unfunded') {
@@ -322,7 +325,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (!/^\d+(\.\d{1,8})?$/.test(amount_usdc) || parseFloat(amount_usdc) <= 0) {
       return {
-        content: [{ type: 'text', text: 'Error: amount_usdc must be a positive number, e.g. "10.00"' }],
+        content: [
+          { type: 'text', text: 'Error: amount_usdc must be a positive number, e.g. "10.00"' },
+        ],
         isError: true,
       };
     }
@@ -347,22 +352,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (usdcNum < amountNum) {
           const shortfall = (amountNum - usdcNum).toFixed(2);
           return {
-            content: [{
-              type: 'text',
-              text: [
-                'Insufficient USDC balance.',
-                '',
-                `  You have:    ${balance.usdc} USDC`,
-                `  You need:    ${amount_usdc} USDC`,
-                `  Shortfall:   ${shortfall} USDC`,
-                '',
-                `Send USDC to your wallet address:`,
-                `  ${publicKey}`,
-                '',
-                'After funding, run purchase_vcc again.',
-                'Or switch to XLM payment: purchase_vcc { payment_asset: "xlm" }',
-              ].join('\n'),
-            }],
+            content: [
+              {
+                type: 'text',
+                text: [
+                  'Insufficient USDC balance.',
+                  '',
+                  `  You have:    ${balance.usdc} USDC`,
+                  `  You need:    ${amount_usdc} USDC`,
+                  `  Shortfall:   ${shortfall} USDC`,
+                  '',
+                  `Send USDC to your wallet address:`,
+                  `  ${publicKey}`,
+                  '',
+                  'After funding, run purchase_vcc again.',
+                  'Or switch to XLM payment: purchase_vcc { payment_asset: "xlm" }',
+                ].join('\n'),
+              },
+            ],
             isError: true,
           };
         }
@@ -372,27 +379,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // catch obviously-unfunded wallets before hitting the API.
         if (xlmNum < 3) {
           return {
-            content: [{
-              type: 'text',
-              text: [
-                'XLM balance is too low to purchase a card.',
-                '',
-                `  You have:  ${balance.xlm} XLM`,
-                `  Minimum:   3 XLM (for Stellar reserves and fees alone)`,
-                `  Typical:   ~${Math.ceil(amountNum / 0.14 + 2)} XLM for a $${amount_usdc} card at ~$0.14/XLM`,
-                '',
-                'The exact XLM amount is quoted when the order is created.',
-                '',
-                `Send XLM to your wallet address:`,
-                `  ${publicKey}`,
-                '',
-                'Where to get XLM:',
-                '  Coinbase:  coinbase.com → Buy XLM → Send',
-                '  Lobstr:    lobstr.co → Buy XLM → Send',
-                '',
-                'After funding, run purchase_vcc again.',
-              ].join('\n'),
-            }],
+            content: [
+              {
+                type: 'text',
+                text: [
+                  'XLM balance is too low to purchase a card.',
+                  '',
+                  `  You have:  ${balance.xlm} XLM`,
+                  `  Minimum:   3 XLM (for Stellar reserves and fees alone)`,
+                  `  Typical:   ~${Math.ceil(amountNum / 0.14 + 2)} XLM for a $${amount_usdc} card at ~$0.14/XLM`,
+                  '',
+                  'The exact XLM amount is quoted when the order is created.',
+                  '',
+                  `Send XLM to your wallet address:`,
+                  `  ${publicKey}`,
+                  '',
+                  'Where to get XLM:',
+                  '  Coinbase:  coinbase.com → Buy XLM → Send',
+                  '  Lobstr:    lobstr.co → Buy XLM → Send',
+                  '',
+                  'After funding, run purchase_vcc again.',
+                ].join('\n'),
+              },
+            ],
             isError: true,
           };
         }
@@ -434,9 +443,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     } catch (err) {
       // Only expose typed API errors — other errors may contain internal details
-      const message = err instanceof Error && err.constructor.name.endsWith('Error') && 'status' in err
-        ? err.message
-        : err instanceof Error ? err.message.slice(0, 200) : 'Purchase failed';
+      const message =
+        err instanceof Error && err.constructor.name.endsWith('Error') && 'status' in err
+          ? err.message
+          : err instanceof Error
+            ? err.message.slice(0, 200)
+            : 'Purchase failed';
       return {
         content: [{ type: 'text', text: `Error purchasing card: ${message}` }],
         isError: true,
@@ -506,9 +518,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         `Budget summary${label ? ` for "${label}"` : ''}`,
         '',
         `Spent:     $${budget.spent_usdc} USDC`,
-        budget.limit_usdc
-          ? `Limit:     $${budget.limit_usdc} USDC`
-          : 'Limit:     unlimited',
+        budget.limit_usdc ? `Limit:     $${budget.limit_usdc} USDC` : 'Limit:     unlimited',
         budget.remaining_usdc !== null
           ? `Remaining: $${budget.remaining_usdc} USDC`
           : 'Remaining: unlimited',

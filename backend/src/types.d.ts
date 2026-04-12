@@ -17,7 +17,15 @@ declare global {
       /** Set by express.json verify callback — raw string body for HMAC */
       rawBody: string;
       /** Set by middleware/requireDashboard.js */
-      dashboard: { id: string; name: string; user_id: string; spend_limit_usdc?: string; frozen?: number; created_at?: string; [key: string]: any };
+      dashboard: {
+        id: string;
+        name: string;
+        user_id: string;
+        spend_limit_usdc?: string;
+        frozen?: number;
+        created_at?: string;
+        [key: string]: any;
+      };
     }
   }
 }

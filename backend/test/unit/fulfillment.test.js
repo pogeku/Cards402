@@ -64,10 +64,12 @@ function resetDb() {
 
 function seedOrder(overrides = {}) {
   const id = overrides.id || uuidv4();
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO orders (id, status, amount_usdc, payment_asset, api_key_id, sender_address, webhook_url, payment_xlm_amount)
     VALUES (@id, @status, @amount_usdc, @payment_asset, @api_key_id, @sender_address, @webhook_url, @payment_xlm_amount)
-  `).run({
+  `,
+  ).run({
     id,
     status: 'failed',
     amount_usdc: '10.00',
@@ -112,7 +114,11 @@ describe('scheduleRefund', () => {
   });
 
   it('sends USDC refund and marks order refunded', async () => {
-    const id = seedOrder({ sender_address: 'GREFUND_DEST', payment_asset: 'usdc_soroban', amount_usdc: '10.00' });
+    const id = seedOrder({
+      sender_address: 'GREFUND_DEST',
+      payment_asset: 'usdc_soroban',
+      amount_usdc: '10.00',
+    });
     await scheduleRefund(id);
 
     const order = getOrder(id);
@@ -121,7 +127,11 @@ describe('scheduleRefund', () => {
   });
 
   it('sends XLM refund for xlm_soroban orders', async () => {
-    const id = seedOrder({ sender_address: 'GREFUND_DEST', payment_asset: 'xlm_soroban', payment_xlm_amount: '50.00' });
+    const id = seedOrder({
+      sender_address: 'GREFUND_DEST',
+      payment_asset: 'xlm_soroban',
+      payment_xlm_amount: '50.00',
+    });
     await scheduleRefund(id);
 
     const order = getOrder(id);
@@ -139,7 +149,9 @@ describe('scheduleRefund', () => {
   });
 
   it('marks refund_pending when sendUsdc throws', async () => {
-    xlmSenderMock.sendUsdc = async () => { throw new Error('Stellar unavailable'); };
+    xlmSenderMock.sendUsdc = async () => {
+      throw new Error('Stellar unavailable');
+    };
     const id = seedOrder({ sender_address: 'GREFUND_DEST', payment_asset: 'usdc_soroban' });
     await scheduleRefund(id);
 
@@ -148,7 +160,11 @@ describe('scheduleRefund', () => {
   });
 
   it('marks refund_pending for XLM order with no payment_xlm_amount', async () => {
-    const id = seedOrder({ sender_address: 'GREFUND_DEST', payment_asset: 'xlm_soroban', payment_xlm_amount: null });
+    const id = seedOrder({
+      sender_address: 'GREFUND_DEST',
+      payment_asset: 'xlm_soroban',
+      payment_xlm_amount: null,
+    });
     await scheduleRefund(id);
 
     const order = getOrder(id);
@@ -171,7 +187,11 @@ describe('fireWebhook', () => {
   });
 
   it('posts JSON payload to the webhook URL', async () => {
-    await fireWebhook('https://hooks.example.com/events', { order_id: 'abc', status: 'delivered' }, null);
+    await fireWebhook(
+      'https://hooks.example.com/events',
+      { order_id: 'abc', status: 'delivered' },
+      null,
+    );
 
     assert.equal(fetchCalls.length, 1);
     assert.equal(fetchCalls[0].url, 'https://hooks.example.com/events');
@@ -184,7 +204,10 @@ describe('fireWebhook', () => {
     await fireWebhook('https://hooks.example.com/events', { order_id: 'xyz' }, 'mysecret');
 
     const { opts } = fetchCalls[0];
-    assert.ok(opts.headers['X-Cards402-Signature']?.startsWith('sha256='), 'signature header present');
+    assert.ok(
+      opts.headers['X-Cards402-Signature']?.startsWith('sha256='),
+      'signature header present',
+    );
     assert.ok(opts.headers['X-Cards402-Timestamp'], 'timestamp header present');
 
     // Verify the HMAC is correct
@@ -205,7 +228,7 @@ describe('fireWebhook', () => {
     fetchShouldFail = true;
     await assert.rejects(
       () => fireWebhook('https://hooks.example.com/fail', {}, null),
-      /webhook HTTP 500/
+      /webhook HTTP 500/,
     );
   });
 
@@ -220,11 +243,10 @@ describe('fireWebhook', () => {
   });
 
   it('propagates SSRF error without making the fetch', async () => {
-    ssrfMock.assertSafeUrl = async () => { throw new Error('Blocked: private IP'); };
-    await assert.rejects(
-      () => fireWebhook('https://192.168.1.1/hook', {}, null),
-      /Blocked/
-    );
+    ssrfMock.assertSafeUrl = async () => {
+      throw new Error('Blocked: private IP');
+    };
+    await assert.rejects(() => fireWebhook('https://192.168.1.1/hook', {}, null), /Blocked/);
     assert.equal(fetchCalls.length, 0, 'fetch should not be called for SSRF-blocked URLs');
   });
 });

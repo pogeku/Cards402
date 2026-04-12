@@ -45,7 +45,7 @@ function withTimeout<T>(promise: Promise<T>, ms = 15000): Promise<T> {
   return Promise.race([
     promise,
     new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`Horizon request timed out after ${ms}ms`)), ms)
+      setTimeout(() => reject(new Error(`Horizon request timed out after ${ms}ms`)), ms),
     ),
   ]);
 }
@@ -54,7 +54,7 @@ function withTimeout<T>(promise: Promise<T>, ms = 15000): Promise<T> {
 
 /** Extract the Stellar G-address from an OWS WalletInfo. */
 function getStellarAddress(wallet: WalletInfo): string {
-  const account = wallet.accounts.find(a => a.chainId.includes('stellar'));
+  const account = wallet.accounts.find((a) => a.chainId.includes('stellar'));
   if (!account) throw new Error(`OWS wallet "${wallet.name}" has no Stellar account`);
   return account.address;
 }
@@ -86,11 +86,11 @@ export function importStellarKey(
   const ed25519KeyHex = Buffer.from(keypair.rawSecretKey()).toString('hex');
   const wallet = importWalletPrivateKey(
     name,
-    '',           // secp256k1 key (EVM) — not used for Stellar
+    '', // secp256k1 key (EVM) — not used for Stellar
     passphrase ?? null,
     vaultPath ?? null,
     STELLAR_CHAIN,
-    null,         // secp256K1Key — not used
+    null, // secp256K1Key — not used
     ed25519KeyHex,
   );
   return { walletId: wallet.id, publicKey: getStellarAddress(wallet) };
@@ -110,10 +110,16 @@ export async function getOWSBalance(
   const publicKey = getOWSPublicKey(walletName, vaultPath);
   const server = new Horizon.Server(HORIZON_URL);
   const account = await withTimeout(server.loadAccount(publicKey));
-  let xlm = '0', usdc = '0';
+  let xlm = '0',
+    usdc = '0';
   for (const b of account.balances) {
     if (b.asset_type === 'native') xlm = b.balance;
-    if (b.asset_type === 'credit_alphanum4' && b.asset_code === 'USDC' && b.asset_issuer === USDC_ISSUER) usdc = b.balance;
+    if (
+      b.asset_type === 'credit_alphanum4' &&
+      b.asset_code === 'USDC' &&
+      b.asset_issuer === USDC_ISSUER
+    )
+      usdc = b.balance;
   }
   return { xlm, usdc };
 }
@@ -146,15 +152,26 @@ function owsSignTx<T extends SignableTx>(
   //   2. Builds the network-passphrase-prefixed signature payload
   //   3. Ed25519-signs the sha256 of that payload
   //   4. Returns the raw 64-byte signature
-  const envelopeXdr = (tx as unknown as { toEnvelope(): { toXDR(fmt: string): string } }).toEnvelope().toXDR('hex');
-  const { signature: sigHex } = owsSign(walletName, STELLAR_CHAIN, envelopeXdr, passphrase ?? null, null, vaultPath ?? null);
+  const envelopeXdr = (tx as unknown as { toEnvelope(): { toXDR(fmt: string): string } })
+    .toEnvelope()
+    .toXDR('hex');
+  const { signature: sigHex } = owsSign(
+    walletName,
+    STELLAR_CHAIN,
+    envelopeXdr,
+    passphrase ?? null,
+    null,
+    vaultPath ?? null,
+  );
 
   const pubKeyBytes = StrKey.decodeEd25519PublicKey(publicKey);
   const hint = pubKeyBytes.slice(-4);
-  tx.signatures.push(new xdr.DecoratedSignature({
-    hint,
-    signature: Buffer.from(sigHex, 'hex'),
-  }));
+  tx.signatures.push(
+    new xdr.DecoratedSignature({
+      hint,
+      signature: Buffer.from(sigHex, 'hex'),
+    }),
+  );
   return tx;
 }
 
@@ -171,9 +188,8 @@ export interface TrustlineOpts {
 export async function addUsdcTrustlineOWS(opts: TrustlineOpts): Promise<string> {
   const { walletName, passphrase, vaultPath, networkPassphrase = Networks.PUBLIC } = opts;
   const publicKey = getOWSPublicKey(walletName, vaultPath);
-  const horizonUrl = networkPassphrase === Networks.TESTNET
-    ? 'https://horizon-testnet.stellar.org'
-    : HORIZON_URL;
+  const horizonUrl =
+    networkPassphrase === Networks.TESTNET ? 'https://horizon-testnet.stellar.org' : HORIZON_URL;
 
   const server = new Horizon.Server(horizonUrl);
   const account = await withTimeout(server.loadAccount(publicKey));
@@ -266,7 +282,9 @@ export interface PurchaseCardOwsOpts {
  * S-9 idempotency: pass `resume: { orderId, payment }` to skip re-creation on retry.
  * Payment is only sent if the order phase is still 'awaiting_payment'.
  */
-export async function purchaseCardOWS(opts: PurchaseCardOwsOpts): Promise<CardDetails & { order_id: string }> {
+export async function purchaseCardOWS(
+  opts: PurchaseCardOwsOpts,
+): Promise<CardDetails & { order_id: string }> {
   const { Cards402Client } = await import('./client');
   const client = new Cards402Client({ apiKey: opts.apiKey, baseUrl: opts.baseUrl });
   const paymentAsset = opts.paymentAsset ?? 'usdc';

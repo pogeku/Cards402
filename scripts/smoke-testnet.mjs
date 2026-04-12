@@ -64,9 +64,10 @@ const PAYMENT_ASSET = optional('PAYMENT_ASSET', 'usdc');
 const TIMEOUT_MS = parseInt(optional('TIMEOUT_MS', '300000'), 10);
 
 // Resolve the network passphrase — matching the sdk's defaults.
-const NETWORK_PASSPHRASE = STELLAR_NETWORK === 'mainnet'
-  ? 'Public Global Stellar Network ; September 2015'
-  : 'Test SDF Network ; September 2015';
+const NETWORK_PASSPHRASE =
+  STELLAR_NETWORK === 'mainnet'
+    ? 'Public Global Stellar Network ; September 2015'
+    : 'Test SDF Network ; September 2015';
 
 function log(msg) {
   const ts = new Date().toISOString().slice(11, 19);
@@ -109,7 +110,9 @@ async function main() {
   log(`  xlm.amount     = ${order.payment?.xlm?.amount ?? '(none)'}`);
 
   if (order.status === 'awaiting_approval') {
-    console.error('✖ order requires owner approval — approve it in the dashboard and rerun with resume.');
+    console.error(
+      '✖ order requires owner approval — approve it in the dashboard and rerun with resume.',
+    );
     process.exit(3);
   }
 
@@ -178,15 +181,17 @@ async function main() {
     await sleep(3000);
   }
 
-  console.error(`✖ timed out waiting for terminal phase; last seen: phase=${last?.phase} status=${last?.status}`);
+  console.error(
+    `✖ timed out waiting for terminal phase; last seen: phase=${last?.phase} status=${last?.status}`,
+  );
   process.exit(2);
 }
 
 function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
+  return new Promise((r) => setTimeout(r, ms));
 }
 
-main().catch(err => {
+main().catch((err) => {
   console.error('✖ unhandled error:', err?.stack ?? err);
   process.exit(3);
 });

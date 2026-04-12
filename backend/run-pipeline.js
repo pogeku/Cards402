@@ -26,7 +26,7 @@ async function main() {
   let redeemUrl, challenge;
   const deadline = Date.now() + 300000;
   while (Date.now() < deadline) {
-    await new Promise(r => setTimeout(r, 5000));
+    await new Promise((r) => setTimeout(r, 5000));
     const o = await getGiftCard(order.id);
     log(`  status: ${o.fulfilmentStatus} / ${o.paymentStatus}`);
     if (o.fulfilmentStatus === 'complete' || o.fulfilmentStatus === 'fulfilled') {
@@ -64,4 +64,7 @@ async function main() {
   }
 }
 
-main().catch(err => { console.error('Error:', err.message); process.exit(1); });
+main().catch((err) => {
+  console.error('Error:', err.message);
+  process.exit(1);
+});

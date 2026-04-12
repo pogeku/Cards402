@@ -7,21 +7,21 @@ const net = require('net');
 
 // RFC-1918 private ranges + loopback + link-local + CGNAT + IPv6 equivalents
 const BLOCKED = [
-  /^127\./,                          // loopback
-  /^0\./,                            // unspecified
-  /^10\./,                           // RFC-1918
-  /^172\.(1[6-9]|2\d|3[01])\./,     // RFC-1918
-  /^192\.168\./,                     // RFC-1918
-  /^169\.254\./,                     // link-local / AWS metadata
-  /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./,  // CGNAT RFC-6598
-  /^::1$/,                           // IPv6 loopback
-  /^fc[0-9a-f]{2}:/i,               // IPv6 ULA
-  /^fd[0-9a-f]{2}:/i,               // IPv6 ULA
-  /^fe80:/i,                         // IPv6 link-local
+  /^127\./, // loopback
+  /^0\./, // unspecified
+  /^10\./, // RFC-1918
+  /^172\.(1[6-9]|2\d|3[01])\./, // RFC-1918
+  /^192\.168\./, // RFC-1918
+  /^169\.254\./, // link-local / AWS metadata
+  /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./, // CGNAT RFC-6598
+  /^::1$/, // IPv6 loopback
+  /^fc[0-9a-f]{2}:/i, // IPv6 ULA
+  /^fd[0-9a-f]{2}:/i, // IPv6 ULA
+  /^fe80:/i, // IPv6 link-local
 ];
 
 function isPrivateIp(ip) {
-  return BLOCKED.some(r => r.test(ip));
+  return BLOCKED.some((r) => r.test(ip));
 }
 
 /**

@@ -36,7 +36,7 @@ function withTimeout<T>(promise: Promise<T>, ms = HORIZON_TIMEOUT_MS): Promise<T
   return Promise.race([
     promise,
     new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`Horizon request timed out after ${ms}ms`)), ms)
+      setTimeout(() => reject(new Error(`Horizon request timed out after ${ms}ms`)), ms),
     ),
   ]);
 }
@@ -51,24 +51,37 @@ export function createWallet(): WalletInfo {
   return { publicKey: keypair.publicKey(), secret: keypair.secret() };
 }
 
-export async function getBalance(publicKey: string, networkPassphrase?: string): Promise<{ xlm: string; usdc: string }> {
+export async function getBalance(
+  publicKey: string,
+  networkPassphrase?: string,
+): Promise<{ xlm: string; usdc: string }> {
   const server = getServer(networkPassphrase);
   const account = await withTimeout(server.loadAccount(publicKey));
-  let xlm = '0', usdc = '0';
+  let xlm = '0',
+    usdc = '0';
   for (const b of account.balances) {
     if (b.asset_type === 'native') xlm = b.balance;
-    if (b.asset_type === 'credit_alphanum4' && b.asset_code === 'USDC' && b.asset_issuer === USDC_ISSUER) usdc = b.balance;
+    if (
+      b.asset_type === 'credit_alphanum4' &&
+      b.asset_code === 'USDC' &&
+      b.asset_issuer === USDC_ISSUER
+    )
+      usdc = b.balance;
   }
   return { xlm, usdc };
 }
 
-export async function addUsdcTrustline(secret: string, networkPassphrase = Networks.PUBLIC): Promise<string> {
+export async function addUsdcTrustline(
+  secret: string,
+  networkPassphrase = Networks.PUBLIC,
+): Promise<string> {
   const server = getServer(networkPassphrase);
   const keypair = Keypair.fromSecret(secret);
   const account = await withTimeout(server.loadAccount(keypair.publicKey()));
   const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase })
     .addOperation(Operation.changeTrust({ asset: new Asset('USDC', USDC_ISSUER) }))
-    .setTimeout(300).build();
+    .setTimeout(300)
+    .build();
   tx.sign(keypair);
   const result = await server.submitTransaction(tx);
   return result.hash;

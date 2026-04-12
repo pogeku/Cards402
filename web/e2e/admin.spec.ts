@@ -78,12 +78,15 @@ const MOCK_ORDERS = [
 // ── API mock helpers ──────────────────────────────────────────────────────────
 
 /** Intercept auth and admin API calls and serve mock data. */
-async function mockAdminApi(page: Page, overrides: {
-  system?: object;
-  stats?: object;
-  orders?: object[];
-  keys?: object[];
-} = {}) {
+async function mockAdminApi(
+  page: Page,
+  overrides: {
+    system?: object;
+    stats?: object;
+    orders?: object[];
+    keys?: object[];
+  } = {},
+) {
   const system = overrides.system ?? MOCK_SYSTEM_OK;
   const stats = overrides.stats ?? MOCK_STATS;
   const orders = overrides.orders ?? MOCK_ORDERS;
@@ -94,7 +97,9 @@ async function mockAdminApi(page: Page, overrides: {
     route.fulfill({ json: { ok: true } });
   });
   await page.route('**/auth/verify', (route) => {
-    route.fulfill({ json: { token: MOCK_TOKEN, user: { id: 'u1', email: MOCK_EMAIL, role: 'owner' } } });
+    route.fulfill({
+      json: { token: MOCK_TOKEN, user: { id: 'u1', email: MOCK_EMAIL, role: 'owner' } },
+    });
   });
   await page.route('**/auth/logout', (route) => {
     route.fulfill({ json: { ok: true } });
@@ -202,7 +207,10 @@ test.describe('Admin login', () => {
   test('shows error when verify fails', async ({ page }) => {
     await page.route('**/auth/login', (route) => route.fulfill({ json: { ok: true } }));
     await page.route('**/auth/verify', (route) => {
-      route.fulfill({ status: 401, json: { error: 'invalid_code', message: 'Invalid or expired code.' } });
+      route.fulfill({
+        status: 401,
+        json: { error: 'invalid_code', message: 'Invalid or expired code.' },
+      });
     });
     await page.goto('/admin');
     await page.fill('input[type="email"]', MOCK_EMAIL);
@@ -443,7 +451,10 @@ test.describe('Admin dashboard — backend error state', () => {
   test('shows error when verify returns 401', async ({ page }) => {
     await page.route('**/auth/login', (route) => route.fulfill({ json: { ok: true } }));
     await page.route('**/auth/verify', (route) => {
-      route.fulfill({ status: 401, json: { error: 'invalid_code', message: 'Invalid or expired code.' } });
+      route.fulfill({
+        status: 401,
+        json: { error: 'invalid_code', message: 'Invalid or expired code.' },
+      });
     });
 
     await page.goto('/admin');

@@ -22,10 +22,22 @@ describe('signCallback', () => {
 
   it('changes when any input changes', () => {
     const base = signCallback({ secret: SECRET, timestamp: '1', orderId: 'a', rawBody: 'x' });
-    assert.notEqual(base, signCallback({ secret: SECRET + 'x', timestamp: '1', orderId: 'a', rawBody: 'x' }));
-    assert.notEqual(base, signCallback({ secret: SECRET, timestamp: '2', orderId: 'a', rawBody: 'x' }));
-    assert.notEqual(base, signCallback({ secret: SECRET, timestamp: '1', orderId: 'b', rawBody: 'x' }));
-    assert.notEqual(base, signCallback({ secret: SECRET, timestamp: '1', orderId: 'a', rawBody: 'y' }));
+    assert.notEqual(
+      base,
+      signCallback({ secret: SECRET + 'x', timestamp: '1', orderId: 'a', rawBody: 'x' }),
+    );
+    assert.notEqual(
+      base,
+      signCallback({ secret: SECRET, timestamp: '2', orderId: 'a', rawBody: 'x' }),
+    );
+    assert.notEqual(
+      base,
+      signCallback({ secret: SECRET, timestamp: '1', orderId: 'b', rawBody: 'x' }),
+    );
+    assert.notEqual(
+      base,
+      signCallback({ secret: SECRET, timestamp: '1', orderId: 'a', rawBody: 'y' }),
+    );
   });
 
   it('throws on missing inputs', () => {
@@ -45,15 +57,38 @@ describe('signCallback', () => {
 describe('signCallback — v3 with nonce', () => {
   it('produces a different digest when nonce is added', () => {
     const ts = '1700000000000';
-    const withoutNonce = signCallback({ secret: SECRET, timestamp: ts, orderId: ORDER_ID, rawBody: BODY });
-    const withNonce = signCallback({ secret: SECRET, timestamp: ts, orderId: ORDER_ID, rawBody: BODY, nonce: 'my-nonce' });
+    const withoutNonce = signCallback({
+      secret: SECRET,
+      timestamp: ts,
+      orderId: ORDER_ID,
+      rawBody: BODY,
+    });
+    const withNonce = signCallback({
+      secret: SECRET,
+      timestamp: ts,
+      orderId: ORDER_ID,
+      rawBody: BODY,
+      nonce: 'my-nonce',
+    });
     assert.notEqual(withoutNonce, withNonce);
   });
 
   it('changes when nonce changes', () => {
     const ts = '1';
-    const a = signCallback({ secret: SECRET, timestamp: ts, orderId: 'a', rawBody: 'x', nonce: 'n1' });
-    const b = signCallback({ secret: SECRET, timestamp: ts, orderId: 'a', rawBody: 'x', nonce: 'n2' });
+    const a = signCallback({
+      secret: SECRET,
+      timestamp: ts,
+      orderId: 'a',
+      rawBody: 'x',
+      nonce: 'n1',
+    });
+    const b = signCallback({
+      secret: SECRET,
+      timestamp: ts,
+      orderId: 'a',
+      rawBody: 'x',
+      nonce: 'n2',
+    });
     assert.notEqual(a, b);
   });
 });
@@ -63,7 +98,13 @@ describe('verifyCallback — v3 with nonce', () => {
 
   it('accepts a valid v3 envelope', () => {
     const ts = String(Date.now());
-    const sig = signCallback({ secret: SECRET, timestamp: ts, orderId: ORDER_ID, rawBody: BODY, nonce: NONCE });
+    const sig = signCallback({
+      secret: SECRET,
+      timestamp: ts,
+      orderId: ORDER_ID,
+      rawBody: BODY,
+      nonce: NONCE,
+    });
     const v = verifyCallback({
       secret: SECRET,
       timestamp: ts,
@@ -77,7 +118,13 @@ describe('verifyCallback — v3 with nonce', () => {
 
   it('rejects when nonce is swapped', () => {
     const ts = String(Date.now());
-    const sig = signCallback({ secret: SECRET, timestamp: ts, orderId: ORDER_ID, rawBody: BODY, nonce: NONCE });
+    const sig = signCallback({
+      secret: SECRET,
+      timestamp: ts,
+      orderId: ORDER_ID,
+      rawBody: BODY,
+      nonce: NONCE,
+    });
     const v = verifyCallback({
       secret: SECRET,
       timestamp: ts,
@@ -215,25 +262,45 @@ describe('verifyCallback — v1 backward compat', () => {
 
 describe('verifyCallback — edge cases', () => {
   it('rejects empty secret', () => {
-    const v = verifyCallback({ secret: '', timestamp: '1', signatureHeader: 'sha256=deadbeef', rawBody: 'x' });
+    const v = verifyCallback({
+      secret: '',
+      timestamp: '1',
+      signatureHeader: 'sha256=deadbeef',
+      rawBody: 'x',
+    });
     assert.equal(v.ok, false);
     assert.equal(v.reason, 'missing_fields');
   });
 
   it('rejects missing signature header', () => {
-    const v = verifyCallback({ secret: SECRET, timestamp: '1', signatureHeader: null, rawBody: 'x' });
+    const v = verifyCallback({
+      secret: SECRET,
+      timestamp: '1',
+      signatureHeader: null,
+      rawBody: 'x',
+    });
     assert.equal(v.ok, false);
     assert.equal(v.reason, 'missing_fields');
   });
 
   it('rejects missing timestamp', () => {
-    const v = verifyCallback({ secret: SECRET, timestamp: null, signatureHeader: 'sha256=deadbeef', rawBody: 'x' });
+    const v = verifyCallback({
+      secret: SECRET,
+      timestamp: null,
+      signatureHeader: 'sha256=deadbeef',
+      rawBody: 'x',
+    });
     assert.equal(v.ok, false);
     assert.equal(v.reason, 'missing_fields');
   });
 
   it('rejects non-numeric timestamp', () => {
-    const v = verifyCallback({ secret: SECRET, timestamp: 'not-a-number', signatureHeader: 'sha256=deadbeef', rawBody: 'x' });
+    const v = verifyCallback({
+      secret: SECRET,
+      timestamp: 'not-a-number',
+      signatureHeader: 'sha256=deadbeef',
+      rawBody: 'x',
+    });
     assert.equal(v.ok, false);
     assert.equal(v.reason, 'missing_fields');
   });

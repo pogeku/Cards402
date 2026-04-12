@@ -12,7 +12,9 @@ startWatcher(handlePayment);
 
 const PORT = process.env.PORT || 4000;
 const server = app.listen(PORT, () => {
-  console.log(`[cards402] backend running on port ${PORT} (${process.env.NODE_ENV || 'development'})`);
+  console.log(
+    `[cards402] backend running on port ${PORT} (${process.env.NODE_ENV || 'development'})`,
+  );
 });
 
 process.on('SIGTERM', () => {

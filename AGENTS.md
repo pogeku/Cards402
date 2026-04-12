@@ -38,6 +38,7 @@ Idempotency-Key: <uuid>     ← always send this; safe to retry on network error
 ```
 
 **Response:**
+
 ```json
 {
   "order_id": "uuid",
@@ -76,7 +77,7 @@ const card = await purchaseCardOWS({
   apiKey: process.env.CARDS402_API_KEY!,
   walletName: process.env.OWS_WALLET_NAME!,
   amountUsdc: '25.00',
-  paymentAsset: 'usdc',   // or 'xlm'
+  paymentAsset: 'usdc', // or 'xlm'
 });
 // card: { number, cvv, expiry, brand, order_id }
 ```
@@ -93,7 +94,7 @@ const order = await client.createOrder({ amount_usdc: '25.00', payment_asset: 'u
 const txHash = await payViaContractOWS({
   walletName: process.env.OWS_WALLET_NAME!,
   payment: order.payment,
-  paymentAsset: 'usdc',          // or 'xlm'
+  paymentAsset: 'usdc', // or 'xlm'
 });
 
 const card = await client.waitForCard(order.order_id);
@@ -115,6 +116,7 @@ X-Api-Key: cards402_...
 ```
 
 **Response when ready:**
+
 ```json
 {
   "order_id": "uuid",
@@ -132,16 +134,16 @@ X-Api-Key: cards402_...
 
 **Phase values** (stable, use these in your code):
 
-| Phase | Meaning |
-|-------|---------|
+| Phase               | Meaning                                                                                                                                        |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `awaiting_approval` | Order is held for owner approval (triggered by spend policy). Poll `approval_request_id` to watch for a decision; no payment instructions yet. |
-| `awaiting_payment` | Ready to be paid. Response includes `payment` — call the receiver contract. |
-| `processing` | Payment detected on-chain; fulfillment in progress. |
-| `ready` | Card delivered — check `card` object. |
-| `failed` | Fulfillment failed — check `error`; refund queued if possible. |
-| `refunded` | USDC refunded — check `refund.stellar_txid`. |
-| `rejected` | Owner rejected the approval request; `error` contains the decision note. |
-| `expired` | Payment window expired (2 hours); no funds taken. |
+| `awaiting_payment`  | Ready to be paid. Response includes `payment` — call the receiver contract.                                                                    |
+| `processing`        | Payment detected on-chain; fulfillment in progress.                                                                                            |
+| `ready`             | Card delivered — check `card` object.                                                                                                          |
+| `failed`            | Fulfillment failed — check `error`; refund queued if possible.                                                                                 |
+| `refunded`          | USDC refunded — check `refund.stellar_txid`.                                                                                                   |
+| `rejected`          | Owner rejected the approval request; `error` contains the decision note.                                                                       |
+| `expired`           | Payment window expired (2 hours); no funds taken.                                                                                              |
 
 ## Order lifecycle
 
@@ -165,6 +167,7 @@ The internal status has more granularity for debugging.
 Optionally provide `webhook_url` in `POST /v1/orders`. cards402 will POST to that URL on delivery or failure.
 
 **Delivery event:**
+
 ```json
 {
   "order_id": "uuid",
@@ -174,6 +177,7 @@ Optionally provide `webhook_url` in `POST /v1/orders`. cards402 will POST to tha
 ```
 
 **Failure event:**
+
 ```json
 {
   "order_id": "uuid",
@@ -222,17 +226,17 @@ Use `client.getUsage()` in the SDK or call the `check_budget` MCP tool.
 
 All errors return `{ "error": "error_code", "message": "..." }`.
 
-| HTTP | error | Meaning |
-|------|-------|---------|
-| 400 | `invalid_amount` | `amount_usdc` must be a positive number ≤ $1000 |
-| 400 | `invalid_payment_asset` | `payment_asset` must be `"usdc"` or `"xlm"` |
-| 400 | `invalid_webhook_url` | webhook URL failed SSRF validation |
-| 401 | `missing_api_key` | No `X-Api-Key` header |
-| 401 | `invalid_api_key` | Key not found or disabled |
-| 403 | `spend_limit_exceeded` | Would exceed the key's spend limit |
-| 404 | `order_not_found` | Order doesn't exist or belongs to another key |
-| 429 | `rate_limit_exceeded` | 60 orders/hour or 600 polls/min exceeded |
-| 503 | `service_temporarily_unavailable` | System frozen after repeated failures |
+| HTTP | error                             | Meaning                                         |
+| ---- | --------------------------------- | ----------------------------------------------- |
+| 400  | `invalid_amount`                  | `amount_usdc` must be a positive number ≤ $1000 |
+| 400  | `invalid_payment_asset`           | `payment_asset` must be `"usdc"` or `"xlm"`     |
+| 400  | `invalid_webhook_url`             | webhook URL failed SSRF validation              |
+| 401  | `missing_api_key`                 | No `X-Api-Key` header                           |
+| 401  | `invalid_api_key`                 | Key not found or disabled                       |
+| 403  | `spend_limit_exceeded`            | Would exceed the key's spend limit              |
+| 404  | `order_not_found`                 | Order doesn't exist or belongs to another key   |
+| 429  | `rate_limit_exceeded`             | 60 orders/hour or 600 polls/min exceeded        |
+| 503  | `service_temporarily_unavailable` | System frozen after repeated failures           |
 
 ## Idempotency
 

@@ -78,7 +78,7 @@ describe('checkPolicy — daily_limit_exceeded rule', () => {
     db.prepare(`UPDATE api_keys SET policy_daily_limit_usdc = ? WHERE id = ?`).run('200.00', id);
 
     // expired and rejected: agent never paid — must NOT count
-    seedOrder({ api_key_id: id, status: 'expired',  amount_usdc: '90.00' });
+    seedOrder({ api_key_id: id, status: 'expired', amount_usdc: '90.00' });
     seedOrder({ api_key_id: id, status: 'rejected', amount_usdc: '90.00' });
 
     // $90 * 2 excluded → $0 spent; $99 request should be approved
@@ -91,7 +91,7 @@ describe('checkPolicy — daily_limit_exceeded rule', () => {
     db.prepare(`UPDATE api_keys SET policy_daily_limit_usdc = ? WHERE id = ?`).run('100.00', id);
 
     // failed and refunded orders had payment received — must count toward limit
-    seedOrder({ api_key_id: id, status: 'failed',   amount_usdc: '60.00' });
+    seedOrder({ api_key_id: id, status: 'failed', amount_usdc: '60.00' });
     seedOrder({ api_key_id: id, status: 'refunded', amount_usdc: '30.00' });
 
     // $60 + $30 = $90 counted; $20 more would reach $110 > $100 limit
@@ -108,7 +108,10 @@ describe('checkPolicy — approval_threshold rule', () => {
 
   it('returns pending_approval when amount strictly exceeds threshold', async () => {
     const { id } = await createTestKey({ label: 'approval-key' });
-    db.prepare(`UPDATE api_keys SET policy_require_approval_above_usdc = ? WHERE id = ?`).run('50.00', id);
+    db.prepare(`UPDATE api_keys SET policy_require_approval_above_usdc = ? WHERE id = ?`).run(
+      '50.00',
+      id,
+    );
 
     const result = checkPolicy(id, '100.00');
     assert.equal(result.decision, 'pending_approval');
@@ -117,7 +120,10 @@ describe('checkPolicy — approval_threshold rule', () => {
 
   it('approves when amount equals threshold (threshold is strictly above)', async () => {
     const { id } = await createTestKey({ label: 'approval-boundary-key' });
-    db.prepare(`UPDATE api_keys SET policy_require_approval_above_usdc = ? WHERE id = ?`).run('50.00', id);
+    db.prepare(`UPDATE api_keys SET policy_require_approval_above_usdc = ? WHERE id = ?`).run(
+      '50.00',
+      id,
+    );
 
     const result = checkPolicy(id, '50.00');
     assert.equal(result.decision, 'approved');
@@ -135,9 +141,11 @@ describe('checkPolicy — blocked_day rule', () => {
     // Exclude today's UTC day of week from allowed days
     const today = new Date().getUTCDay(); // 0=Sun … 6=Sat
     const allDays = [0, 1, 2, 3, 4, 5, 6];
-    const allowedDays = allDays.filter(d => d !== today);
-    db.prepare(`UPDATE api_keys SET policy_allowed_days = ? WHERE id = ?`)
-      .run(JSON.stringify(allowedDays), id);
+    const allowedDays = allDays.filter((d) => d !== today);
+    db.prepare(`UPDATE api_keys SET policy_allowed_days = ? WHERE id = ?`).run(
+      JSON.stringify(allowedDays),
+      id,
+    );
 
     const result = checkPolicy(id, '10.00');
     assert.equal(result.decision, 'blocked');
@@ -149,8 +157,10 @@ describe('checkPolicy — blocked_day rule', () => {
 
     // Include every day — always allowed
     const allDays = [0, 1, 2, 3, 4, 5, 6];
-    db.prepare(`UPDATE api_keys SET policy_allowed_days = ? WHERE id = ?`)
-      .run(JSON.stringify(allDays), id);
+    db.prepare(`UPDATE api_keys SET policy_allowed_days = ? WHERE id = ?`).run(
+      JSON.stringify(allDays),
+      id,
+    );
 
     const result = checkPolicy(id, '10.00');
     assert.equal(result.decision, 'approved');
@@ -168,8 +178,10 @@ describe('checkPolicy — after_hours rule', () => {
     // A 1-minute window at midnight — almost certainly outside current time.
     // Verify the assumption before asserting.
     const window = { start: '00:00', end: '00:01' };
-    db.prepare(`UPDATE api_keys SET policy_allowed_hours = ? WHERE id = ?`)
-      .run(JSON.stringify(window), id);
+    db.prepare(`UPDATE api_keys SET policy_allowed_hours = ? WHERE id = ?`).run(
+      JSON.stringify(window),
+      id,
+    );
 
     const now = new Date();
     const nowMins = now.getUTCHours() * 60 + now.getUTCMinutes();

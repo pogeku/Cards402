@@ -13,7 +13,7 @@ async function getXlmUsdPrice() {
   if (!res.ok) throw new Error(`CTX rates API error: HTTP ${res.status}`);
 
   const rates = await res.json();
-  const avg = rates.find(r => r.source === 'ctx-average');
+  const avg = rates.find((r) => r.source === 'ctx-average');
   if (!avg) throw new Error('ctx-average entry missing from CTX rates response');
 
   const price = parseFloat(avg.price);

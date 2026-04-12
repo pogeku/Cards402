@@ -4,12 +4,14 @@ require('dotenv').config();
 const { chromium } = require('patchright');
 
 // Fresh yourrewardcard.com URL from this session's stage1 run
-const LOGINDETAILS_URL = 'https://www.yourrewardcard.com/loginDetails?locale=en-US&tx_transdata=%2F0Jc2YirEz%2BQfiO1m4CNAHlHFkMym9e7ka6gU9eHy66bZ0tNtdjwhW44azBPDPSJi5XsRwAe3OSLKfz6VWl75Z4aK%2FHielVXSGRQnXBv6ysRDJqtcsvt6vaXptFJKNc3BfkrJvZtqPsDssyk5LJRij00NmCDTLcjgNUFwzUqnuStew1e2XCjjmGiVch7A61f&tx_transdataiv=8Z%2BBNcRF%2BheI5q%2Bh1905Uw%3D%3D';
+const LOGINDETAILS_URL =
+  'https://www.yourrewardcard.com/loginDetails?locale=en-US&tx_transdata=%2F0Jc2YirEz%2BQfiO1m4CNAHlHFkMym9e7ka6gU9eHy66bZ0tNtdjwhW44azBPDPSJi5XsRwAe3OSLKfz6VWl75Z4aK%2FHielVXSGRQnXBv6ysRDJqtcsvt6vaXptFJKNc3BfkrJvZtqPsDssyk5LJRij00NmCDTLcjgNUFwzUqnuStew1e2XCjjmGiVch7A61f&tx_transdataiv=8Z%2BBNcRF%2BheI5q%2Bh1905Uw%3D%3D';
 
 async function main() {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    userAgent:
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
     locale: 'en-US',
   });
   const page = await context.newPage();
@@ -22,8 +24,17 @@ async function main() {
       const body = req.postData();
       if (body) console.log(`  body: ${body.slice(0, 200)}`);
       const headers = req.headers();
-      const relevant = ['apikey', 'slsserver', 'x-app-name', 'x-tmx-session-id', 'x-ui-version', 'authorization'];
-      relevant.forEach(h => { if (headers[h]) console.log(`  ${h}: ${headers[h].slice(0, 50)}`); });
+      const relevant = [
+        'apikey',
+        'slsserver',
+        'x-app-name',
+        'x-tmx-session-id',
+        'x-ui-version',
+        'authorization',
+      ];
+      relevant.forEach((h) => {
+        if (headers[h]) console.log(`  ${h}: ${headers[h].slice(0, 50)}`);
+      });
     }
   });
 
@@ -52,4 +63,7 @@ async function main() {
   await browser.close();
 }
 
-main().catch(err => { console.error('Error:', err.message); process.exit(1); });
+main().catch((err) => {
+  console.error('Error:', err.message);
+  process.exit(1);
+});

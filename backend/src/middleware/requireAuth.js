@@ -13,13 +13,17 @@ function requireAuth(req, res, next) {
   const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
   if (!token) return res.status(401).json({ error: 'unauthorized' });
 
-  const row = db.prepare(`
+  const row = db
+    .prepare(
+      `
     SELECT u.id, u.email, u.role
     FROM sessions s
     JOIN users u ON s.user_id = u.id
     WHERE s.token_hash = ?
       AND datetime(s.expires_at) > datetime('now')
-  `).get(hashToken(token));
+  `,
+    )
+    .get(hashToken(token));
 
   if (!row) return res.status(401).json({ error: 'unauthorized' });
 

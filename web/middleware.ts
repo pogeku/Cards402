@@ -17,9 +17,7 @@ export const runtime = 'nodejs';
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  const needsSession =
-    pathname === '/dashboard' ||
-    pathname.startsWith('/dashboard/');
+  const needsSession = pathname === '/dashboard' || pathname.startsWith('/dashboard/');
 
   if (!needsSession) return NextResponse.next();
 

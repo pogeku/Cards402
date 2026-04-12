@@ -51,24 +51,32 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000')
-  .split(',').map(s => s.trim()).filter(Boolean);
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
-app.use(cors({
-  origin: (origin, cb) => {
-    if (!origin) return cb(null, true);
-    if (allowedOrigins.includes(origin)) return cb(null, true);
-    cb(new Error('CORS: origin not allowed'));
-  },
-  methods: ['GET', 'POST', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'X-Api-Key', 'Authorization', 'Idempotency-Key'],
-  maxAge: 3600,
-}));
+app.use(
+  cors({
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true);
+      if (allowedOrigins.includes(origin)) return cb(null, true);
+      cb(new Error('CORS: origin not allowed'));
+    },
+    methods: ['GET', 'POST', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'X-Api-Key', 'Authorization', 'Idempotency-Key'],
+    maxAge: 3600,
+  }),
+);
 
 // Capture raw body for HMAC signature verification (used by /vcc-callback)
-app.use(express.json({
-  limit: '64kb',
-  verify: (/** @type {any} */ req, _res, buf) => { req.rawBody = buf.toString(); },
-}));
+app.use(
+  express.json({
+    limit: '64kb',
+    verify: (/** @type {any} */ req, _res, buf) => {
+      req.rawBody = buf.toString();
+    },
+  }),
+);
 
 const adminLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -85,11 +93,20 @@ const authLimiter = rateLimit({
   keyGenerator: (/** @type {any} */ req) => ipKeyGenerator(req),
   standardHeaders: 'draft-7',
   legacyHeaders: false,
-  handler: (_, res) => res.status(429).json({ error: 'too_many_requests', message: 'Too many requests. Wait a few minutes and try again.' }),
+  handler: (_, res) =>
+    res.status(429).json({
+      error: 'too_many_requests',
+      message: 'Too many requests. Wait a few minutes and try again.',
+    }),
 });
 
 // Audit C-9: API version endpoint for deploy-time compatibility checks.
-const versionLimiter = rateLimit({ windowMs: 60000, limit: 60, standardHeaders: 'draft-7', legacyHeaders: false });
+const versionLimiter = rateLimit({
+  windowMs: 60000,
+  limit: 60,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+});
 app.get('/api/version', versionLimiter, (_req, res) => {
   res.json({
     service: 'cards402',
@@ -100,12 +117,24 @@ app.get('/api/version', versionLimiter, (_req, res) => {
 });
 
 app.get('/status', (req, res) => {
-  const frozen = /** @type {any} */ (db.prepare(`SELECT value FROM system_state WHERE key = 'frozen'`).get())?.value === '1';
-  const failures = /** @type {any} */ (db.prepare(`SELECT value FROM system_state WHERE key = 'consecutive_failures'`).get())?.value;
-  const pendingCount = /** @type {any} */ (db.prepare(`SELECT COUNT(*) as n FROM orders WHERE status = 'pending_payment'`).get())?.n ?? 0;
-  const inProgressCount = /** @type {any} */ (db.prepare(
-    `SELECT COUNT(*) as n FROM orders WHERE status IN ('ordering','payment_confirmed','claim_received','stage1_done')`
-  ).get())?.n ?? 0;
+  const frozen =
+    /** @type {any} */ (db.prepare(`SELECT value FROM system_state WHERE key = 'frozen'`).get())
+      ?.value === '1';
+  const failures = /** @type {any} */ (
+    db.prepare(`SELECT value FROM system_state WHERE key = 'consecutive_failures'`).get()
+  )?.value;
+  const pendingCount =
+    /** @type {any} */ (
+      db.prepare(`SELECT COUNT(*) as n FROM orders WHERE status = 'pending_payment'`).get()
+    )?.n ?? 0;
+  const inProgressCount =
+    /** @type {any} */ (
+      db
+        .prepare(
+          `SELECT COUNT(*) as n FROM orders WHERE status IN ('ordering','payment_confirmed','claim_received','stage1_done')`,
+        )
+        .get()
+    )?.n ?? 0;
 
   res.json({
     ok: !frozen,
@@ -124,14 +153,18 @@ app.use('/v1/orders', ordersRouter);
 app.get('/v1/policy/check', (req, res) => {
   const amount = String(req.query.amount || '');
   if (!amount || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
-    return res.status(400).json({ error: 'invalid_amount', message: 'Query param ?amount= must be a positive number' });
+    return res
+      .status(400)
+      .json({ error: 'invalid_amount', message: 'Query param ?amount= must be a positive number' });
   }
   return res.json(policyCheck(req.apiKey.id, parseFloat(amount)));
 });
 
 // GET /v1/usage — agent's own spend and order summary
 app.get('/v1/usage', (req, res) => {
-  const counts = db.prepare(`
+  const counts = db
+    .prepare(
+      `
     SELECT
       COUNT(*) AS total,
       SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) AS delivered,
@@ -139,7 +172,9 @@ app.get('/v1/usage', (req, res) => {
       SUM(CASE WHEN status = 'refunded' THEN 1 ELSE 0 END) AS refunded,
       SUM(CASE WHEN status NOT IN ('delivered','failed','refunded') THEN 1 ELSE 0 END) AS in_progress
     FROM orders WHERE api_key_id = ?
-  `).get(req.apiKey.id);
+  `,
+    )
+    .get(req.apiKey.id);
   res.json({
     api_key_id: req.apiKey.id,
     label: req.apiKey.label,

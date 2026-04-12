@@ -3,6 +3,7 @@
 Date: 2026-04-09
 
 Scope:
+
 - `backend/`
 - `sdk/`
 - `web/`
@@ -28,12 +29,14 @@ I also fixed lint/typecheck blockers uncovered during verification.
 Severity: high
 
 Evidence:
+
 - [`backend/src/api/admin.js`][admin-approve]
 - [`backend/src/api/dashboard.js`][dashboard-approve]
 
 Before the fix, approving an `awaiting_approval` request only flipped the order back to `pending_payment`. It did not call `dispatchFulfillment()`, so the order still had no `vcc_job_id` or `vcc_payment_json`. Agents polling the order after approval would see a payable state without usable payment instructions.
 
 Fix:
+
 - Both admin and dashboard approval handlers now create the VCC job first.
 - Approval is committed only after the dispatch succeeds.
 - The order is updated with `vcc_job_id` and serialized payment instructions.
@@ -44,11 +47,13 @@ Fix:
 Severity: medium
 
 Evidence:
+
 - [`backend/src/api/internal.js`][internal-refund]
 
 The internal route loaded an order row and passed the whole object to `scheduleRefund()`, but `scheduleRefund()` expects an order ID string. That made internal manual refunds fail or no-op.
 
 Fix:
+
 - The route now calls `scheduleRefund(order.id)`.
 
 ### Fixed: SDK purchase helpers silently ignored `paymentAsset`
@@ -56,12 +61,14 @@ Fix:
 Severity: medium
 
 Evidence:
+
 - [`sdk/src/stellar.ts`][sdk-stellar]
 - [`sdk/src/ows.ts`][sdk-ows]
 
 Both `purchaseCard()` and `purchaseCardOWS()` accepted `paymentAsset`, then created the order without sending `payment_asset` to the API. That made the public helper API inconsistent with its own types and docs.
 
 Fix:
+
 - Both helpers now pass `payment_asset: paymentAsset` into `createOrder()`.
 
 ### Remaining: docs verification script is stale and fails against the current repo
@@ -69,10 +76,12 @@ Fix:
 Severity: medium
 
 Evidence:
+
 - [`scripts/lint-docs.sh`][docs-lint]
 - [`README.md`][readme-structure]
 
 `./scripts/lint-docs.sh` still expects deleted CTX/scraper files:
+
 - `backend/src/ctx/client.js`
 - `backend/src/scraper/stage1.js`
 - `backend/src/scraper/stage2.js`
@@ -83,6 +92,7 @@ It also fails because `sdk/README.md` does not document several exported SDK fun
 The top-level README also still states that `backend/` is closed-source and absent from the repo, which is false in this workspace.
 
 Recommended follow-up:
+
 - Update `scripts/lint-docs.sh` to reflect the VCC-based architecture.
 - Either expand `sdk/README.md` or narrow the doc-lint rule to the intended public surface.
 - Correct the top-level repository description.
@@ -90,6 +100,7 @@ Recommended follow-up:
 ## Verification
 
 Passed:
+
 - `cargo test` in [`contract/`](../../contract)
 - `npm test -w sdk`
 - `node --test test/unit/*.test.js` in [`backend/`](../../backend)
@@ -97,10 +108,12 @@ Passed:
 - `npm run typecheck`
 
 Failed:
+
 - `./scripts/lint-docs.sh`
   - fails due stale file expectations and missing SDK README coverage
 
 Partially blocked by sandbox:
+
 - `npm test` at repo root
   - backend integration tests attempted to bind a local port and failed with `listen EPERM: operation not permitted 0.0.0.0` in this environment
 - `npm run build`

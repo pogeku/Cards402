@@ -5,3 +5,5 @@ build
 *.lock
 contract/target
 sdk/coverage
+web/test-results
+web/playwright-report

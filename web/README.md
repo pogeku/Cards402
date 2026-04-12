@@ -13,8 +13,8 @@ npm run lint              # ESLint (run from monorepo root)
 
 ## Environment variables
 
-| Variable | Required | Description |
-|---|---|---|
+| Variable                   | Required        | Description                                           |
+| -------------------------- | --------------- | ----------------------------------------------------- |
 | `NEXT_PUBLIC_API_BASE_URL` | Production only | Backend API base URL, e.g. `https://api.cards402.com` |
 
 In development the admin page defaults to `http://localhost:4000`.

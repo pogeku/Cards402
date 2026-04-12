@@ -28,22 +28,35 @@ const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frid
  */
 function checkPolicy(apiKeyId, amountUsdc) {
   const key = /** @type {any} */ (db.prepare(`SELECT * FROM api_keys WHERE id = ?`).get(apiKeyId));
-  if (!key) return _decide(apiKeyId, null, amountUsdc, 'blocked', 'key_not_found', 'API key not found');
+  if (!key)
+    return _decide(apiKeyId, null, amountUsdc, 'blocked', 'key_not_found', 'API key not found');
 
   const amount = parseFloat(amountUsdc);
 
   // ── 1. Suspension (immediate hard block) ────────────────────────────────────
   if (key.suspended) {
-    return _decide(apiKeyId, null, amountUsdc, 'blocked', 'suspended',
-      'This agent is suspended by the account owner.');
+    return _decide(
+      apiKeyId,
+      null,
+      amountUsdc,
+      'blocked',
+      'suspended',
+      'This agent is suspended by the account owner.',
+    );
   }
 
   // ── 2. Single-transaction hard cap ──────────────────────────────────────────
   if (key.policy_single_tx_limit_usdc !== null && key.policy_single_tx_limit_usdc !== undefined) {
     const cap = parseFloat(key.policy_single_tx_limit_usdc);
     if (amount > cap) {
-      return _decide(apiKeyId, null, amountUsdc, 'blocked', 'single_tx_hard_cap',
-        `Transaction $${amount.toFixed(2)} exceeds the per-transaction hard cap of $${cap.toFixed(2)}.`);
+      return _decide(
+        apiKeyId,
+        null,
+        amountUsdc,
+        'blocked',
+        'single_tx_hard_cap',
+        `Transaction $${amount.toFixed(2)} exceeds the per-transaction hard cap of $${cap.toFixed(2)}.`,
+      );
     }
   }
 
@@ -70,18 +83,35 @@ function checkPolicy(apiKeyId, amountUsdc) {
       const startMins = sh * 60 + sm;
       const endMins = eh * 60 + em;
       // Handle overnight windows (e.g. 22:00–06:00)
-      const inWindow = startMins <= endMins
-        ? nowMins >= startMins && nowMins < endMins
-        : nowMins >= startMins || nowMins < endMins;
+      const inWindow =
+        startMins <= endMins
+          ? nowMins >= startMins && nowMins < endMins
+          : nowMins >= startMins || nowMins < endMins;
       if (!inWindow) {
-        const nowStr = `${String(now.getUTCHours()).padStart(2,'0')}:${String(now.getUTCMinutes()).padStart(2,'0')} UTC`;
-        return _decide(apiKeyId, null, amountUsdc, 'blocked', 'after_hours',
-          `Transactions are only allowed ${start}–${end} UTC. Current time: ${nowStr}.`);
+        const nowStr = `${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')} UTC`;
+        return _decide(
+          apiKeyId,
+          null,
+          amountUsdc,
+          'blocked',
+          'after_hours',
+          `Transactions are only allowed ${start}–${end} UTC. Current time: ${nowStr}.`,
+        );
       }
     } catch (err) {
-      bizEvent('policy.corrupt', { api_key_id: apiKeyId, field: 'policy_allowed_hours', error: err.message });
-      return _decide(apiKeyId, null, amountUsdc, 'blocked', 'policy_corrupt_hours',
-        'Account policy (allowed hours) is misconfigured — contact support.');
+      bizEvent('policy.corrupt', {
+        api_key_id: apiKeyId,
+        field: 'policy_allowed_hours',
+        error: err.message,
+      });
+      return _decide(
+        apiKeyId,
+        null,
+        amountUsdc,
+        'blocked',
+        'policy_corrupt_hours',
+        'Account policy (allowed hours) is misconfigured — contact support.',
+      );
     }
   }
 
@@ -92,13 +122,29 @@ function checkPolicy(apiKeyId, amountUsdc) {
       if (!Array.isArray(allowed)) throw new Error('not an array');
       const today = new Date().getUTCDay();
       if (!allowed.includes(today)) {
-        return _decide(apiKeyId, null, amountUsdc, 'blocked', 'blocked_day',
-          `Transactions are not allowed on ${DAY_NAMES[today]}.`);
+        return _decide(
+          apiKeyId,
+          null,
+          amountUsdc,
+          'blocked',
+          'blocked_day',
+          `Transactions are not allowed on ${DAY_NAMES[today]}.`,
+        );
       }
     } catch (err) {
-      bizEvent('policy.corrupt', { api_key_id: apiKeyId, field: 'policy_allowed_days', error: err.message });
-      return _decide(apiKeyId, null, amountUsdc, 'blocked', 'policy_corrupt_days',
-        'Account policy (allowed days) is misconfigured — contact support.');
+      bizEvent('policy.corrupt', {
+        api_key_id: apiKeyId,
+        field: 'policy_allowed_days',
+        error: err.message,
+      });
+      return _decide(
+        apiKeyId,
+        null,
+        amountUsdc,
+        'blocked',
+        'policy_corrupt_days',
+        'Account policy (allowed days) is misconfigured — contact support.',
+      );
     }
   }
 
@@ -109,38 +155,60 @@ function checkPolicy(apiKeyId, amountUsdc) {
     // ('expired' = payment window closed without payment, 'rejected' = blocked by policy).
     // Counting 'pending_payment' prevents TOCTOU races where concurrent orders
     // collectively exceed the limit before any one is confirmed.
-    const row = /** @type {any} */ (db.prepare(`
+    const row = /** @type {any} */ (
+      db
+        .prepare(
+          `
       SELECT COALESCE(SUM(CAST(amount_usdc AS REAL)), 0) AS total
       FROM orders
       WHERE api_key_id = ?
         AND status NOT IN ('expired', 'rejected')
         AND date(created_at) = date('now')
-    `).get(apiKeyId));
+    `,
+        )
+        .get(apiKeyId)
+    );
     const spentToday = parseFloat(row.total);
     if (spentToday + amount > dailyLimit) {
-      return _decide(apiKeyId, null, amountUsdc, 'blocked', 'daily_limit_exceeded',
+      return _decide(
+        apiKeyId,
+        null,
+        amountUsdc,
+        'blocked',
+        'daily_limit_exceeded',
         `Daily limit of $${dailyLimit.toFixed(2)} would be exceeded. ` +
-        `Spent today: $${spentToday.toFixed(2)}, requested: $${amount.toFixed(2)}.`);
+          `Spent today: $${spentToday.toFixed(2)}, requested: $${amount.toFixed(2)}.`,
+      );
     }
   }
 
   // ── 6. Approval threshold (soft gate — routes to human) ─────────────────────
-  if (key.policy_require_approval_above_usdc !== null && key.policy_require_approval_above_usdc !== undefined) {
+  if (
+    key.policy_require_approval_above_usdc !== null &&
+    key.policy_require_approval_above_usdc !== undefined
+  ) {
     const threshold = parseFloat(key.policy_require_approval_above_usdc);
     if (amount > threshold) {
       // Don't log yet — caller will create the approval_request and log it
       return {
         decision: 'pending_approval',
         rule: 'approval_threshold',
-        reason: `Transaction of $${amount.toFixed(2)} requires owner approval ` +
-                `(threshold: $${threshold.toFixed(2)}).`,
+        reason:
+          `Transaction of $${amount.toFixed(2)} requires owner approval ` +
+          `(threshold: $${threshold.toFixed(2)}).`,
       };
     }
   }
 
   // ── 7. All checks passed ─────────────────────────────────────────────────────
-  return _decide(apiKeyId, null, amountUsdc, 'approved', 'all_checks_passed',
-    'Transaction approved by policy.');
+  return _decide(
+    apiKeyId,
+    null,
+    amountUsdc,
+    'approved',
+    'all_checks_passed',
+    'Transaction approved by policy.',
+  );
 }
 
 /**
@@ -148,10 +216,12 @@ function checkPolicy(apiKeyId, amountUsdc) {
  * Used internally and by callers who need to log a decision for an existing order.
  */
 function recordDecision(apiKeyId, orderId, amountUsdc, decision, rule, reason) {
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO policy_decisions (id, api_key_id, order_id, decision, rule, reason, amount_usdc)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(uuidv4(), apiKeyId, orderId || null, decision, rule, reason, amountUsdc || null);
+  `,
+  ).run(uuidv4(), apiKeyId, orderId || null, decision, rule, reason, amountUsdc || null);
   return { decision, rule, reason };
 }
 

@@ -63,7 +63,9 @@ function decryptToken(stored) {
   const key = getEncryptionKey();
   if (!key) return stored; // can't decrypt without key — let caller handle the error
   const [, ivHex, tagHex, ctHex] = stored.split(':');
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivHex, 'hex'), { authTagLength: 16 });
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivHex, 'hex'), {
+    authTagLength: 16,
+  });
   decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
   return decipher.update(Buffer.from(ctHex, 'hex')) + decipher.final('utf8');
 }
@@ -72,7 +74,9 @@ function decryptToken(stored) {
 
 // Returns the stored VCC token, registering with VCC if not yet done.
 async function getVccToken() {
-  const stored = /** @type {{ value: string } | undefined} */ (db.prepare(`SELECT value FROM system_state WHERE key = 'vcc_token'`).get())?.value;
+  const stored = /** @type {{ value: string } | undefined} */ (
+    db.prepare(`SELECT value FROM system_state WHERE key = 'vcc_token'`).get()
+  )?.value;
   if (stored) return decryptToken(stored);
 
   // First time — auto-register
@@ -90,7 +94,9 @@ async function getVccToken() {
   }
 
   const { token } = await res.json();
-  db.prepare(`INSERT OR REPLACE INTO system_state (key, value) VALUES ('vcc_token', ?)`).run(encryptToken(token));
+  db.prepare(`INSERT OR REPLACE INTO system_state (key, value) VALUES ('vcc_token', ?)`).run(
+    encryptToken(token),
+  );
   bizEvent('vcc.registered', { label });
   return token;
 }
@@ -108,7 +114,8 @@ async function getInvoice(orderId, amountUsdc, requestId = null, callbackNonce =
   vccCircuitGuard();
   const token = await getVccToken();
 
-  const callbackBase = process.env.CARDS402_BASE_URL || `http://localhost:${process.env.PORT || 4000}`;
+  const callbackBase =
+    process.env.CARDS402_BASE_URL || `http://localhost:${process.env.PORT || 4000}`;
   const callbackUrl = `${callbackBase}/vcc-callback`;
   const callbackSecret = process.env.VCC_CALLBACK_SECRET;
 

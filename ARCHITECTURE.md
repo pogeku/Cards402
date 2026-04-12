@@ -10,14 +10,14 @@ the agent. No fees. 1:1 USDC → card value.
 
 The system is **two cooperating services plus an open-source SDK**:
 
-| Component | Repo / Directory | Role |
-|-----------|-----------------|------|
-| **cards402 backend** (closed source) | `backend/` in this repo — ignored by git | Agent-facing HTTP API, Soroban event watcher, order state machine, admin/dashboard, policy engine |
-| **cards402 web** (open source) | `web/` | Marketing site, docs, admin dashboard |
-| **cards402 SDK** (open source) | `sdk/` | TypeScript client, OWS-wallet helpers, MCP server |
-| **cards402 contract** (open source) | `contract/` | Soroban receiver contract (Rust) — agents pay this |
-| **vcc api** (separate repo at `~/code/vcc/api`) | — | Fulfillment engine: CTX gift-card ordering + claim scraping + HMAC callback to cards402 |
-| **vcc admin** (separate repo at `~/code/vcc/admin`) | — | Ops dashboard for vcc |
+| Component                                           | Repo / Directory                         | Role                                                                                              |
+| --------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| **cards402 backend** (closed source)                | `backend/` in this repo — ignored by git | Agent-facing HTTP API, Soroban event watcher, order state machine, admin/dashboard, policy engine |
+| **cards402 web** (open source)                      | `web/`                                   | Marketing site, docs, admin dashboard                                                             |
+| **cards402 SDK** (open source)                      | `sdk/`                                   | TypeScript client, OWS-wallet helpers, MCP server                                                 |
+| **cards402 contract** (open source)                 | `contract/`                              | Soroban receiver contract (Rust) — agents pay this                                                |
+| **vcc api** (separate repo at `~/code/vcc/api`)     | —                                        | Fulfillment engine: CTX gift-card ordering + claim scraping + HMAC callback to cards402           |
+| **vcc admin** (separate repo at `~/code/vcc/admin`) | —                                        | Ops dashboard for vcc                                                                             |
 
 ---
 
@@ -117,12 +117,12 @@ cards402/
 
 Each step between the atomic CAS and the vcc callback is recoverable by the reconciler in `jobs.js`:
 
-| Checkpoint | Column set | If crash | Reconciler action |
-|---|---|---|---|
-| CAS → `ordering` | `status = 'ordering'` | — | (not stuck) |
-| After `getInvoice` | `vcc_job_id` | next tick | retry `getInvoice` (vcc UNIQUE(tenant_id, order_id) is idempotent) |
-| After `payCtxOrder` | `xlm_sent_at` | next tick | retry `payCtxOrder` — gated by `xlm_sent_at IS NULL` to prevent double-pay; if vcc reports the job has moved past `invoice_issued`, assume the payment already landed and skip |
-| After `notifyPaid` | `vcc_notified_at` | next tick | retry `notifyPaid` — vcc returns `{note: 'already_queued'}` if already past that state |
+| Checkpoint          | Column set            | If crash  | Reconciler action                                                                                                                                                              |
+| ------------------- | --------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| CAS → `ordering`    | `status = 'ordering'` | —         | (not stuck)                                                                                                                                                                    |
+| After `getInvoice`  | `vcc_job_id`          | next tick | retry `getInvoice` (vcc UNIQUE(tenant_id, order_id) is idempotent)                                                                                                             |
+| After `payCtxOrder` | `xlm_sent_at`         | next tick | retry `payCtxOrder` — gated by `xlm_sent_at IS NULL` to prevent double-pay; if vcc reports the job has moved past `invoice_issued`, assume the payment already landed and skip |
+| After `notifyPaid`  | `vcc_notified_at`     | next tick | retry `notifyPaid` — vcc returns `{note: 'already_queued'}` if already past that state                                                                                         |
 
 After `STUCK_RETRY_AFTER_MS = 2 min` of inactivity the reconciler retries the next unfinished step. After `STUCK_FAIL_AFTER_MS = 10 min` or `MAX_FULFILLMENT_ATTEMPTS = 3` retries without progress, the order is hard-failed and a refund is queued via `scheduleRefund`.
 
@@ -166,13 +166,13 @@ Contract tests in `contract/src/lib.rs` cover: init idempotence, auth requiremen
 
 Base URL: `https://api.cards402.com`. Auth: `X-Api-Key: cards402_<key>` on every request.
 
-| Endpoint | Purpose |
-|---|---|
-| `GET /status` | Health check + circuit-breaker state (`frozen`, `consecutive_failures`) |
-| `POST /v1/orders` | Create order, get Soroban `payment` instructions |
-| `GET /v1/orders/:id` | Poll order status, get card when `phase == "ready"` |
-| `GET /v1/orders` | List this key's recent orders |
-| `GET /v1/usage` | Spend summary + budget |
+| Endpoint             | Purpose                                                                 |
+| -------------------- | ----------------------------------------------------------------------- |
+| `GET /status`        | Health check + circuit-breaker state (`frozen`, `consecutive_failures`) |
+| `POST /v1/orders`    | Create order, get Soroban `payment` instructions                        |
+| `GET /v1/orders/:id` | Poll order status, get card when `phase == "ready"`                     |
+| `GET /v1/orders`     | List this key's recent orders                                           |
+| `GET /v1/usage`      | Spend summary + budget                                                  |
 
 Stable **phases** that agents watch (`sdk/src/client.ts` `OrderPhase`):
 
@@ -202,13 +202,13 @@ Approval flow (`backend/src/api/dashboard.js` and `api/admin.js`): when policy r
 
 cards402 talks to vcc exclusively over HTTP. The contract is defined in `backend/src/vcc-client.js` and implemented on the vcc side under `~/code/vcc/api/src/api/`.
 
-| Method | Endpoint | Purpose |
-|---|---|---|
-| `POST` | `/api/register` | First boot — self-register, get a bearer token encrypted at rest (`VCC_TOKEN_KEY`) |
-| `POST` | `/api/jobs/invoice` | `{order_id, amount_usdc, callback_url, callback_secret}` → `{job_id, payment_url}`. Idempotent on `(tenant_id, order_id)`. |
-| `POST` | `/api/jobs/:id/paid` | Notify that cards402 has sent XLM to CTX — vcc starts scraping |
-| `GET` | `/api/jobs/:id` | Poll job status (fallback when the callback is lost) |
-| — (inbound) | `POST /vcc-callback` | vcc's HMAC-signed result callback to cards402 |
+| Method      | Endpoint             | Purpose                                                                                                                    |
+| ----------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `POST`      | `/api/register`      | First boot — self-register, get a bearer token encrypted at rest (`VCC_TOKEN_KEY`)                                         |
+| `POST`      | `/api/jobs/invoice`  | `{order_id, amount_usdc, callback_url, callback_secret}` → `{job_id, payment_url}`. Idempotent on `(tenant_id, order_id)`. |
+| `POST`      | `/api/jobs/:id/paid` | Notify that cards402 has sent XLM to CTX — vcc starts scraping                                                             |
+| `GET`       | `/api/jobs/:id`      | Poll job status (fallback when the callback is lost)                                                                       |
+| — (inbound) | `POST /vcc-callback` | vcc's HMAC-signed result callback to cards402                                                                              |
 
 ### Callback signature
 
@@ -240,19 +240,19 @@ vcc bounds in-flight fulfillment jobs at `VCC_MAX_CONCURRENT_JOBS` (default 3) s
 
 See `backend/.env.example` for the full list with comments. Critical ones:
 
-| Variable | Required | Purpose |
-|---|---|---|
-| `STELLAR_XLM_SECRET` | ✓ | Treasury wallet — pays CTX in XLM, sends USDC refunds |
-| `RECEIVER_CONTRACT_ID` | ✓ | Deployed Soroban receiver contract |
-| `SOROBAN_RPC_URL` | — | Defaults to public mainnet/testnet |
-| `VCC_API_BASE` | ✓ | vcc api URL (e.g. `https://vcc.ctx.com`) |
-| `CARDS402_BASE_URL` | ✓ | Public base URL — vcc uses this to build the callback URL |
-| `VCC_CALLBACK_SECRET` | ✓ | HMAC secret for `/vcc-callback` — ≥16 chars |
-| `VCC_TOKEN_KEY` | — | 32-byte hex key encrypting vcc bearer token at rest |
-| `STELLAR_USDC_ISSUER` | — | USDC classic asset issuer (mainnet default) |
-| `OWNER_EMAIL` | — | Locks the owner role to this email on first boot |
-| `CORS_ORIGINS` | — | Comma-separated allowed origins |
-| `INTERNAL_EMAILS` | — | Comma-separated emails allowed on `/internal/*` |
+| Variable               | Required | Purpose                                                   |
+| ---------------------- | -------- | --------------------------------------------------------- |
+| `STELLAR_XLM_SECRET`   | ✓        | Treasury wallet — pays CTX in XLM, sends USDC refunds     |
+| `RECEIVER_CONTRACT_ID` | ✓        | Deployed Soroban receiver contract                        |
+| `SOROBAN_RPC_URL`      | —        | Defaults to public mainnet/testnet                        |
+| `VCC_API_BASE`         | ✓        | vcc api URL (e.g. `https://vcc.ctx.com`)                  |
+| `CARDS402_BASE_URL`    | ✓        | Public base URL — vcc uses this to build the callback URL |
+| `VCC_CALLBACK_SECRET`  | ✓        | HMAC secret for `/vcc-callback` — ≥16 chars               |
+| `VCC_TOKEN_KEY`        | —        | 32-byte hex key encrypting vcc bearer token at rest       |
+| `STELLAR_USDC_ISSUER`  | —        | USDC classic asset issuer (mainnet default)               |
+| `OWNER_EMAIL`          | —        | Locks the owner role to this email on first boot          |
+| `CORS_ORIGINS`         | —        | Comma-separated allowed origins                           |
+| `INTERNAL_EMAILS`      | —        | Comma-separated emails allowed on `/internal/*`           |
 
 ---
 

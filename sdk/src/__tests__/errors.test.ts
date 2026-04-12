@@ -154,7 +154,11 @@ describe('WaitTimeoutError', () => {
 
 describe('parseApiError', () => {
   it('returns SpendLimitError for spend_limit_exceeded', () => {
-    const err = parseApiError(403, { error: 'spend_limit_exceeded', limit: '100.00', spent: '100.00' });
+    const err = parseApiError(403, {
+      error: 'spend_limit_exceeded',
+      limit: '100.00',
+      spent: '100.00',
+    });
     expect(err).toBeInstanceOf(SpendLimitError);
     const sle = err as SpendLimitError;
     expect(sle.limit).toBe('100.00');

@@ -17,22 +17,31 @@ global.fetch = async (url) => {
 
   if (urlStr.includes('vcc.ctx.com/api/register')) {
     return {
-      ok: true, status: 201,
-      json: async () => ({ token: 'vcc_testtoken0123456789abcdef0123456789abcdef0123456789abcdef01', tenant_id: 'test-tenant', note: 'store safely' }),
+      ok: true,
+      status: 201,
+      json: async () => ({
+        token: 'vcc_testtoken0123456789abcdef0123456789abcdef0123456789abcdef01',
+        tenant_id: 'test-tenant',
+        note: 'store safely',
+      }),
     };
   }
   if (urlStr.includes('vcc.ctx.com/api/jobs')) {
     return {
-      ok: true, status: 202,
-      json: async () => ({ job_id: 'vcc-test-job-id', status: 'awaiting_payment', payment: VCC_TEST_PAYMENT }),
+      ok: true,
+      status: 202,
+      json: async () => ({
+        job_id: 'vcc-test-job-id',
+        status: 'awaiting_payment',
+        payment: VCC_TEST_PAYMENT,
+      }),
     };
   }
   if (urlStr.includes('rates.ctx.com')) {
     return {
-      ok: true, status: 200,
-      json: async () => [
-        { source: 'ctx-average', price: '0.1550', symbol: 'XLMUSD' },
-      ],
+      ok: true,
+      status: 200,
+      json: async () => [{ source: 'ctx-average', price: '0.1550', symbol: 'XLMUSD' }],
     };
   }
   console.error(`[orders.test] Unexpected fetch: ${urlStr}`);
@@ -42,7 +51,10 @@ global.fetch = async (url) => {
 describe('POST /v1/orders', () => {
   let key;
 
-  beforeEach(async () => { resetDb(); key = await createTestKey(); });
+  beforeEach(async () => {
+    resetDb();
+    key = await createTestKey();
+  });
 
   it('returns 401 with no API key', async () => {
     const res = await request.post('/v1/orders').send({ amount_usdc: '10.00' });
@@ -51,7 +63,8 @@ describe('POST /v1/orders', () => {
   });
 
   it('returns 401 with wrong API key', async () => {
-    const res = await request.post('/v1/orders')
+    const res = await request
+      .post('/v1/orders')
       .set('X-Api-Key', 'cards402_wrong_key')
       .send({ amount_usdc: '10.00' });
     assert.equal(res.status, 401);
@@ -59,7 +72,8 @@ describe('POST /v1/orders', () => {
   });
 
   it('creates an order and returns Soroban contract payment instructions', async () => {
-    const res = await request.post('/v1/orders')
+    const res = await request
+      .post('/v1/orders')
       .set('X-Api-Key', key.key)
       .send({ amount_usdc: '10.00' });
 
@@ -81,22 +95,22 @@ describe('POST /v1/orders', () => {
   });
 
   it('returns 400 for missing amount', async () => {
-    const res = await request.post('/v1/orders')
-      .set('X-Api-Key', key.key)
-      .send({});
+    const res = await request.post('/v1/orders').set('X-Api-Key', key.key).send({});
     assert.equal(res.status, 400);
     assert.equal(res.body.error, 'invalid_amount');
   });
 
   it('returns 400 for zero amount', async () => {
-    const res = await request.post('/v1/orders')
+    const res = await request
+      .post('/v1/orders')
       .set('X-Api-Key', key.key)
       .send({ amount_usdc: '0' });
     assert.equal(res.status, 400);
   });
 
   it('returns 400 for negative amount', async () => {
-    const res = await request.post('/v1/orders')
+    const res = await request
+      .post('/v1/orders')
       .set('X-Api-Key', key.key)
       .send({ amount_usdc: '-5.00' });
     assert.equal(res.status, 400);
@@ -104,7 +118,8 @@ describe('POST /v1/orders', () => {
 
   it('returns 403 when spend limit would be exceeded', async () => {
     const limitedKey = await createTestKey({ label: 'limited', spendLimit: '5.00' });
-    const res = await request.post('/v1/orders')
+    const res = await request
+      .post('/v1/orders')
       .set('X-Api-Key', limitedKey.key)
       .send({ amount_usdc: '10.00' });
     assert.equal(res.status, 403);
@@ -115,7 +130,8 @@ describe('POST /v1/orders', () => {
     const { db } = require('../helpers/app');
     db.prepare(`UPDATE system_state SET value = '1' WHERE key = 'frozen'`).run();
 
-    const res = await request.post('/v1/orders')
+    const res = await request
+      .post('/v1/orders')
       .set('X-Api-Key', key.key)
       .send({ amount_usdc: '10.00' });
     assert.equal(res.status, 503);
@@ -126,12 +142,14 @@ describe('POST /v1/orders', () => {
     const iKey = 'test-idempotency-key-123';
     const body = { amount_usdc: '10.00' };
 
-    const first = await request.post('/v1/orders')
+    const first = await request
+      .post('/v1/orders')
       .set('X-Api-Key', key.key)
       .set('Idempotency-Key', iKey)
       .send(body);
 
-    const second = await request.post('/v1/orders')
+    const second = await request
+      .post('/v1/orders')
       .set('X-Api-Key', key.key)
       .set('Idempotency-Key', iKey)
       .send(body);
@@ -148,8 +166,16 @@ describe('POST /v1/orders', () => {
 
   it('different Idempotency-Keys create different orders', async () => {
     const body = { amount_usdc: '10.00' };
-    const first = await request.post('/v1/orders').set('X-Api-Key', key.key).set('Idempotency-Key', 'key-A').send(body);
-    const second = await request.post('/v1/orders').set('X-Api-Key', key.key).set('Idempotency-Key', 'key-B').send(body);
+    const first = await request
+      .post('/v1/orders')
+      .set('X-Api-Key', key.key)
+      .set('Idempotency-Key', 'key-A')
+      .send(body);
+    const second = await request
+      .post('/v1/orders')
+      .set('X-Api-Key', key.key)
+      .set('Idempotency-Key', 'key-B')
+      .send(body);
     assert.notEqual(first.body.order_id, second.body.order_id);
   });
 
@@ -157,8 +183,16 @@ describe('POST /v1/orders', () => {
     const key2 = await createTestKey({ label: 'other' });
     const body = { amount_usdc: '10.00' };
     const iKey = 'shared-idempotency-key';
-    const first = await request.post('/v1/orders').set('X-Api-Key', key.key).set('Idempotency-Key', iKey).send(body);
-    const second = await request.post('/v1/orders').set('X-Api-Key', key2.key).set('Idempotency-Key', iKey).send(body);
+    const first = await request
+      .post('/v1/orders')
+      .set('X-Api-Key', key.key)
+      .set('Idempotency-Key', iKey)
+      .send(body);
+    const second = await request
+      .post('/v1/orders')
+      .set('X-Api-Key', key2.key)
+      .set('Idempotency-Key', iKey)
+      .send(body);
     assert.notEqual(first.body.order_id, second.body.order_id);
   });
 });
@@ -166,11 +200,13 @@ describe('POST /v1/orders', () => {
 describe('GET /v1/orders/:id', () => {
   let key;
 
-  beforeEach(async () => { resetDb(); key = await createTestKey(); });
+  beforeEach(async () => {
+    resetDb();
+    key = await createTestKey();
+  });
 
   it('returns 404 for unknown order', async () => {
-    const res = await request.get('/v1/orders/nonexistent')
-      .set('X-Api-Key', key.key);
+    const res = await request.get('/v1/orders/nonexistent').set('X-Api-Key', key.key);
     assert.equal(res.status, 404);
   });
 
@@ -192,7 +228,9 @@ describe('GET /v1/orders/:id', () => {
   it('returns phase=ready for delivered status and includes card', async () => {
     const { db } = require('../helpers/app');
     const orderId = seedOrder({ api_key_id: key.id, status: 'delivered' });
-    db.prepare(`UPDATE orders SET card_number='4111111111111111', card_cvv='123', card_expiry='12/27', card_brand='Visa' WHERE id=?`).run(orderId);
+    db.prepare(
+      `UPDATE orders SET card_number='4111111111111111', card_cvv='123', card_expiry='12/27', card_brand='Visa' WHERE id=?`,
+    ).run(orderId);
 
     const res = await request.get(`/v1/orders/${orderId}`).set('X-Api-Key', key.key);
     assert.equal(res.body.phase, 'ready');
@@ -228,7 +266,10 @@ describe('GET /v1/orders/:id', () => {
 describe('GET /v1/orders (list)', () => {
   let key;
 
-  beforeEach(async () => { resetDb(); key = await createTestKey(); });
+  beforeEach(async () => {
+    resetDb();
+    key = await createTestKey();
+  });
 
   it('returns empty array when no orders', async () => {
     const res = await request.get('/v1/orders').set('X-Api-Key', key.key);
@@ -262,7 +303,10 @@ describe('GET /v1/orders (list)', () => {
 describe('GET /v1/usage', () => {
   let key;
 
-  beforeEach(async () => { resetDb(); key = await createTestKey({ spendLimit: '100.00' }); });
+  beforeEach(async () => {
+    resetDb();
+    key = await createTestKey({ spendLimit: '100.00' });
+  });
 
   it('returns spend summary with budget', async () => {
     const res = await request.get('/v1/usage').set('X-Api-Key', key.key);

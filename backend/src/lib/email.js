@@ -41,7 +41,10 @@ async function sendLoginCode(email, code) {
   });
 }
 
-async function sendApprovalEmail(ownerEmail, { approvalId, orderId, amountUsdc, keyLabel, reason }) {
+async function sendApprovalEmail(
+  ownerEmail,
+  { approvalId, orderId, amountUsdc, keyLabel, reason },
+) {
   await getTransporter().sendMail({
     from: process.env.SMTP_FROM,
     to: ownerEmail,

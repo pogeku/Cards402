@@ -112,7 +112,9 @@ db.exec(`
 `);
 
 function getSchemaVersion() {
-  const row = /** @type {any} */ (db.prepare(`SELECT MAX(version) AS v FROM schema_migrations`).get());
+  const row = /** @type {any} */ (
+    db.prepare(`SELECT MAX(version) AS v FROM schema_migrations`).get()
+  );
   return row?.v ?? 0;
 }
 
@@ -135,7 +137,11 @@ applyMigration(1, () => {
     `ALTER TABLE api_keys ADD COLUMN default_webhook_url TEXT`,
     `ALTER TABLE api_keys ADD COLUMN wallet_public_key TEXT`,
   ]) {
-    try { db.prepare(sql).run(); } catch (_) { /* column already exists — safe */ }
+    try {
+      db.prepare(sql).run();
+    } catch (_) {
+      /* column already exists — safe */
+    }
   }
 });
 
@@ -157,7 +163,11 @@ applyMigration(2, () => {
     // JSON: [1,2,3,4,5] — 0=Sun … 6=Sat, null = no restriction
     `ALTER TABLE api_keys ADD COLUMN policy_allowed_days TEXT`,
   ]) {
-    try { db.prepare(sql).run(); } catch (_) { /* column already exists */ }
+    try {
+      db.prepare(sql).run();
+    } catch (_) {
+      /* column already exists */
+    }
   }
 
   // Policy audit log — every decision logged here regardless of outcome
@@ -231,7 +241,11 @@ applyMigration(3, () => {
 
 // Migration 4: agent connection tracking
 applyMigration(4, () => {
-  try { db.prepare(`ALTER TABLE api_keys ADD COLUMN last_used_at TEXT`).run(); } catch (_) { /* already exists */ }
+  try {
+    db.prepare(`ALTER TABLE api_keys ADD COLUMN last_used_at TEXT`).run();
+  } catch (_) {
+    /* already exists */
+  }
 });
 
 // Migration 5: overpayment tracking and fulfillment heartbeat
@@ -240,7 +254,11 @@ applyMigration(5, () => {
     `ALTER TABLE orders ADD COLUMN excess_usdc TEXT`,
     `ALTER TABLE orders ADD COLUMN fulfillment_started_at TEXT`,
   ]) {
-    try { db.prepare(sql).run(); } catch (_) { /* column already exists */ }
+    try {
+      db.prepare(sql).run();
+    } catch (_) {
+      /* column already exists */
+    }
   }
 });
 
@@ -250,7 +268,11 @@ applyMigration(6, () => {
     `ALTER TABLE orders ADD COLUMN vcc_job_id TEXT`,
     `ALTER TABLE orders ADD COLUMN vcc_payment_json TEXT`,
   ]) {
-    try { db.prepare(sql).run(); } catch (_) { /* column already exists */ }
+    try {
+      db.prepare(sql).run();
+    } catch (_) {
+      /* column already exists */
+    }
   }
   try {
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_orders_vcc_job_id ON orders(vcc_job_id)`).run();
@@ -273,8 +295,14 @@ applyMigration(7, () => {
     CREATE INDEX IF NOT EXISTS idx_dashboards_user_id ON dashboards(user_id);
   `);
 
-  try { db.prepare(`ALTER TABLE api_keys ADD COLUMN dashboard_id TEXT REFERENCES dashboards(id)`).run(); } catch (_) {}
-  try { db.prepare(`CREATE INDEX IF NOT EXISTS idx_api_keys_dashboard_id ON api_keys(dashboard_id)`).run(); } catch (_) {}
+  try {
+    db.prepare(`ALTER TABLE api_keys ADD COLUMN dashboard_id TEXT REFERENCES dashboards(id)`).run();
+  } catch (_) {}
+  try {
+    db.prepare(
+      `CREATE INDEX IF NOT EXISTS idx_api_keys_dashboard_id ON api_keys(dashboard_id)`,
+    ).run();
+  } catch (_) {}
 
   // Create a dashboard for each existing user
   const existingUsers = /** @type {any[]} */ (db.prepare(`SELECT id, email FROM users`).all());
@@ -283,23 +311,35 @@ applyMigration(7, () => {
     if (!existing) {
       const dashId = uuidv4();
       const name = u.email.split('@')[0].replace(/[<>&"']/g, '');
-      db.prepare(`INSERT INTO dashboards (id, user_id, name) VALUES (?, ?, ?)`).run(dashId, u.id, name);
+      db.prepare(`INSERT INTO dashboards (id, user_id, name) VALUES (?, ?, ?)`).run(
+        dashId,
+        u.id,
+        name,
+      );
     }
   }
 
   // Assign orphan api_keys to the owner's dashboard
-  const owner = /** @type {any} */ (db.prepare(`SELECT id FROM users WHERE role = 'owner' LIMIT 1`).get());
+  const owner = /** @type {any} */ (
+    db.prepare(`SELECT id FROM users WHERE role = 'owner' LIMIT 1`).get()
+  );
   if (owner) {
-    const ownerDash = /** @type {any} */ (db.prepare(`SELECT id FROM dashboards WHERE user_id = ?`).get(owner.id));
+    const ownerDash = /** @type {any} */ (
+      db.prepare(`SELECT id FROM dashboards WHERE user_id = ?`).get(owner.id)
+    );
     if (ownerDash) {
-      db.prepare(`UPDATE api_keys SET dashboard_id = ? WHERE dashboard_id IS NULL`).run(ownerDash.id);
+      db.prepare(`UPDATE api_keys SET dashboard_id = ? WHERE dashboard_id IS NULL`).run(
+        ownerDash.id,
+      );
     }
   }
 });
 
 // Migration 8: add decided_by to approval_requests for audit trail (W-14)
 applyMigration(8, () => {
-  try { db.prepare(`ALTER TABLE approval_requests ADD COLUMN decided_by TEXT`).run(); } catch (_) {}
+  try {
+    db.prepare(`ALTER TABLE approval_requests ADD COLUMN decided_by TEXT`).run();
+  } catch (_) {}
 });
 
 // Migration 9: sandbox mode, per-key rate limits, time-limited keys, order metadata
@@ -310,7 +350,11 @@ applyMigration(9, () => {
     `ALTER TABLE api_keys ADD COLUMN expires_at TEXT`,
     `ALTER TABLE orders ADD COLUMN metadata TEXT`,
   ]) {
-    try { db.prepare(sql).run(); } catch (_) { /* column already exists */ }
+    try {
+      db.prepare(sql).run();
+    } catch (_) {
+      /* column already exists */
+    }
   }
 });
 
@@ -323,7 +367,11 @@ applyMigration(10, () => {
     `ALTER TABLE orders ADD COLUMN vcc_notified_at TEXT`,
     `ALTER TABLE orders ADD COLUMN fulfillment_attempt INTEGER NOT NULL DEFAULT 0`,
   ]) {
-    try { db.prepare(sql).run(); } catch (_) { /* column already exists */ }
+    try {
+      db.prepare(sql).run();
+    } catch (_) {
+      /* column already exists */
+    }
   }
 
   // Backfill: any existing order sitting in status='ordering' predates the
@@ -342,13 +390,17 @@ applyMigration(10, () => {
   // Rows with NO vcc_job_id are left alone so the reconciler runs them
   // through the full pipeline from scratch (idempotent on vcc's side).
   try {
-    db.prepare(`
+    db.prepare(
+      `
       UPDATE orders
       SET xlm_sent_at = COALESCE(xlm_sent_at, updated_at),
           vcc_notified_at = COALESCE(vcc_notified_at, updated_at)
       WHERE status = 'ordering' AND vcc_job_id IS NOT NULL
-    `).run();
-  } catch (_) { /* nothing to backfill */ }
+    `,
+    ).run();
+  } catch (_) {
+    /* nothing to backfill */
+  }
 });
 
 // Migration 11: end-to-end request correlation. `orders.request_id` is the
@@ -356,10 +408,12 @@ applyMigration(10, () => {
 // through the vcc dispatch and callback paths so every log line across both
 // services can be joined back to a single request. Audit finding C-1.
 applyMigration(11, () => {
-  for (const sql of [
-    `ALTER TABLE orders ADD COLUMN request_id TEXT`,
-  ]) {
-    try { db.prepare(sql).run(); } catch (_) { /* column already exists */ }
+  for (const sql of [`ALTER TABLE orders ADD COLUMN request_id TEXT`]) {
+    try {
+      db.prepare(sql).run();
+    } catch (_) {
+      /* column already exists */
+    }
   }
 });
 
@@ -390,10 +444,12 @@ applyMigration(12, () => {
 // included in the HMAC signing payload so even if VCC_CALLBACK_SECRET leaks,
 // an attacker can't forge a callback without the per-order nonce. Audit C-3.
 applyMigration(13, () => {
-  for (const sql of [
-    `ALTER TABLE orders ADD COLUMN callback_nonce TEXT`,
-  ]) {
-    try { db.prepare(sql).run(); } catch (_) { /* column already exists */ }
+  for (const sql of [`ALTER TABLE orders ADD COLUMN callback_nonce TEXT`]) {
+    try {
+      db.prepare(sql).run();
+    } catch (_) {
+      /* column already exists */
+    }
   }
 });
 
@@ -412,9 +468,9 @@ const actualVersion = getSchemaVersion();
 if (actualVersion > EXPECTED_SCHEMA_VERSION) {
   console.error(
     `[db] schema version mismatch: code expects ${EXPECTED_SCHEMA_VERSION}, ` +
-    `database is at ${actualVersion}. Refusing to start — you are running ` +
-    `an older binary against a newer database. Roll forward the binary or ` +
-    `restore the DB from a pre-migration backup.`,
+      `database is at ${actualVersion}. Refusing to start — you are running ` +
+      `an older binary against a newer database. Roll forward the binary or ` +
+      `restore the DB from a pre-migration backup.`,
   );
   process.exit(1);
 }
@@ -424,7 +480,9 @@ const frozen = db.prepare(`SELECT value FROM system_state WHERE key = 'frozen'`)
 if (!frozen) {
   db.prepare(`INSERT INTO system_state (key, value) VALUES ('frozen', '0')`).run();
 }
-const consecutiveFailures = db.prepare(`SELECT value FROM system_state WHERE key = 'consecutive_failures'`).get();
+const consecutiveFailures = db
+  .prepare(`SELECT value FROM system_state WHERE key = 'consecutive_failures'`)
+  .get();
 if (!consecutiveFailures) {
   db.prepare(`INSERT INTO system_state (key, value) VALUES ('consecutive_failures', '0')`).run();
 }

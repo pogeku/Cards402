@@ -74,7 +74,6 @@ const specs = [
 export default function Home() {
   return (
     <div style={{ background: 'var(--bg)', color: 'var(--fg)' }}>
-
       {/* ── Hero ─────────────────────────────────────────── */}
       <section
         className="dot-grid"
@@ -352,7 +351,9 @@ export default function Home() {
               >
                 {step.title}
               </h3>
-              <p style={{ color: 'var(--muted)', fontSize: '0.875rem', lineHeight: 1.65, margin: 0 }}>
+              <p
+                style={{ color: 'var(--muted)', fontSize: '0.875rem', lineHeight: 1.65, margin: 0 }}
+              >
                 {step.body}
               </p>
             </div>
@@ -615,7 +616,9 @@ export default function Home() {
             Read the docs
           </Link>
         </div>
-        <div style={{ marginTop: '2rem', display: 'flex', gap: '1.25rem', justifyContent: 'center' }}>
+        <div
+          style={{ marginTop: '2rem', display: 'flex', gap: '1.25rem', justifyContent: 'center' }}
+        >
           <Link
             href="/agents.txt"
             style={{

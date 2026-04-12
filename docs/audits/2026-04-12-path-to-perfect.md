@@ -90,7 +90,7 @@ path is a clear win (batch 8 proved it) but leaving both means:
 
 **Fix:** Commit. If direct-API is good enough, delete `stage1.js`,
 `scraper/browser.js`, the audio/challenge/fingerprints modules, the patchright
-dependency. If you want a fallback, keep browser path *disabled by default*
+dependency. If you want a fallback, keep browser path _disabled by default_
 and require explicit opt-in per job.
 
 ## 5. Backend is JavaScript, SDK is TypeScript — they disagree
@@ -105,7 +105,7 @@ admin/ is TypeScript. vcc/api is plain JS. Result:
 **Fix:** Pick one of three moves (don't mix):
 (a) Migrate cards402/backend + vcc/api to TypeScript strict (~2 weeks)
 (b) Enforce the contract via OpenAPI schema in `contract/openapi.yaml` and
-    codegen types for both backend and SDK (~2 days; best ROI)
+codegen types for both backend and SDK (~2 days; best ROI)
 (c) Enforce JSDoc `@typedef` + `tsc --checkJs` in CI (~half day; minimum viable)
 
 Option (b) is the right call. Gives agents a machine-readable contract too.
@@ -113,6 +113,7 @@ Option (b) is the right call. Gives agents a machine-readable contract too.
 ## 6. Dead code pollution in scrapers
 
 Per vcc audit:
+
 - `raceSolversV3`, `raceSolversHCaptcha` exported but never called
   (`vcc/api/src/scraper/captcha.js:143`)
 - `getQuestionText`, `getGridSize`, `screenshotGrid`, `classifyImage`,
@@ -214,18 +215,18 @@ boots both in containers, runs e2e against testnet.
 
 Each item is independently shippable. Each builds on the previous.
 
-| # | Task | Effort | Impact |
-|---|------|--------|--------|
-| 1 | Kill stage1 browser path + dead captcha code | 0.5d | −1500 LOC, one path to reason about |
-| 2 | Add correlation IDs end-to-end | 0.5d | Debuggable in minutes instead of hours |
-| 3 | OpenAPI contract + codegen for SDK/backend | 2d | Agents get machine-readable types, drift impossible |
-| 4 | Build `cards402-mcp` server properly, publish to npm | 1d | Agent adoption unblocked |
-| 5 | Sign `order_id` in callbacks + per-job nonces + dead-letter table | 1d | Eliminates silent delivery loss |
-| 6 | `/admin/health` dashboard with 8 operator-critical views | 1d | Ops finally has situational awareness |
-| 7 | Scraper tests (stage1-direct, SSE parser, captcha race) | 1d | Regressions caught before shipping |
-| 8 | Consolidate docs: one `docs/`, env vars complete, CHANGELOG per repo | 0.5d | Agents + operators onboard without reading code |
-| 9 | Cross-repo e2e CI on real testnet | 1d | Deploy confidence |
-| 10 | 3 working example agents in `examples/` | 0.5d | Obvious adoption path |
+| #   | Task                                                                 | Effort | Impact                                              |
+| --- | -------------------------------------------------------------------- | ------ | --------------------------------------------------- |
+| 1   | Kill stage1 browser path + dead captcha code                         | 0.5d   | −1500 LOC, one path to reason about                 |
+| 2   | Add correlation IDs end-to-end                                       | 0.5d   | Debuggable in minutes instead of hours              |
+| 3   | OpenAPI contract + codegen for SDK/backend                           | 2d     | Agents get machine-readable types, drift impossible |
+| 4   | Build `cards402-mcp` server properly, publish to npm                 | 1d     | Agent adoption unblocked                            |
+| 5   | Sign `order_id` in callbacks + per-job nonces + dead-letter table    | 1d     | Eliminates silent delivery loss                     |
+| 6   | `/admin/health` dashboard with 8 operator-critical views             | 1d     | Ops finally has situational awareness               |
+| 7   | Scraper tests (stage1-direct, SSE parser, captcha race)              | 1d     | Regressions caught before shipping                  |
+| 8   | Consolidate docs: one `docs/`, env vars complete, CHANGELOG per repo | 0.5d   | Agents + operators onboard without reading code     |
+| 9   | Cross-repo e2e CI on real testnet                                    | 1d     | Deploy confidence                                   |
+| 10  | 3 working example agents in `examples/`                              | 0.5d   | Obvious adoption path                               |
 
 **Total: ~9 engineer-days.**
 

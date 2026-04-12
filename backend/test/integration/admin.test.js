@@ -2,13 +2,20 @@ require('../helpers/env');
 
 const { describe, it, before, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { request, createTestKey, createTestSession, seedOrder, resetDb, db } = require('../helpers/app');
+const {
+  request,
+  createTestKey,
+  createTestSession,
+  seedOrder,
+  resetDb,
+  db,
+} = require('../helpers/app');
 
 // ADMIN header is refreshed after every resetDb() call since resetDb clears sessions.
 let ADMIN = {};
 function refreshAdmin() {
   const { token } = createTestSession({ email: 'admin@cards402.test', role: 'owner' });
-  ADMIN = { 'Authorization': `Bearer ${token}` };
+  ADMIN = { Authorization: `Bearer ${token}` };
 }
 refreshAdmin();
 
@@ -25,12 +32,13 @@ describe('Admin auth', () => {
 });
 
 describe('POST /admin/api-keys', () => {
-  beforeEach(() => { resetDb(); refreshAdmin(); });
+  beforeEach(() => {
+    resetDb();
+    refreshAdmin();
+  });
 
   it('creates a key and returns it once', async () => {
-    const res = await request.post('/admin/api-keys')
-      .set(ADMIN)
-      .send({ label: 'my-agent' });
+    const res = await request.post('/admin/api-keys').set(ADMIN).send({ label: 'my-agent' });
 
     assert.equal(res.status, 201);
     assert.ok(res.body.key.startsWith('cards402_'));
@@ -40,9 +48,7 @@ describe('POST /admin/api-keys', () => {
   });
 
   it('stores a bcrypt hash, not the raw key', async () => {
-    const res = await request.post('/admin/api-keys')
-      .set(ADMIN)
-      .send({ label: 'hash-test' });
+    const res = await request.post('/admin/api-keys').set(ADMIN).send({ label: 'hash-test' });
 
     const row = db.prepare(`SELECT key_hash FROM api_keys WHERE id = ?`).get(res.body.id);
     assert.ok(row.key_hash !== res.body.key, 'Raw key must not be stored');
@@ -50,7 +56,8 @@ describe('POST /admin/api-keys', () => {
   });
 
   it('stores spend_limit_usdc when provided', async () => {
-    const res = await request.post('/admin/api-keys')
+    const res = await request
+      .post('/admin/api-keys')
       .set(ADMIN)
       .send({ label: 'limited', spend_limit_usdc: '50.00' });
 
@@ -59,17 +66,25 @@ describe('POST /admin/api-keys', () => {
   });
 
   it('stores default_webhook_url when provided', async () => {
-    const res = await request.post('/admin/api-keys')
+    const res = await request
+      .post('/admin/api-keys')
       .set(ADMIN)
       .send({ label: 'webhook-key', default_webhook_url: 'https://example.com/wh' });
 
-    const row = db.prepare(`SELECT default_webhook_url FROM api_keys WHERE id = ?`).get(res.body.id);
+    const row = db
+      .prepare(`SELECT default_webhook_url FROM api_keys WHERE id = ?`)
+      .get(res.body.id);
     assert.equal(row.default_webhook_url, 'https://example.com/wh');
   });
 });
 
 describe('GET /admin/api-keys', () => {
-  before(async () => { resetDb(); refreshAdmin(); await createTestKey({ label: 'key-a' }); await createTestKey({ label: 'key-b' }); });
+  before(async () => {
+    resetDb();
+    refreshAdmin();
+    await createTestKey({ label: 'key-a' });
+    await createTestKey({ label: 'key-b' });
+  });
 
   it('lists all keys without exposing key_hash', async () => {
     const res = await request.get('/admin/api-keys').set(ADMIN);
@@ -86,10 +101,16 @@ describe('GET /admin/api-keys', () => {
 
 describe('PATCH /admin/api-keys/:id', () => {
   let keyId;
-  beforeEach(async () => { resetDb(); refreshAdmin(); const k = await createTestKey({ label: 'orig' }); keyId = k.id; });
+  beforeEach(async () => {
+    resetDb();
+    refreshAdmin();
+    const k = await createTestKey({ label: 'orig' });
+    keyId = k.id;
+  });
 
   it('updates label', async () => {
-    const res = await request.patch(`/admin/api-keys/${keyId}`)
+    const res = await request
+      .patch(`/admin/api-keys/${keyId}`)
       .set(ADMIN)
       .send({ label: 'updated' });
     assert.equal(res.status, 200);
@@ -129,29 +150,35 @@ describe('PATCH /admin/api-keys/:id', () => {
 
 describe('GET /admin/orders', () => {
   let key;
-  before(async () => { resetDb(); refreshAdmin(); key = await createTestKey({ label: 'test' }); });
+  before(async () => {
+    resetDb();
+    refreshAdmin();
+    key = await createTestKey({ label: 'test' });
+  });
 
   it('lists all orders with api_key_label', async () => {
     seedOrder({ api_key_id: key.id, status: 'delivered' });
     const res = await request.get('/admin/orders').set(ADMIN);
     assert.equal(res.status, 200);
     assert.ok(res.body.length >= 1);
-    const order = res.body.find(o => o.api_key_label === 'test');
+    const order = res.body.find((o) => o.api_key_label === 'test');
     assert.ok(order, 'Should have api_key_label');
   });
 
   it('filters by status', async () => {
-    resetDb(); refreshAdmin();
+    resetDb();
+    refreshAdmin();
     seedOrder({ api_key_id: key.id, status: 'delivered' });
     seedOrder({ api_key_id: key.id, status: 'failed' });
     const res = await request.get('/admin/orders?status=delivered').set(ADMIN);
-    assert.ok(res.body.every(o => o.status === 'delivered'));
+    assert.ok(res.body.every((o) => o.status === 'delivered'));
   });
 });
 
 describe('GET /admin/stats', () => {
   before(async () => {
-    resetDb(); refreshAdmin();
+    resetDb();
+    refreshAdmin();
     const key = await createTestKey();
     seedOrder({ api_key_id: key.id, status: 'delivered', amount_usdc: '10.00' });
     seedOrder({ api_key_id: key.id, status: 'delivered', amount_usdc: '25.00' });
@@ -177,7 +204,9 @@ describe('POST /admin/system/unfreeze', () => {
     assert.equal(res.status, 200);
 
     const frozen = db.prepare(`SELECT value FROM system_state WHERE key = 'frozen'`).get();
-    const failures = db.prepare(`SELECT value FROM system_state WHERE key = 'consecutive_failures'`).get();
+    const failures = db
+      .prepare(`SELECT value FROM system_state WHERE key = 'consecutive_failures'`)
+      .get();
     assert.equal(frozen.value, '0');
     assert.equal(failures.value, '0');
   });
@@ -190,11 +219,15 @@ describe('POST /admin/system/unfreeze', () => {
     const res = await request.post('/admin/system/unfreeze').set(ADMIN);
     assert.equal(res.status, 200);
 
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT actor_email, action, target_type FROM admin_actions
       WHERE action = 'system_unfreeze'
       ORDER BY created_at DESC LIMIT 1
-    `).all();
+    `,
+      )
+      .all();
     assert.equal(rows.length, 1);
     assert.equal(rows[0].actor_email, 'admin@cards402.test');
     assert.equal(rows[0].target_type, 'system');
@@ -202,7 +235,10 @@ describe('POST /admin/system/unfreeze', () => {
 });
 
 describe('GET /admin/admin-actions', () => {
-  beforeEach(() => { resetDb(); refreshAdmin(); });
+  beforeEach(() => {
+    resetDb();
+    refreshAdmin();
+  });
 
   it('returns the audit log with filters', async () => {
     // Generate one audit row via the unfreeze endpoint
@@ -212,7 +248,7 @@ describe('GET /admin/admin-actions', () => {
     const res = await request.get('/admin/admin-actions').set(ADMIN);
     assert.equal(res.status, 200);
     assert.ok(Array.isArray(res.body));
-    const unfreeze = res.body.find(r => r.action === 'system_unfreeze');
+    const unfreeze = res.body.find((r) => r.action === 'system_unfreeze');
     assert.ok(unfreeze, 'should find the unfreeze row we just emitted');
     assert.equal(unfreeze.target_type, 'system');
     assert.equal(typeof unfreeze.metadata, 'object');
@@ -224,13 +260,17 @@ describe('GET /admin/admin-actions', () => {
 
     const res = await request.get('/admin/admin-actions?action=system_unfreeze').set(ADMIN);
     assert.equal(res.status, 200);
-    assert.ok(res.body.every(r => r.action === 'system_unfreeze'));
+    assert.ok(res.body.every((r) => r.action === 'system_unfreeze'));
   });
 });
 
 describe('POST /admin/orders/:id/refund', () => {
   let key;
-  beforeEach(async () => { resetDb(); refreshAdmin(); key = await createTestKey(); });
+  beforeEach(async () => {
+    resetDb();
+    refreshAdmin();
+    key = await createTestKey();
+  });
 
   it('queues a manual refund for a failed order', async () => {
     const orderId = seedOrder({ api_key_id: key.id, status: 'failed' });
@@ -248,7 +288,9 @@ describe('POST /admin/orders/:id/refund', () => {
 
   it('returns 401 with invalid token', async () => {
     const orderId = seedOrder({ api_key_id: key.id, status: 'failed' });
-    const res = await request.post(`/admin/orders/${orderId}/refund`).set('Authorization', 'Bearer bad-token');
+    const res = await request
+      .post(`/admin/orders/${orderId}/refund`)
+      .set('Authorization', 'Bearer bad-token');
     assert.equal(res.status, 401);
   });
 });

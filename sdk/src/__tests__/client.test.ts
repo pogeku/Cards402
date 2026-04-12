@@ -31,7 +31,10 @@ const ORDER_RESPONSE = {
     type: 'soroban_contract' as const,
     contract_id: 'CARDS402CONTRACTIDXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
     order_id: 'ord_abc',
-    usdc: { amount: '10.00', asset: 'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN' },
+    usdc: {
+      amount: '10.00',
+      asset: 'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+    },
     xlm: { amount: '72.00' },
   },
   poll_url: '/v1/orders/ord_abc',
@@ -58,20 +61,26 @@ const ORDER_STATUS_READY = {
 // ── createOrder ───────────────────────────────────────────────────────────────
 
 describe('Cards402Client.createOrder', () => {
-  beforeEach(() => { vi.restoreAllMocks(); });
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
 
   it('creates a USDC order and returns response', async () => {
     mockFetch(201, ORDER_RESPONSE);
     const res = await client().createOrder({ amount_usdc: '10.00' });
     expect(res.order_id).toBe('ord_abc');
     expect(res.payment.type).toBe('soroban_contract');
-    expect(res.payment.contract_id).toBe('CARDS402CONTRACTIDXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX');
+    expect(res.payment.contract_id).toBe(
+      'CARDS402CONTRACTIDXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+    );
     expect(res.payment.order_id).toBe('ord_abc');
     expect(res.budget.spent_usdc).toBe('0.00');
   });
 
   it('sends correct headers and body', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 201, json: async () => ORDER_RESPONSE });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ORDER_RESPONSE });
     global.fetch = fetchMock;
 
     await client().createOrder({ amount_usdc: '10.00' });
@@ -92,7 +101,9 @@ describe('Cards402Client.createOrder', () => {
 
   it('throws SpendLimitError on 403 spend_limit_exceeded', async () => {
     mockFetch(403, { error: 'spend_limit_exceeded', limit: '50.00', spent: '50.00' });
-    const err = await client().createOrder({ amount_usdc: '10.00' }).catch(e => e);
+    const err = await client()
+      .createOrder({ amount_usdc: '10.00' })
+      .catch((e) => e);
     expect(err).toBeInstanceOf(SpendLimitError);
     expect(err.limit).toBe('50.00');
   });
@@ -104,7 +115,9 @@ describe('Cards402Client.createOrder', () => {
 
   it('throws ServiceUnavailableError on 503', async () => {
     mockFetch(503, { error: 'service_temporarily_unavailable' });
-    await expect(client().createOrder({ amount_usdc: '10.00' })).rejects.toThrow(ServiceUnavailableError);
+    await expect(client().createOrder({ amount_usdc: '10.00' })).rejects.toThrow(
+      ServiceUnavailableError,
+    );
   });
 
   it('throws InvalidAmountError on 400 invalid_amount', async () => {
@@ -113,7 +126,9 @@ describe('Cards402Client.createOrder', () => {
   });
 
   it('strips trailing slash from baseUrl', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 201, json: async () => ORDER_RESPONSE });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ORDER_RESPONSE });
     global.fetch = fetchMock;
     const c = new Cards402Client({ baseUrl: 'http://localhost:3000/v1/', apiKey: 'k' });
     await c.createOrder({ amount_usdc: '10.00' });
@@ -125,7 +140,9 @@ describe('Cards402Client.createOrder', () => {
 // ── getOrder ──────────────────────────────────────────────────────────────────
 
 describe('Cards402Client.getOrder', () => {
-  beforeEach(() => { vi.restoreAllMocks(); });
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
 
   it('returns order status with phase', async () => {
     mockFetch(200, ORDER_STATUS_PENDING);
@@ -151,8 +168,13 @@ describe('Cards402Client.getOrder', () => {
 // ── waitForCard ───────────────────────────────────────────────────────────────
 
 describe('Cards402Client.waitForCard', () => {
-  beforeEach(() => { vi.restoreAllMocks(); vi.useFakeTimers(); });
-  afterEach(() => { vi.useRealTimers(); });
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   it('returns card immediately when order is already ready', async () => {
     mockFetch(200, ORDER_STATUS_READY);
@@ -161,7 +183,8 @@ describe('Cards402Client.waitForCard', () => {
   });
 
   it('polls until ready', async () => {
-    const fetchMock = vi.fn()
+    const fetchMock = vi
+      .fn()
       .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ORDER_STATUS_PENDING })
       .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ORDER_STATUS_READY });
     global.fetch = fetchMock;
@@ -182,7 +205,7 @@ describe('Cards402Client.waitForCard', () => {
       error: 'supplier unavailable',
     });
     await expect(
-      client().waitForCard('ord_abc', { timeoutMs: 5000, intervalMs: 100 })
+      client().waitForCard('ord_abc', { timeoutMs: 5000, intervalMs: 100 }),
     ).rejects.toThrow(OrderFailedError);
   });
 
@@ -193,7 +216,9 @@ describe('Cards402Client.waitForCard', () => {
       status: 'refunded',
       refund: { stellar_txid: 'txid_xyz' },
     });
-    const err = await client().waitForCard('ord_abc', { timeoutMs: 5000, intervalMs: 100 }).catch(e => e);
+    const err = await client()
+      .waitForCard('ord_abc', { timeoutMs: 5000, intervalMs: 100 })
+      .catch((e) => e);
     expect(err).toBeInstanceOf(OrderFailedError);
     expect(err.refund).toEqual({ stellar_txid: 'txid_xyz' });
   });
@@ -204,7 +229,9 @@ describe('Cards402Client.waitForCard', () => {
       phase: 'expired',
       status: 'expired',
     });
-    const err = await client().waitForCard('ord_abc', { timeoutMs: 5000, intervalMs: 100 }).catch(e => e);
+    const err = await client()
+      .waitForCard('ord_abc', { timeoutMs: 5000, intervalMs: 100 })
+      .catch((e) => e);
     expect(err).toBeInstanceOf(OrderFailedError);
     expect(err.message).toContain('expired');
   });
@@ -213,8 +240,9 @@ describe('Cards402Client.waitForCard', () => {
     mockFetch(200, ORDER_STATUS_PENDING);
 
     // Attach .catch BEFORE advancing timers so the rejection is handled synchronously
-    const errPromise = client().waitForCard('ord_abc', { timeoutMs: 100, intervalMs: 50 })
-      .catch(e => e);
+    const errPromise = client()
+      .waitForCard('ord_abc', { timeoutMs: 100, intervalMs: 50 })
+      .catch((e) => e);
     await vi.runAllTimersAsync();
     const err = await errPromise;
     expect(err).toBeInstanceOf(WaitTimeoutError);
@@ -225,13 +253,29 @@ describe('Cards402Client.waitForCard', () => {
 // ── listOrders ────────────────────────────────────────────────────────────────
 
 describe('Cards402Client.listOrders', () => {
-  beforeEach(() => { vi.restoreAllMocks(); });
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
 
   it('returns list of orders', async () => {
     // List endpoint returns { id, status, amount_usdc, payment_asset, created_at, updated_at }
     const listItems = [
-      { id: 'ord_abc', status: 'pending_payment', amount_usdc: '10.00', payment_asset: 'usdc', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' },
-      { id: 'ord_def', status: 'delivered', amount_usdc: '10.00', payment_asset: 'usdc', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' },
+      {
+        id: 'ord_abc',
+        status: 'pending_payment',
+        amount_usdc: '10.00',
+        payment_asset: 'usdc',
+        created_at: '2025-01-01T00:00:00Z',
+        updated_at: '2025-01-01T00:00:00Z',
+      },
+      {
+        id: 'ord_def',
+        status: 'delivered',
+        amount_usdc: '10.00',
+        payment_asset: 'usdc',
+        created_at: '2025-01-01T00:00:00Z',
+        updated_at: '2025-01-01T00:00:00Z',
+      },
     ];
     mockFetch(200, listItems);
     const orders = await client().listOrders();
@@ -270,7 +314,9 @@ describe('Cards402Client.listOrders', () => {
 // ── getUsage ──────────────────────────────────────────────────────────────────
 
 describe('Cards402Client.getUsage', () => {
-  beforeEach(() => { vi.restoreAllMocks(); });
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
 
   const USAGE = {
     api_key_id: 'key_1',

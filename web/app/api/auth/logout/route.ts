@@ -3,11 +3,7 @@
 
 import { NextResponse, type NextRequest } from 'next/server';
 import { cookies } from 'next/headers';
-import {
-  ADMIN_SESSION_COOKIE,
-  getBackendBaseUrl,
-  verifySession,
-} from '@/app/lib/admin-session';
+import { ADMIN_SESSION_COOKIE, getBackendBaseUrl, verifySession } from '@/app/lib/admin-session';
 
 export const runtime = 'nodejs';
 

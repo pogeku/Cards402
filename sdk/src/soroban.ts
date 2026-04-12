@@ -72,7 +72,10 @@ export async function buildContractPaymentTx(
     nativeToScVal(orderIdBytes, { type: 'bytes' }),
   );
 
-  const raw = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase: opts.networkPassphrase })
+  const raw = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: opts.networkPassphrase,
+  })
     .addOperation(op)
     .setTimeout(180)
     .build();
@@ -115,23 +118,27 @@ export async function submitSorobanTx(tx: Transaction, server: rpc.Server): Prom
         try {
           const horizonResp = await fetch(`https://horizon.stellar.org/transactions/${send.hash}`);
           if (horizonResp.ok) {
-            const horizonData = await horizonResp.json() as { successful: boolean };
+            const horizonData = (await horizonResp.json()) as { successful: boolean };
             if (horizonData.successful) return send.hash;
           }
-        } catch { /* Horizon unreachable — keep polling Soroban RPC */ }
+        } catch {
+          /* Horizon unreachable — keep polling Soroban RPC */
+        }
       }
     }
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, 2000));
   }
 
   // Last-resort Horizon check before giving up
   try {
     const horizonResp = await fetch(`https://horizon.stellar.org/transactions/${send.hash}`);
     if (horizonResp.ok) {
-      const horizonData = await horizonResp.json() as { successful: boolean };
+      const horizonData = (await horizonResp.json()) as { successful: boolean };
       if (horizonData.successful) return send.hash;
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 
   throw new Error(`Soroban transaction ${send.hash} did not finalize within 60s`);
 }

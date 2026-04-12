@@ -46,8 +46,8 @@ const card = await purchaseCardOWS({
   baseUrl: process.env.CARDS402_API_URL,
   walletName: process.env.OWS_WALLET_NAME!,
   passphrase: process.env.OWS_WALLET_PASSPHRASE,
-  amountUsdc: '10.00',    // or whatever the user requested
-  paymentAsset: 'usdc',   // or 'xlm'
+  amountUsdc: '10.00', // or whatever the user requested
+  paymentAsset: 'usdc', // or 'xlm'
 });
 ```
 

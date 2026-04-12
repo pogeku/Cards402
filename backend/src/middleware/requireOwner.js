@@ -6,7 +6,9 @@
 module.exports = function requireOwner(req, res, next) {
   if (!req.user) return res.status(401).json({ error: 'unauthenticated' });
   if (req.user.role !== 'owner') {
-    return res.status(403).json({ error: 'owner_only', message: 'This action requires owner access.' });
+    return res
+      .status(403)
+      .json({ error: 'owner_only', message: 'This action requires owner access.' });
   }
   next();
 };

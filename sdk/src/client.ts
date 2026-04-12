@@ -9,7 +9,12 @@ export {
   OrderFailedError,
   WaitTimeoutError,
 } from './errors';
-import { parseApiError, OrderFailedError, WaitTimeoutError, AuthError as AuthErrorCtor } from './errors';
+import {
+  parseApiError,
+  OrderFailedError,
+  WaitTimeoutError,
+  AuthError as AuthErrorCtor,
+} from './errors';
 
 export interface Budget {
   spent_usdc: string;
@@ -117,7 +122,11 @@ export class Cards402Client {
     baseUrl = 'https://api.cards402.com/v1',
     apiKey,
     retry = {},
-  }: { baseUrl?: string; apiKey: string; retry?: RetryOptions }) {
+  }: {
+    baseUrl?: string;
+    apiKey: string;
+    retry?: RetryOptions;
+  }) {
     if (!apiKey.trim()) throw new AuthErrorCtor();
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this.apiKey = apiKey;
@@ -132,7 +141,7 @@ export class Cards402Client {
   }
 
   private async handleError(res: Response): Promise<never> {
-    const body = await res.json().catch(() => ({})) as Record<string, unknown>;
+    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     throw parseApiError(res.status, body);
   }
 
@@ -158,7 +167,7 @@ export class Cards402Client {
       }
       const delay = Math.min(baseDelayMs * Math.pow(2, i), maxDelayMs);
       const jitter = Math.floor(Math.random() * (delay / 4));
-      await new Promise(r => setTimeout(r, delay + jitter));
+      await new Promise((r) => setTimeout(r, delay + jitter));
     }
     // Unreachable because we always either return or throw above.
     throw lastErr ?? new Error('fetchWithRetry: exhausted without result');
@@ -191,7 +200,10 @@ export class Cards402Client {
   }
 
   // Poll until card is ready. Throws typed errors on failure or timeout.
-  async waitForCard(orderId: string, { timeoutMs = 300000, intervalMs = 3000 } = {}): Promise<CardDetails> {
+  async waitForCard(
+    orderId: string,
+    { timeoutMs = 300000, intervalMs = 3000 } = {},
+  ): Promise<CardDetails> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const order = await this.getOrder(orderId);
@@ -203,10 +215,14 @@ export class Cards402Client {
       }
 
       if (order.phase === 'expired') {
-        throw new OrderFailedError(orderId, 'Payment window expired — no funds were taken', undefined);
+        throw new OrderFailedError(
+          orderId,
+          'Payment window expired — no funds were taken',
+          undefined,
+        );
       }
 
-      await new Promise(r => setTimeout(r, intervalMs));
+      await new Promise((r) => setTimeout(r, intervalMs));
     }
     throw new WaitTimeoutError(orderId, timeoutMs);
   }

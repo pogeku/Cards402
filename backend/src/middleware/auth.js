@@ -15,17 +15,25 @@ module.exports = async function auth(req, res, next) {
   const keyPrefix = key.startsWith('cards402_') && key.length >= 21 ? key.slice(9, 21) : null;
 
   const candidates = keyPrefix
-    ? db.prepare(`SELECT * FROM api_keys WHERE enabled = 1 AND (key_prefix = ? OR key_prefix IS NULL)`).all(keyPrefix)
+    ? db
+        .prepare(
+          `SELECT * FROM api_keys WHERE enabled = 1 AND (key_prefix = ? OR key_prefix IS NULL)`,
+        )
+        .all(keyPrefix)
     : db.prepare(`SELECT * FROM api_keys WHERE enabled = 1`).all();
 
   for (const candidate of /** @type {any[]} */ (candidates)) {
     if (await bcrypt.compare(key, candidate.key_hash)) {
       if (candidate.expires_at && new Date(candidate.expires_at) < new Date()) {
-        return res.status(401).json({ error: 'api_key_expired', message: 'This API key has expired.' });
+        return res
+          .status(401)
+          .json({ error: 'api_key_expired', message: 'This API key has expired.' });
       }
       req.apiKey = candidate;
       // Track last-seen time for agent connection status (fire-and-forget)
-      db.prepare(`UPDATE api_keys SET last_used_at = datetime('now') WHERE id = ?`).run(candidate.id);
+      db.prepare(`UPDATE api_keys SET last_used_at = datetime('now') WHERE id = ?`).run(
+        candidate.id,
+      );
       return next();
     }
   }

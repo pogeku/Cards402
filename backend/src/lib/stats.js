@@ -31,7 +31,10 @@ function getOrderStats(opts = {}) {
     params.push(...apiKeyIds);
   }
 
-  return /** @type {any} */ (db.prepare(`
+  return /** @type {any} */ (
+    db
+      .prepare(
+        `
     SELECT
       COUNT(*) AS total_orders,
       COALESCE(SUM(CAST(amount_usdc AS REAL)), 0) AS total_gmv,
@@ -41,7 +44,10 @@ function getOrderStats(opts = {}) {
       SUM(CASE WHEN status = 'pending_payment' THEN 1 ELSE 0 END) AS pending,
       SUM(CASE WHEN status = 'refund_pending' THEN 1 ELSE 0 END) AS refund_pending
     FROM orders ${where}
-  `).get(...params));
+  `,
+      )
+      .get(...params)
+  );
 }
 
 module.exports = { getOrderStats };

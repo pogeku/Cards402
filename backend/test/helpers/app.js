@@ -16,17 +16,23 @@ const request = supertest(appModule);
  * Create a test API key and return both the raw key (for use in headers)
  * and the record ID.
  */
-async function createTestKey({ label = 'test-agent', spendLimit = null, defaultWebhookUrl = null } = {}) {
+async function createTestKey({
+  label = 'test-agent',
+  spendLimit = null,
+  defaultWebhookUrl = null,
+} = {}) {
   const rawKey = `cards402_${crypto.randomBytes(24).toString('hex')}`;
   // Low bcrypt cost (4) for fast tests
   const keyHash = await bcrypt.hash(rawKey, 4);
   const id = uuidv4();
   const webhookSecret = `whsec_${crypto.randomBytes(32).toString('hex')}`;
 
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO api_keys (id, key_hash, label, spend_limit_usdc, webhook_secret, default_webhook_url)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run(id, keyHash, label, spendLimit, webhookSecret, defaultWebhookUrl);
+  `,
+  ).run(id, keyHash, label, spendLimit, webhookSecret, defaultWebhookUrl);
 
   return { id, key: rawKey, webhookSecret };
 }
@@ -36,10 +42,12 @@ async function createTestKey({ label = 'test-agent', spendLimit = null, defaultW
  */
 function seedOrder(fields = {}) {
   const id = fields.id || uuidv4();
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO orders (id, status, amount_usdc, payment_asset, api_key_id)
     VALUES (@id, @status, @amount_usdc, @payment_asset, @api_key_id)
-  `).run({
+  `,
+  ).run({
     id,
     status: fields.status || 'pending_payment',
     amount_usdc: fields.amount_usdc || '10.00',
@@ -63,8 +71,12 @@ function createTestSession({ email = 'test@cards402.com', role = 'owner' } = {})
   const rawToken = crypto.randomBytes(32).toString('hex');
   const tokenHash = require('crypto').createHash('sha256').update(rawToken).digest('hex');
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-  db.prepare(`INSERT INTO sessions (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)`)
-    .run(require('uuid').v4(), user.id, tokenHash, expiresAt);
+  db.prepare(`INSERT INTO sessions (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)`).run(
+    require('uuid').v4(),
+    user.id,
+    tokenHash,
+    expiresAt,
+  );
   return { token: rawToken, userId: user.id };
 }
 

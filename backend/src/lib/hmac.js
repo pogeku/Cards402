@@ -51,14 +51,12 @@ function signCallback({ secret, timestamp, orderId, rawBody, nonce }) {
   if (!secret) throw new Error('signCallback: secret is required');
   if (!timestamp) throw new Error('signCallback: timestamp is required');
   if (!orderId) throw new Error('signCallback: orderId is required');
-  if (rawBody === null || rawBody === undefined) throw new Error('signCallback: rawBody is required');
+  if (rawBody === null || rawBody === undefined)
+    throw new Error('signCallback: rawBody is required');
   const payload = nonce
     ? `${timestamp}.${orderId}.${nonce}.${rawBody}`
     : `${timestamp}.${orderId}.${rawBody}`;
-  return crypto
-    .createHmac('sha256', secret)
-    .update(payload)
-    .digest('hex');
+  return crypto.createHmac('sha256', secret).update(payload).digest('hex');
 }
 
 /**
@@ -112,7 +110,11 @@ function verifyCallback({
   // v3: order_id + nonce in the signing payload. Strongest — per-job scoped.
   if (orderId && nonce) {
     const expectedV3 = signCallback({
-      secret, timestamp, orderId, rawBody, nonce,
+      secret,
+      timestamp,
+      orderId,
+      rawBody,
+      nonce,
     });
     if (safeEqHex(provided, expectedV3)) return { ok: true, version: 3 };
   }
@@ -120,7 +122,10 @@ function verifyCallback({
   // v2: order_id in the signing payload, no nonce.
   if (orderId) {
     const expectedV2 = signCallback({
-      secret, timestamp, orderId, rawBody,
+      secret,
+      timestamp,
+      orderId,
+      rawBody,
     });
     if (safeEqHex(provided, expectedV2)) return { ok: true, version: 2 };
   }

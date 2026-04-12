@@ -123,7 +123,12 @@ describe('verifyVccSignature (v2)', () => {
   it('returns bad_signature for wrong secret', () => {
     const body = '{"order_id":"abc"}';
     const ts = Date.now().toString();
-    const { signature } = makeV2Signature(body, 'abc', 'wrong-secret-of-sufficient-length-really', ts);
+    const { signature } = makeV2Signature(
+      body,
+      'abc',
+      'wrong-secret-of-sufficient-length-really',
+      ts,
+    );
     const v = verifyVccSignature(body, signature, ts, 'abc');
     assert.equal(v.ok, false);
     assert.equal(v.reason, 'bad_signature');
@@ -182,8 +187,12 @@ describe('auto-registration', () => {
     global.fetch = async (url, opts) => {
       fetchCalls.push({ url, opts });
       callCount++;
-      if (callCount === 1) return makeResponse(201, { tenant_id: 'tid-1', token: 'vcc_freshtoken' });
-      return makeResponse(201, { job_id: 'job-1', payment_url: 'web+stellar:pay?destination=G...&amount=5' });
+      if (callCount === 1)
+        return makeResponse(201, { tenant_id: 'tid-1', token: 'vcc_freshtoken' });
+      return makeResponse(201, {
+        job_id: 'job-1',
+        payment_url: 'web+stellar:pay?destination=G...&amount=5',
+      });
     };
 
     const { vccJobId, paymentUrl } = await getInvoice('order-reg', '5.00');
@@ -196,17 +205,26 @@ describe('auto-registration', () => {
     assert.match(paymentUrl, /^web\+stellar:pay/);
 
     // Restore default fetch mock
-    global.fetch = async (url, opts) => { fetchCalls.push({ url, opts }); return fetchResponse; };
+    global.fetch = async (url, opts) => {
+      fetchCalls.push({ url, opts });
+      return fetchResponse;
+    };
   });
 
   it('skips registration and uses cached token on second call', async () => {
     storeVccToken('vcc_alreadycached');
     fetchResponse = makeResponse(201, { job_id: 'job-2', payment_url: 'web+stellar:pay?x=1' });
-    global.fetch = async (url, opts) => { fetchCalls.push({ url, opts }); return fetchResponse; };
+    global.fetch = async (url, opts) => {
+      fetchCalls.push({ url, opts });
+      return fetchResponse;
+    };
 
     await getInvoice('order-cached', '5.00');
     assert.equal(fetchCalls.length, 1, 'should not register again');
-    assert.ok(!fetchCalls[0].url.includes('/api/register'), 'only call should be to /api/jobs/invoice');
+    assert.ok(
+      !fetchCalls[0].url.includes('/api/register'),
+      'only call should be to /api/jobs/invoice',
+    );
     assert.ok(fetchCalls[0].url.includes('/api/jobs/invoice'));
   });
 
@@ -215,13 +233,13 @@ describe('auto-registration', () => {
       fetchCalls.push({ url, opts });
       return makeResponse(500, { error: 'server_error' });
     };
-    await assert.rejects(
-      () => getInvoice('order-regfail', '5.00'),
-      /VCC registration failed/,
-    );
+    await assert.rejects(() => getInvoice('order-regfail', '5.00'), /VCC registration failed/);
     assert.equal(getStoredToken(), undefined);
     // Restore
-    global.fetch = async (url, opts) => { fetchCalls.push({ url, opts }); return fetchResponse; };
+    global.fetch = async (url, opts) => {
+      fetchCalls.push({ url, opts });
+      return fetchResponse;
+    };
   });
 });
 
@@ -234,7 +252,10 @@ describe('getInvoice', () => {
     fetchCalls.length = 0;
     fetchResponse = makeResponse(201, { job_id: 'job-inv', payment_url: 'web+stellar:pay?x=1' });
     // Reinstall standard mock in case auto-registration tests overrode it
-    global.fetch = async (url, opts) => { fetchCalls.push({ url, opts }); return fetchResponse; };
+    global.fetch = async (url, opts) => {
+      fetchCalls.push({ url, opts });
+      return fetchResponse;
+    };
   });
 
   it('posts to /api/jobs/invoice with the correct body shape', async () => {
@@ -244,7 +265,10 @@ describe('getInvoice', () => {
     const body = JSON.parse(fetchCalls[0].opts.body);
     assert.equal(body.order_id, 'order-abc');
     assert.equal(body.amount_usdc, '25.00');
-    assert.ok(body.callback_url.includes('/vcc-callback'), 'callback_url should point to /vcc-callback');
+    assert.ok(
+      body.callback_url.includes('/vcc-callback'),
+      'callback_url should point to /vcc-callback',
+    );
     assert.ok(body.callback_secret, 'callback_secret should be present');
     assert.ok(body.callback_secret.length >= 16, 'callback_secret should be at least 16 chars');
   });
@@ -265,7 +289,10 @@ describe('getInvoice', () => {
   });
 
   it('returns { vccJobId, paymentUrl } mapped from vcc response', async () => {
-    fetchResponse = makeResponse(201, { job_id: 'job-42', payment_url: 'web+stellar:pay?mapped=1' });
+    fetchResponse = makeResponse(201, {
+      job_id: 'job-42',
+      payment_url: 'web+stellar:pay?mapped=1',
+    });
     const result = await getInvoice('order-map', '5.00');
     assert.equal(result.vccJobId, 'job-42');
     assert.equal(result.paymentUrl, 'web+stellar:pay?mapped=1');
@@ -273,19 +300,13 @@ describe('getInvoice', () => {
 
   it('clears cached token and throws on 401', async () => {
     fetchResponse = makeResponse(401, { error: 'unauthorized' });
-    await assert.rejects(
-      () => getInvoice('order-ghi', '5.00'),
-      /VCC invoice failed.*401/,
-    );
+    await assert.rejects(() => getInvoice('order-ghi', '5.00'), /VCC invoice failed.*401/);
     assert.equal(getStoredToken(), undefined);
   });
 
   it('throws (without clearing token) on other error status', async () => {
     fetchResponse = makeResponse(500, {});
-    await assert.rejects(
-      () => getInvoice('order-xyz', '5.00'),
-      /VCC invoice failed.*500/,
-    );
+    await assert.rejects(() => getInvoice('order-xyz', '5.00'), /VCC invoice failed.*500/);
     // Token should still be cached
     assert.equal(getStoredToken(), 'vcc_invoicetoken');
   });
@@ -299,7 +320,10 @@ describe('notifyPaid', () => {
     storeVccToken('vcc_paidtoken');
     fetchCalls.length = 0;
     fetchResponse = makeResponse(200, { ok: true });
-    global.fetch = async (url, opts) => { fetchCalls.push({ url, opts }); return fetchResponse; };
+    global.fetch = async (url, opts) => {
+      fetchCalls.push({ url, opts });
+      return fetchResponse;
+    };
   });
 
   it('POSTs to /api/jobs/:id/paid with the auth header', async () => {
@@ -312,10 +336,7 @@ describe('notifyPaid', () => {
 
   it('clears cached token and throws on 401', async () => {
     fetchResponse = makeResponse(401, {});
-    await assert.rejects(
-      () => notifyPaid('job-xyz'),
-      /VCC notifyPaid failed.*401/,
-    );
+    await assert.rejects(() => notifyPaid('job-xyz'), /VCC notifyPaid failed.*401/);
     assert.equal(getStoredToken(), undefined);
   });
 });

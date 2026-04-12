@@ -6,7 +6,10 @@ const db = require('../db');
 
 module.exports = function requireDashboard(req, res, next) {
   const dashboard = db.prepare(`SELECT * FROM dashboards WHERE user_id = ?`).get(req.user.id);
-  if (!dashboard) return res.status(404).json({ error: 'no_dashboard', message: 'No dashboard found. Please contact support.' });
+  if (!dashboard)
+    return res
+      .status(404)
+      .json({ error: 'no_dashboard', message: 'No dashboard found. Please contact support.' });
   req.dashboard = dashboard;
   next();
 };

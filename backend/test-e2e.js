@@ -25,9 +25,11 @@ async function main() {
   const deadline = Date.now() + TIMEOUT;
 
   while (Date.now() < deadline) {
-    await new Promise(r => setTimeout(r, POLL_INTERVAL));
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL));
     const updated = await getGiftCard(order.id);
-    console.log(`   fulfilmentStatus=${updated.fulfilmentStatus} paymentStatus=${updated.paymentStatus}`);
+    console.log(
+      `   fulfilmentStatus=${updated.fulfilmentStatus} paymentStatus=${updated.paymentStatus}`,
+    );
 
     if (COMPLETED_STATUSES.includes(updated.fulfilmentStatus)) {
       console.log('\n=== COMPLETE — full response ===');
@@ -35,7 +37,10 @@ async function main() {
       return;
     }
 
-    if (FAILED_STATUSES.includes(updated.fulfilmentStatus) || FAILED_STATUSES.includes(updated.paymentStatus)) {
+    if (
+      FAILED_STATUSES.includes(updated.fulfilmentStatus) ||
+      FAILED_STATUSES.includes(updated.paymentStatus)
+    ) {
       console.error('\n=== FAILED ===');
       console.log(JSON.stringify(updated, null, 2));
       return;
@@ -45,4 +50,7 @@ async function main() {
   console.error('Timed out waiting for fulfillment');
 }
 
-main().catch(err => { console.error('Error:', err.message); process.exit(1); });
+main().catch((err) => {
+  console.error('Error:', err.message);
+  process.exit(1);
+});

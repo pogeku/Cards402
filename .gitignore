@@ -25,6 +25,10 @@ build/
 # Test coverage
 sdk/coverage/
 
+# Playwright test artifacts
+web/test-results/
+web/playwright-report/
+
 # Rust build artifacts
 contract/target/
 **/target/

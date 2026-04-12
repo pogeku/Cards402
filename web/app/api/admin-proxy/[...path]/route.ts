@@ -4,18 +4,11 @@
 
 import { NextResponse, type NextRequest } from 'next/server';
 import { cookies } from 'next/headers';
-import {
-  ADMIN_SESSION_COOKIE,
-  getBackendBaseUrl,
-  verifySession,
-} from '@/app/lib/admin-session';
+import { ADMIN_SESSION_COOKIE, getBackendBaseUrl, verifySession } from '@/app/lib/admin-session';
 
 export const runtime = 'nodejs';
 
-async function proxy(
-  req: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> },
-) {
+async function proxy(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
   const cookieStore = await cookies();
   const session = verifySession(cookieStore.get(ADMIN_SESSION_COOKIE)?.value);
   if (!session) {

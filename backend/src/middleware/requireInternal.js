@@ -6,7 +6,10 @@ const ALLOWED_DOMAIN = '@cards402.com';
 
 function getAllowedEmails() {
   const raw = process.env.INTERNAL_EMAILS || '';
-  return raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  return raw
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
 }
 
 module.exports = function requireInternal(req, res, next) {

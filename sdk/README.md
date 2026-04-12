@@ -29,6 +29,7 @@ console.log(card.number, card.cvv, card.expiry);
 Cards402 uses [OWS](https://github.com/open-wallet-standard/core) — keys are stored encrypted in a local vault file, not as plaintext env vars.
 
 1. **Set environment variables**:
+
    ```
    OWS_WALLET_NAME=my-agent       # wallet identifier
    OWS_WALLET_PASSPHRASE=secret   # encryption passphrase (recommended)
@@ -36,6 +37,7 @@ Cards402 uses [OWS](https://github.com/open-wallet-standard/core) — keys are s
    ```
 
 2. **Create and fund your wallet**:
+
    ```typescript
    import { createOWSWallet, addUsdcTrustlineOWS } from 'cards402';
 
@@ -66,7 +68,7 @@ const card = await purchaseCardOWS({
   apiKey: process.env.CARDS402_API_KEY!,
   walletName: process.env.OWS_WALLET_NAME!,
   amountUsdc: '10.00',
-  paymentAsset: 'usdc',       // or 'xlm' — defaults to 'usdc'
+  paymentAsset: 'usdc', // or 'xlm' — defaults to 'usdc'
   passphrase: process.env.OWS_WALLET_PASSPHRASE,
   vaultPath: process.env.OWS_VAULT_PATH,
 });
@@ -139,8 +141,8 @@ import { payVCCOWS } from 'cards402';
 
 const txHash = await payVCCOWS({
   walletName: 'my-agent',
-  payment: order.payment,        // from createOrder()
-  paymentAsset: 'usdc',          // or 'xlm'
+  payment: order.payment, // from createOrder()
+  paymentAsset: 'usdc', // or 'xlm'
   passphrase: process.env.OWS_WALLET_PASSPHRASE,
 });
 ```
@@ -193,8 +195,8 @@ import { payVCC } from 'cards402';
 
 const txHash = await payVCC({
   walletSecret: 'S...your-secret...',
-  payment: order.payment,   // from createOrder()
-  paymentAsset: 'usdc',     // or 'xlm'
+  payment: order.payment, // from createOrder()
+  paymentAsset: 'usdc', // or 'xlm'
 });
 ```
 
@@ -209,7 +211,7 @@ const card = await purchaseCard({
   apiKey: process.env.CARDS402_API_KEY!,
   walletSecret: process.env.STELLAR_SECRET!,
   amountUsdc: '10.00',
-  paymentAsset: 'usdc',   // or 'xlm'
+  paymentAsset: 'usdc', // or 'xlm'
 });
 
 console.log(card.number, card.cvv, card.expiry);
@@ -235,7 +237,7 @@ const client = new Cards402Client({
 ```typescript
 const order = await client.createOrder({
   amount_usdc: '25.00',
-  payment_asset: 'usdc',  // or 'xlm'
+  payment_asset: 'usdc', // or 'xlm'
   webhook_url: 'https://yourapp.com/webhook', // optional
 });
 
@@ -250,7 +252,7 @@ Poll until the card is delivered or the order fails. Throws typed errors on fail
 ```typescript
 const card = await client.waitForCard(order.order_id, {
   timeoutMs: 300000, // 5 minutes (default)
-  intervalMs: 3000,  // poll every 3s (default)
+  intervalMs: 3000, // poll every 3s (default)
 });
 ```
 
@@ -258,8 +260,8 @@ const card = await client.waitForCard(order.order_id, {
 
 ```typescript
 const usage = await client.getUsage();
-console.log(usage.budget.spent_usdc);     // "15.00"
-console.log(usage.budget.limit_usdc);     // "100.00" or null (unlimited)
+console.log(usage.budget.spent_usdc); // "15.00"
+console.log(usage.budget.limit_usdc); // "100.00" or null (unlimited)
 console.log(usage.orders.delivered);
 ```
 
@@ -272,7 +274,12 @@ Every webhook from cards402 includes `X-Cards402-Signature` and `X-Cards402-Time
 ```typescript
 import { createHmac, timingSafeEqual } from 'crypto';
 
-function verifyWebhook(rawBody: string, signature: string, timestamp: string, secret: string): boolean {
+function verifyWebhook(
+  rawBody: string,
+  signature: string,
+  timestamp: string,
+  secret: string,
+): boolean {
   // Reject stale webhooks (>5 minutes)
   if (Math.abs(Date.now() - parseInt(timestamp)) > 5 * 60 * 1000) return false;
   // Signature covers "<timestamp>.<body>"
@@ -322,13 +329,13 @@ Input: `order_id` (string)
 
 ### Environment variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `CARDS402_API_KEY` | ✓ | Your cards402 API key |
-| `OWS_WALLET_NAME` | ✓ | OWS wallet identifier |
-| `OWS_WALLET_PASSPHRASE` | — | Wallet encryption passphrase |
-| `OWS_VAULT_PATH` | — | Vault file path (default: `~/.ows/vault`) |
-| `CARDS402_BASE_URL` | — | Override the API base URL |
+| Variable                | Required | Description                               |
+| ----------------------- | -------- | ----------------------------------------- |
+| `CARDS402_API_KEY`      | ✓        | Your cards402 API key                     |
+| `OWS_WALLET_NAME`       | ✓        | OWS wallet identifier                     |
+| `OWS_WALLET_PASSPHRASE` | —        | Wallet encryption passphrase              |
+| `OWS_VAULT_PATH`        | —        | Vault file path (default: `~/.ows/vault`) |
+| `CARDS402_BASE_URL`     | —        | Override the API base URL                 |
 
 ---
 
@@ -342,6 +349,7 @@ cp node_modules/cards402/skill/check-vcc.md ~/.claude/commands/check-vcc.md
 ```
 
 Then in Claude Code:
+
 ```
 /buy-vcc 25
 /check-vcc order_abc123

@@ -13,9 +13,11 @@ const { event: bizEvent } = require('../lib/logger');
 const db = require('../db');
 
 const NETWORK = process.env.STELLAR_NETWORK || 'mainnet';
-const SOROBAN_RPC_URL = process.env.SOROBAN_RPC_URL || (NETWORK === 'mainnet'
-  ? 'https://mainnet.sorobanrpc.com'
-  : 'https://soroban-testnet.stellar.org');
+const SOROBAN_RPC_URL =
+  process.env.SOROBAN_RPC_URL ||
+  (NETWORK === 'mainnet'
+    ? 'https://mainnet.sorobanrpc.com'
+    : 'https://soroban-testnet.stellar.org');
 const RECEIVER_CONTRACT_ID = process.env.RECEIVER_CONTRACT_ID;
 
 const rpcServer = new rpc.Server(SOROBAN_RPC_URL);
@@ -26,18 +28,24 @@ const rpcServer = new rpc.Server(SOROBAN_RPC_URL);
 // ── Cursor persistence ────────────────────────────────────────────────────────
 
 function loadStartLedger() {
-  const v = /** @type {any} */ (db.prepare(`SELECT value FROM system_state WHERE key = 'stellar_start_ledger'`).get())?.value;
+  const v = /** @type {any} */ (
+    db.prepare(`SELECT value FROM system_state WHERE key = 'stellar_start_ledger'`).get()
+  )?.value;
   return v ? parseInt(v) : null;
 }
 
 function saveStartLedger(ledger) {
-  db.prepare(`INSERT OR REPLACE INTO system_state (key, value) VALUES ('stellar_start_ledger', ?)`).run(String(ledger));
+  db.prepare(
+    `INSERT OR REPLACE INTO system_state (key, value) VALUES ('stellar_start_ledger', ?)`,
+  ).run(String(ledger));
   // Audit A-12: nudge the WAL to the main db file so a hard-crash doesn't
   // lose the cursor. PASSIVE is non-blocking and cheap; we're only
   // advancing the cursor a few times per second. The global txid dedupe
   // in index.js still covers any events replayed on crash recovery, so
   // the checkpoint is belt-and-braces.
-  try { db.prepare(`PRAGMA wal_checkpoint(PASSIVE)`).run(); } catch (_) {}
+  try {
+    db.prepare(`PRAGMA wal_checkpoint(PASSIVE)`).run();
+  } catch (_) {}
 }
 
 // ── Watcher ───────────────────────────────────────────────────────────────────
@@ -57,16 +65,20 @@ async function poll(onPayment, log) {
       saveStartLedger(sl);
     }
 
-    const result = await rpcServer.getEvents(/** @type {any} */ ({
-      startLedger: sl,
-      filters: [{
-        type: 'contract',
-        contractIds: [RECEIVER_CONTRACT_ID],
-        // No topic filter — mainnet RPC topic XDR matching is unreliable;
-        // events are filtered by symbol in handlePaymentEvent instead.
-      }],
-      pagination: { limit: 200 },
-    }));
+    const result = await rpcServer.getEvents(
+      /** @type {any} */ ({
+        startLedger: sl,
+        filters: [
+          {
+            type: 'contract',
+            contractIds: [RECEIVER_CONTRACT_ID],
+            // No topic filter — mainnet RPC topic XDR matching is unreliable;
+            // events are filtered by symbol in handlePaymentEvent instead.
+          },
+        ],
+        pagination: { limit: 200 },
+      }),
+    );
     const events = result.events ?? [];
 
     for (const event of events) {
@@ -111,7 +123,7 @@ async function handlePaymentEvent(event, onPayment, log) {
     // topic[1] = Bytes(order_id utf-8)
     // topic[2] = Address(from)
     // value    = i128 amount (micro-USDC or stroops)
-    const eventSymbol = scValToNative(event.topic[0]);  // 'pay_usdc' or 'pay_xlm'
+    const eventSymbol = scValToNative(event.topic[0]); // 'pay_usdc' or 'pay_xlm'
     const orderIdBytes = scValToNative(event.topic[1]);
     const orderId = Buffer.from(orderIdBytes).toString('utf-8');
     const senderAddress = Address.fromScVal(event.topic[2]).toString();
@@ -120,8 +132,15 @@ async function handlePaymentEvent(event, onPayment, log) {
     const amountDecimal = stroopsToDecimal(amountI128);
 
     if (eventSymbol === 'pay_usdc') {
-      log(`[stellar] pay_usdc: $${amountDecimal} USDC, order=${orderId}, from=${senderAddress}, tx=${event.txHash}`);
-      bizEvent('payment.received', { asset: 'usdc', amount: amountDecimal, order_id: orderId, txid: event.txHash });
+      log(
+        `[stellar] pay_usdc: $${amountDecimal} USDC, order=${orderId}, from=${senderAddress}, tx=${event.txHash}`,
+      );
+      bizEvent('payment.received', {
+        asset: 'usdc',
+        amount: amountDecimal,
+        order_id: orderId,
+        txid: event.txHash,
+      });
       await onPayment({
         txid: event.txHash,
         paymentAsset: 'usdc_soroban',
@@ -131,8 +150,15 @@ async function handlePaymentEvent(event, onPayment, log) {
         orderId,
       });
     } else if (eventSymbol === 'pay_xlm') {
-      log(`[stellar] pay_xlm: ${amountDecimal} XLM, order=${orderId}, from=${senderAddress}, tx=${event.txHash}`);
-      bizEvent('payment.received', { asset: 'xlm', amount: amountDecimal, order_id: orderId, txid: event.txHash });
+      log(
+        `[stellar] pay_xlm: ${amountDecimal} XLM, order=${orderId}, from=${senderAddress}, tx=${event.txHash}`,
+      );
+      bizEvent('payment.received', {
+        asset: 'xlm',
+        amount: amountDecimal,
+        order_id: orderId,
+        txid: event.txHash,
+      });
       await onPayment({
         txid: event.txHash,
         paymentAsset: 'xlm_soroban',

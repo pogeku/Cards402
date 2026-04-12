@@ -2,12 +2,12 @@
 
 Thanks for wanting to improve cards402. This repo has four main pieces:
 
-| Path | Language | What it does |
-|---|---|---|
-| `backend/` | Node.js + Express + better-sqlite3 | The 402-payment API that agents talk to |
-| `sdk/` | TypeScript | `cards402` npm package + MCP server |
-| `web/` | Next.js + TypeScript | Owner dashboard (admin + per-agent views) |
-| `contract/` | Rust / Soroban | On-chain receiver contract agents pay into |
+| Path        | Language                           | What it does                               |
+| ----------- | ---------------------------------- | ------------------------------------------ |
+| `backend/`  | Node.js + Express + better-sqlite3 | The 402-payment API that agents talk to    |
+| `sdk/`      | TypeScript                         | `cards402` npm package + MCP server        |
+| `web/`      | Next.js + TypeScript               | Owner dashboard (admin + per-agent views)  |
+| `contract/` | Rust / Soroban                     | On-chain receiver contract agents pay into |
 
 And one sibling repo at `../vcc` which does the fulfillment (CTX + scraper).
 
@@ -34,13 +34,13 @@ npm run dev               # starts on :5000
 
 ## Running tests
 
-| Scope | Command |
-|---|---|
-| Backend unit + integration | `cd backend && npm test` |
-| SDK (vitest) | `cd sdk && npm test` |
-| Contract (cargo) | `cd contract && cargo test` |
-| Web (vitest + playwright) | `cd web && npm test` |
-| All workspaces | `npm test` (from repo root) |
+| Scope                      | Command                     |
+| -------------------------- | --------------------------- |
+| Backend unit + integration | `cd backend && npm test`    |
+| SDK (vitest)               | `cd sdk && npm test`        |
+| Contract (cargo)           | `cd contract && cargo test` |
+| Web (vitest + playwright)  | `cd web && npm test`        |
+| All workspaces             | `npm test` (from repo root) |
 
 Tests should be fast (whole backend suite < 1s) and never hit real
 Stellar / CTX. End-to-end "real money, real Stellar, real scraper" tests
@@ -49,14 +49,14 @@ never in CI.
 
 ## Style
 
-* **Backend** is plain JavaScript with JSDoc types where useful. No
+- **Backend** is plain JavaScript with JSDoc types where useful. No
   TypeScript for now (audit A-1 tracks the debate). Run `npm run lint`
   before pushing.
-* **SDK** is strict TypeScript. `npm run typecheck` must pass.
-* **Web** is strict TypeScript with Next.js's rules.
-* **Contract** follows `cargo fmt` + `cargo clippy -- -D warnings`.
-* Prettier enforces JS/TS formatting via a pre-commit hook (husky).
-* Commitlint checks commit messages (`feat:`, `fix:`, `docs:`, etc.).
+- **SDK** is strict TypeScript. `npm run typecheck` must pass.
+- **Web** is strict TypeScript with Next.js's rules.
+- **Contract** follows `cargo fmt` + `cargo clippy -- -D warnings`.
+- Prettier enforces JS/TS formatting via a pre-commit hook (husky).
+- Commitlint checks commit messages (`feat:`, `fix:`, `docs:`, etc.).
 
 ## Commit conventions
 

@@ -17,21 +17,25 @@ needing to burn the key.
 ## Upgrading the contract
 
 1. Build the new WASM:
+
    ```
    cd contract
    cargo build --target wasm32-unknown-unknown --release
    ```
 
 2. Upload the new WASM to Stellar:
+
    ```
    stellar contract install \
      --wasm target/wasm32-unknown-unknown/release/cards402_receiver.wasm \
      --source <ADMIN_SECRET> \
      --network mainnet
    ```
+
    This returns a `WASM_HASH`.
 
 3. Invoke the upgrade function:
+
    ```
    stellar contract invoke \
      --id $RECEIVER_CONTRACT_ID \
@@ -65,12 +69,14 @@ After this call, no future `upgrade` or `set_admin` will succeed.
 ## When to burn
 
 Burn the admin key when:
+
 - The contract logic is stable and you don't expect changes
 - You want to signal trustlessness to agents (they can verify the WASM
   hash matches the published source and know it can't be swapped)
 - You've validated the contract on mainnet for at least a few weeks
 
 Don't burn if:
+
 - You're still iterating on the event schema
 - You haven't tested all edge cases (overflow, multi-asset, etc.)
 - You want the option to add new payment assets later

@@ -91,7 +91,18 @@ paths:
           in: query
           schema:
             type: string
-            enum: [pending_payment, ordering, delivered, failed, refunded, refund_pending, awaiting_approval, expired, rejected]
+            enum:
+              [
+                pending_payment,
+                ordering,
+                delivered,
+                failed,
+                refunded,
+                refund_pending,
+                awaiting_approval,
+                expired,
+                rejected,
+              ]
         - name: limit
           in: query
           schema:
@@ -209,7 +220,7 @@ components:
           type: string
           pattern: '^\d+(\.\d+)?$'
           description: Card value in USD as a decimal string, e.g. "10.00"
-          examples: ["10.00", "25.50", "100.00"]
+          examples: ['10.00', '25.50', '100.00']
         webhook_url:
           type: string
           format: uri
@@ -242,7 +253,7 @@ components:
               description: USDC amount as 7-decimal string
             asset:
               type: string
-              description: "CODE:ISSUER format, e.g. USDC:GA5Z..."
+              description: 'CODE:ISSUER format, e.g. USDC:GA5Z...'
         xlm:
           type: object
           properties:
@@ -273,20 +284,20 @@ components:
         number:
           type: string
           description: Full 16-digit card number
-          examples: ["4111111111111111"]
+          examples: ['4111111111111111']
         cvv:
           type: string
           description: 3-digit CVV
-          examples: ["123"]
+          examples: ['123']
         expiry:
           type: string
           description: MM/YY format
-          examples: ["12/27"]
+          examples: ['12/27']
         brand:
           type: string
           nullable: true
           description: Card brand (usually "Visa")
-          examples: ["Visa"]
+          examples: ['Visa']
 
     OrderCreatedResponse:
       type: object

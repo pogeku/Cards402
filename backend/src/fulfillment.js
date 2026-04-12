@@ -10,7 +10,10 @@ const { sendUsdc, sendXlm } = require('./payments/xlm-sender');
 const { event: bizEvent } = require('./lib/logger');
 
 function isFrozen() {
-  return /** @type {any} */ (db.prepare(`SELECT value FROM system_state WHERE key = 'frozen'`).get())?.value === '1';
+  return (
+    /** @type {any} */ (db.prepare(`SELECT value FROM system_state WHERE key = 'frozen'`).get())
+      ?.value === '1'
+  );
 }
 
 // Retry delays: attempt 1 → 30s, attempt 2 → 5m, attempt 3 → 30m
@@ -30,7 +33,11 @@ const CB_COOLDOWN_MS = 5 * 60_000;
 const circuitBreakerState = new Map(); // origin -> { failures: [ts], openedUntil: 0 }
 
 function getOrigin(url) {
-  try { return new URL(url).origin; } catch { return null; }
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
 }
 
 function circuitIsOpen(origin) {
@@ -47,7 +54,7 @@ function recordCircuitFailure(origin) {
     circuitBreakerState.set(origin, s);
   }
   const now = Date.now();
-  s.failures = s.failures.filter(ts => now - ts < CB_WINDOW_MS);
+  s.failures = s.failures.filter((ts) => now - ts < CB_WINDOW_MS);
   s.failures.push(now);
   if (s.failures.length >= CB_THRESHOLD) {
     s.openedUntil = now + CB_COOLDOWN_MS;
@@ -63,7 +70,10 @@ function recordCircuitFailure(origin) {
 function recordCircuitSuccess(origin) {
   if (!origin) return;
   const s = circuitBreakerState.get(origin);
-  if (s) { s.failures = []; s.openedUntil = 0; }
+  if (s) {
+    s.failures = [];
+    s.openedUntil = 0;
+  }
 }
 
 async function fireWebhook(url, payload, webhookSecret, _log) {
@@ -122,10 +132,12 @@ async function enqueueWebhook(url, payload, webhookSecret) {
     await fireWebhook(url, payload, webhookSecret, null);
   } catch (err) {
     const nextAttempt = new Date(Date.now() + WEBHOOK_RETRY_DELAYS_MS[0]).toISOString();
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO webhook_queue (id, url, payload, secret, attempts, next_attempt, last_error)
       VALUES (?, ?, ?, ?, 1, ?, ?)
-    `).run(uuidv4(), url, JSON.stringify(payload), webhookSecret || null, nextAttempt, err.message);
+    `,
+    ).run(uuidv4(), url, JSON.stringify(payload), webhookSecret || null, nextAttempt, err.message);
   }
 }
 
@@ -135,10 +147,14 @@ async function scheduleRefund(orderId) {
   // Atomic claim: transitions to refund_pending only once.
   // Prevents double-refunds if called concurrently (admin endpoint + job race).
   const now = new Date().toISOString();
-  const claimed = db.prepare(`
+  const claimed = db
+    .prepare(
+      `
     UPDATE orders SET status = 'refund_pending', updated_at = ?
     WHERE id = ? AND status NOT IN ('refund_pending', 'refunded')
-  `).run(now, orderId);
+  `,
+    )
+    .run(now, orderId);
 
   if (claimed.changes === 0) {
     console.log(`[refund] ${orderId}: already refunding or refunded — skipping`);
@@ -149,7 +165,9 @@ async function scheduleRefund(orderId) {
   if (!order) return;
 
   if (!order.sender_address) {
-    console.log(`[refund] ${orderId}: no sender_address — left as refund_pending for manual action`);
+    console.log(
+      `[refund] ${orderId}: no sender_address — left as refund_pending for manual action`,
+    );
     return;
   }
 
@@ -167,11 +185,14 @@ async function scheduleRefund(orderId) {
         amount: xlmAmount,
         memo: `refund:${orderId.slice(0, 18)}`,
       });
-      db.prepare(`UPDATE orders SET status = 'refunded', refund_stellar_txid = @txid, updated_at = @now WHERE id = @id`)
-        .run({ id: orderId, txid: txHash, now: new Date().toISOString() });
+      db.prepare(
+        `UPDATE orders SET status = 'refunded', refund_stellar_txid = @txid, updated_at = @now WHERE id = @id`,
+      ).run({ id: orderId, txid: txHash, now: new Date().toISOString() });
       bizEvent('refund.sent', { order_id: orderId, asset: 'xlm', amount: xlmAmount, txid: txHash });
     } catch (err) {
-      console.log(`[refund] ${orderId}: XLM refund failed: ${err.message} — remains refund_pending`);
+      console.log(
+        `[refund] ${orderId}: XLM refund failed: ${err.message} — remains refund_pending`,
+      );
     }
   } else {
     try {
@@ -180,13 +201,28 @@ async function scheduleRefund(orderId) {
         amount: order.amount_usdc,
         memo: `refund:${orderId.slice(0, 18)}`,
       });
-      db.prepare(`UPDATE orders SET status = 'refunded', refund_stellar_txid = @txid, updated_at = @now WHERE id = @id`)
-        .run({ id: orderId, txid: txHash, now: new Date().toISOString() });
-      bizEvent('refund.sent', { order_id: orderId, asset: 'usdc', amount: order.amount_usdc, txid: txHash });
+      db.prepare(
+        `UPDATE orders SET status = 'refunded', refund_stellar_txid = @txid, updated_at = @now WHERE id = @id`,
+      ).run({ id: orderId, txid: txHash, now: new Date().toISOString() });
+      bizEvent('refund.sent', {
+        order_id: orderId,
+        asset: 'usdc',
+        amount: order.amount_usdc,
+        txid: txHash,
+      });
     } catch (err) {
-      console.log(`[refund] ${orderId}: USDC refund failed: ${err.message} — remains refund_pending`);
+      console.log(
+        `[refund] ${orderId}: USDC refund failed: ${err.message} — remains refund_pending`,
+      );
     }
   }
 }
 
-module.exports = { isFrozen, scheduleRefund, enqueueWebhook, fireWebhook, WEBHOOK_RETRY_DELAYS_MS, MAX_WEBHOOK_ATTEMPTS };
+module.exports = {
+  isFrozen,
+  scheduleRefund,
+  enqueueWebhook,
+  fireWebhook,
+  WEBHOOK_RETRY_DELAYS_MS,
+  MAX_WEBHOOK_ATTEMPTS,
+};

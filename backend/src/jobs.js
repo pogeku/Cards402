@@ -3,7 +3,12 @@
 // Handles order expiry, stuck-order recovery, and unmatched payment refunds.
 
 const db = require('./db');
-const { fireWebhook, WEBHOOK_RETRY_DELAYS_MS, MAX_WEBHOOK_ATTEMPTS, scheduleRefund } = require('./fulfillment');
+const {
+  fireWebhook,
+  WEBHOOK_RETRY_DELAYS_MS,
+  MAX_WEBHOOK_ATTEMPTS,
+  scheduleRefund,
+} = require('./fulfillment');
 const vccClient = require('./vcc-client');
 const { payCtxOrder } = require('./payments/xlm-sender');
 const { recordDecision } = require('./policy');
@@ -12,12 +17,12 @@ const { recordDecision } = require('./policy');
 // FAIL_AFTER_MS **and** vcc confirms the job isn't making progress, we hard-
 // fail and let scheduleRefund return funds. Both configurable via env so ops
 // can bump the timeout without a redeploy when the scraper is slow.
-const STUCK_RETRY_AFTER_MS =
-  parseInt(process.env.STUCK_RETRY_AFTER_MS || String(2 * 60 * 1000), 10);
-const STUCK_FAIL_AFTER_MS =
-  parseInt(process.env.STUCK_FAIL_AFTER_MS || String(30 * 60 * 1000), 10);
-const MAX_FULFILLMENT_ATTEMPTS =
-  parseInt(process.env.MAX_FULFILLMENT_ATTEMPTS || '3', 10);
+const STUCK_RETRY_AFTER_MS = parseInt(
+  process.env.STUCK_RETRY_AFTER_MS || String(2 * 60 * 1000),
+  10,
+);
+const STUCK_FAIL_AFTER_MS = parseInt(process.env.STUCK_FAIL_AFTER_MS || String(30 * 60 * 1000), 10);
+const MAX_FULFILLMENT_ATTEMPTS = parseInt(process.env.MAX_FULFILLMENT_ATTEMPTS || '3', 10);
 
 // Non-terminal vcc job statuses. If vcc still reports one of these, the
 // reconciler must NOT hard-fail and refund — vcc is still working on it and
@@ -42,21 +47,29 @@ async function expireStaleOrders() {
   const { enqueueWebhook } = require('./fulfillment');
 
   // Fetch expiring orders before updating so we have webhook info
-  const expiring = /** @type {any[]} */ (db.prepare(`
+  const expiring = /** @type {any[]} */ (
+    db
+      .prepare(
+        `
     SELECT o.*, k.webhook_secret, k.default_webhook_url
     FROM orders o
     LEFT JOIN api_keys k ON o.api_key_id = k.id
     WHERE o.status = 'pending_payment'
       AND datetime(o.created_at) < datetime('now', '-2 hours')
-  `).all());
+  `,
+      )
+      .all()
+  );
 
   if (expiring.length === 0) return;
 
   const now = new Date().toISOString();
-  db.prepare(`
+  db.prepare(
+    `
     UPDATE orders SET status = 'expired', updated_at = ?
     WHERE status = 'pending_payment' AND datetime(created_at) < datetime('now', '-2 hours')
-  `).run(now);
+  `,
+  ).run(now);
 
   log(`expired ${expiring.length} stale order(s)`);
 
@@ -64,12 +77,16 @@ async function expireStaleOrders() {
   for (const order of expiring) {
     const webhookUrl = order.webhook_url || order.default_webhook_url;
     if (webhookUrl) {
-      enqueueWebhook(webhookUrl, {
-        order_id: order.id,
-        status: 'expired',
-        phase: 'expired',
-        note: 'Payment window expired. No funds were taken.',
-      }, order.webhook_secret || null).catch(() => {});
+      enqueueWebhook(
+        webhookUrl,
+        {
+          order_id: order.id,
+          status: 'expired',
+          phase: 'expired',
+          note: 'Payment window expired. No funds were taken.',
+        },
+        order.webhook_secret || null,
+      ).catch(() => {});
     }
   }
 }
@@ -90,12 +107,18 @@ async function expireStaleOrders() {
 // the order is marked failed and a refund is queued via scheduleRefund.
 async function reconcileOrderingFulfillment() {
   const cutoff = new Date(Date.now() - STUCK_RETRY_AFTER_MS).toISOString();
-  const stuck = /** @type {any[]} */ (db.prepare(`
+  const stuck = /** @type {any[]} */ (
+    db
+      .prepare(
+        `
     SELECT * FROM orders
     WHERE status = 'ordering'
       AND (vcc_job_id IS NULL OR xlm_sent_at IS NULL OR vcc_notified_at IS NULL)
       AND updated_at < ?
-  `).all(cutoff));
+  `,
+      )
+      .all(cutoff)
+  );
 
   if (stuck.length === 0) return;
   log(`reconciling ${stuck.length} ordering-stuck order(s)`);
@@ -125,36 +148,46 @@ async function reconcileOrderingFulfillment() {
           log(`  ${shortId} → vcc status check failed: ${err.message} — postponing hard-fail`);
           // Treat as in-progress: bump updated_at so we don't hammer vcc on
           // every 5-minute tick when vcc is down, and wait until it's back.
-          db.prepare(`UPDATE orders SET updated_at = ? WHERE id = ?`)
-            .run(new Date().toISOString(), order.id);
+          db.prepare(`UPDATE orders SET updated_at = ? WHERE id = ?`).run(
+            new Date().toISOString(),
+            order.id,
+          );
           continue;
         }
         if (vccStatus && VCC_IN_PROGRESS_STATUSES.has(vccStatus)) {
           log(`  ${shortId} → vcc reports ${vccStatus}; postponing hard-fail (letting vcc finish)`);
           // Reset the clock so we give vcc another full FAIL_AFTER window
           // to land the card via its normal callback path.
-          db.prepare(`UPDATE orders SET updated_at = ? WHERE id = ?`)
-            .run(new Date().toISOString(), order.id);
+          db.prepare(`UPDATE orders SET updated_at = ? WHERE id = ?`).run(
+            new Date().toISOString(),
+            order.id,
+          );
           continue;
         }
       }
 
       log(`  ${shortId} → hard-fail (${reason}, attempt ${order.fulfillment_attempt})`);
-      db.prepare(`
+      db.prepare(
+        `
         UPDATE orders SET status = 'failed', error = ?, updated_at = ? WHERE id = ?
-      `).run(reason, new Date().toISOString(), order.id);
-      scheduleRefund(order.id).catch(err =>
-        log(`  ${shortId} refund schedule failed: ${err.message}`)
+      `,
+      ).run(reason, new Date().toISOString(), order.id);
+      scheduleRefund(order.id).catch((err) =>
+        log(`  ${shortId} refund schedule failed: ${err.message}`),
       );
       continue;
     }
 
     // Claim this attempt atomically so two overlapping job ticks don't both retry.
-    const claim = db.prepare(`
+    const claim = db
+      .prepare(
+        `
       UPDATE orders
       SET fulfillment_attempt = fulfillment_attempt + 1, updated_at = ?
       WHERE id = ? AND status = 'ordering' AND fulfillment_attempt = ?
-    `).run(new Date().toISOString(), order.id, order.fulfillment_attempt);
+    `,
+      )
+      .run(new Date().toISOString(), order.id, order.fulfillment_attempt);
     if (claim.changes === 0) {
       log(`  ${shortId} — skipped (claim lost to concurrent retry)`);
       continue;
@@ -167,11 +200,17 @@ async function reconcileOrderingFulfillment() {
       // Step 1: ensure we have a vcc job. getInvoice is idempotent per order_id.
       if (!vccJobId) {
         log(`  ${shortId} → retry getInvoice`);
-        const inv = await vccClient.getInvoice(order.id, order.amount_usdc, order.request_id, order.callback_nonce);
+        const inv = await vccClient.getInvoice(
+          order.id,
+          order.amount_usdc,
+          order.request_id,
+          order.callback_nonce,
+        );
         vccJobId = inv.vccJobId;
         paymentUrl = inv.paymentUrl;
-        db.prepare(`UPDATE orders SET vcc_job_id = ?, callback_nonce = ?, updated_at = ? WHERE id = ?`)
-          .run(vccJobId, inv.callbackNonce, new Date().toISOString(), order.id);
+        db.prepare(
+          `UPDATE orders SET vcc_job_id = ?, callback_nonce = ?, updated_at = ? WHERE id = ?`,
+        ).run(vccJobId, inv.callbackNonce, new Date().toISOString(), order.id);
       }
 
       // Step 2: ensure the XLM payment was sent. If xlm_sent_at is null we
@@ -185,19 +224,28 @@ async function reconcileOrderingFulfillment() {
           // run must have paid — don't double-send, just mark xlm_sent_at.
           if (vccJob.status && vccJob.status !== 'invoice_issued') {
             log(`  ${shortId} → vcc reports ${vccJob.status}; skipping payCtxOrder`);
-            db.prepare(`UPDATE orders SET xlm_sent_at = ?, updated_at = ? WHERE id = ?`)
-              .run(new Date().toISOString(), new Date().toISOString(), order.id);
+            db.prepare(`UPDATE orders SET xlm_sent_at = ?, updated_at = ? WHERE id = ?`).run(
+              new Date().toISOString(),
+              new Date().toISOString(),
+              order.id,
+            );
           } else {
             log(`  ${shortId} → retry payCtxOrder`);
             await payCtxOrder(paymentUrl);
-            db.prepare(`UPDATE orders SET xlm_sent_at = ?, updated_at = ? WHERE id = ?`)
-              .run(new Date().toISOString(), new Date().toISOString(), order.id);
+            db.prepare(`UPDATE orders SET xlm_sent_at = ?, updated_at = ? WHERE id = ?`).run(
+              new Date().toISOString(),
+              new Date().toISOString(),
+              order.id,
+            );
           }
         } else {
           log(`  ${shortId} → retry payCtxOrder`);
           await payCtxOrder(paymentUrl);
-          db.prepare(`UPDATE orders SET xlm_sent_at = ?, updated_at = ? WHERE id = ?`)
-            .run(new Date().toISOString(), new Date().toISOString(), order.id);
+          db.prepare(`UPDATE orders SET xlm_sent_at = ?, updated_at = ? WHERE id = ?`).run(
+            new Date().toISOString(),
+            new Date().toISOString(),
+            order.id,
+          );
         }
       }
 
@@ -205,8 +253,11 @@ async function reconcileOrderingFulfillment() {
       if (!order.vcc_notified_at) {
         log(`  ${shortId} → retry notifyPaid`);
         await vccClient.notifyPaid(vccJobId);
-        db.prepare(`UPDATE orders SET vcc_notified_at = ?, updated_at = ? WHERE id = ?`)
-          .run(new Date().toISOString(), new Date().toISOString(), order.id);
+        db.prepare(`UPDATE orders SET vcc_notified_at = ?, updated_at = ? WHERE id = ?`).run(
+          new Date().toISOString(),
+          new Date().toISOString(),
+          order.id,
+        );
       }
 
       log(`  ${shortId} → reconciled; waiting for vcc callback`);
@@ -221,12 +272,18 @@ async function reconcileOrderingFulfillment() {
 // Poll VCC for orders stuck in pending_payment or ordering where the callback may have been lost.
 // Applies a 10-minute window — short enough to catch lost callbacks without hammering VCC.
 async function recoverStuckOrders() {
-  const stuck = /** @type {any[]} */ (db.prepare(`
+  const stuck = /** @type {any[]} */ (
+    db
+      .prepare(
+        `
     SELECT * FROM orders
     WHERE status IN ('pending_payment', 'ordering')
       AND vcc_job_id IS NOT NULL
       AND datetime(updated_at) < datetime('now', '-10 minutes')
-  `).all());
+  `,
+      )
+      .all()
+  );
 
   if (stuck.length === 0) return;
   log(`polling VCC for ${stuck.length} possibly-stuck order(s)`);
@@ -239,37 +296,62 @@ async function recoverStuckOrders() {
       const now = new Date().toISOString();
 
       if (vccJob.status === 'delivered' && vccJob.card_number) {
-        db.prepare(`
+        db.prepare(
+          `
           UPDATE orders
           SET status = 'delivered', card_number = ?, card_cvv = ?, card_expiry = ?, card_brand = ?, updated_at = ?
           WHERE id = ?
-        `).run(vccJob.card_number, vccJob.card_cvv, vccJob.card_expiry, vccJob.card_brand || null, now, order.id);
+        `,
+        ).run(
+          vccJob.card_number,
+          vccJob.card_cvv,
+          vccJob.card_expiry,
+          vccJob.card_brand || null,
+          now,
+          order.id,
+        );
 
         if (order.api_key_id) {
-          db.prepare(`
+          db.prepare(
+            `
             UPDATE api_keys
             SET total_spent_usdc = CAST(CAST(total_spent_usdc AS REAL) + CAST(? AS REAL) AS TEXT)
             WHERE id = ?
-          `).run(order.amount_usdc, order.api_key_id);
+          `,
+          ).run(order.amount_usdc, order.api_key_id);
         }
 
-        const keyRow = /** @type {any} */ (order.api_key_id
-          ? db.prepare(`SELECT webhook_secret, default_webhook_url FROM api_keys WHERE id = ?`).get(order.api_key_id)
-          : null);
+        const keyRow = /** @type {any} */ (
+          order.api_key_id
+            ? db
+                .prepare(`SELECT webhook_secret, default_webhook_url FROM api_keys WHERE id = ?`)
+                .get(order.api_key_id)
+            : null
+        );
         const webhookUrl = order.webhook_url || keyRow?.default_webhook_url;
         if (webhookUrl) {
-          enqueueWebhook(webhookUrl, {
-            order_id: order.id,
-            status: 'delivered',
-            card: { number: vccJob.card_number, cvv: vccJob.card_cvv, expiry: vccJob.card_expiry, brand: vccJob.card_brand || null },
-          }, keyRow?.webhook_secret || null).catch(() => {});
+          enqueueWebhook(
+            webhookUrl,
+            {
+              order_id: order.id,
+              status: 'delivered',
+              card: {
+                number: vccJob.card_number,
+                cvv: vccJob.card_cvv,
+                expiry: vccJob.card_expiry,
+                brand: vccJob.card_brand || null,
+              },
+            },
+            keyRow?.webhook_secret || null,
+          ).catch(() => {});
         }
         log(`  recovered ${order.id.slice(0, 8)} → delivered via VCC poll`);
-
       } else if (vccJob.status === 'failed') {
-        db.prepare(`
+        db.prepare(
+          `
           UPDATE orders SET status = 'failed', error = ?, updated_at = ? WHERE id = ?
-        `).run(vccJob.error || 'vcc_failed', now, order.id);
+        `,
+        ).run(vccJob.error || 'vcc_failed', now, order.id);
         log(`  recovered ${order.id.slice(0, 8)} → failed via VCC poll`);
       }
       // If still in-progress (awaiting_payment, queued, running) — leave it alone
@@ -283,81 +365,117 @@ async function recoverStuckOrders() {
 // Picks up rows where next_attempt <= now, attempts < MAX_WEBHOOK_ATTEMPTS, delivered = 0.
 async function retryWebhooks() {
   const now = new Date().toISOString();
-  const rows = /** @type {any[]} */ (db.prepare(`
+  const rows = /** @type {any[]} */ (
+    db
+      .prepare(
+        `
     SELECT * FROM webhook_queue
     WHERE delivered = 0
       AND attempts <= ?
       AND next_attempt <= ?
-  `).all(MAX_WEBHOOK_ATTEMPTS, now));
+  `,
+      )
+      .all(MAX_WEBHOOK_ATTEMPTS, now)
+  );
 
   if (rows.length === 0) return;
   log(`retrying ${rows.length} webhook(s)`);
 
   // Fan out — don't block the job cycle on slow webhook endpoints
-  await Promise.allSettled(rows.map(async (row) => {
-    try {
-      await fireWebhook(row.url, JSON.parse(row.payload), row.secret, null);
-      db.prepare(`UPDATE webhook_queue SET delivered = 1 WHERE id = ?`).run(row.id);
-      log(`  webhook ${row.id.slice(0, 8)} delivered`);
-    } catch (err) {
-      const nextAttempts = row.attempts + 1;
-      // Index by current attempts (not next) so delays map correctly:
-      // attempts=1→delay[1]=5m, attempts=2→delay[2]=30m, attempts=3→delay[3]=null→abandon
-      const delayMs = WEBHOOK_RETRY_DELAYS_MS[row.attempts] ?? null;
-      if (delayMs === null || nextAttempts > MAX_WEBHOOK_ATTEMPTS) {
-        db.prepare(`
+  await Promise.allSettled(
+    rows.map(async (row) => {
+      try {
+        await fireWebhook(row.url, JSON.parse(row.payload), row.secret, null);
+        db.prepare(`UPDATE webhook_queue SET delivered = 1 WHERE id = ?`).run(row.id);
+        log(`  webhook ${row.id.slice(0, 8)} delivered`);
+      } catch (err) {
+        const nextAttempts = row.attempts + 1;
+        // Index by current attempts (not next) so delays map correctly:
+        // attempts=1→delay[1]=5m, attempts=2→delay[2]=30m, attempts=3→delay[3]=null→abandon
+        const delayMs = WEBHOOK_RETRY_DELAYS_MS[row.attempts] ?? null;
+        if (delayMs === null || nextAttempts > MAX_WEBHOOK_ATTEMPTS) {
+          db.prepare(
+            `
           UPDATE webhook_queue SET attempts = ?, last_error = ?, next_attempt = ? WHERE id = ?
-        `).run(nextAttempts, err.message, now, row.id);
-        log(`  webhook ${row.id.slice(0, 8)} failed permanently: ${err.message}`);
-      } else {
-        const nextAttempt = new Date(Date.now() + delayMs).toISOString();
-        db.prepare(`
+        `,
+          ).run(nextAttempts, err.message, now, row.id);
+          log(`  webhook ${row.id.slice(0, 8)} failed permanently: ${err.message}`);
+        } else {
+          const nextAttempt = new Date(Date.now() + delayMs).toISOString();
+          db.prepare(
+            `
           UPDATE webhook_queue SET attempts = ?, last_error = ?, next_attempt = ? WHERE id = ?
-        `).run(nextAttempts, err.message, nextAttempt, row.id);
-        log(`  webhook ${row.id.slice(0, 8)} retry scheduled for ${nextAttempt}`);
+        `,
+          ).run(nextAttempts, err.message, nextAttempt, row.id);
+          log(`  webhook ${row.id.slice(0, 8)} retry scheduled for ${nextAttempt}`);
+        }
       }
-    }
-  }));
+    }),
+  );
 }
 
 // Expire pending approval requests that have passed their 2-hour window.
 // Transitions those orders to 'rejected' so agents get a clear terminal status.
 function expireApprovalRequests() {
-  const expired = /** @type {any[]} */ (db.prepare(`
+  const expired = /** @type {any[]} */ (
+    db
+      .prepare(
+        `
     SELECT * FROM approval_requests
     WHERE status = 'pending'
       AND datetime(expires_at) < datetime('now')
-  `).all());
+  `,
+      )
+      .all()
+  );
 
   if (expired.length === 0) return;
   log(`expiring ${expired.length} approval request(s)`);
 
   const now = new Date().toISOString();
   for (const approval of expired) {
-    db.prepare(`
+    db.prepare(
+      `
       UPDATE approval_requests
       SET status = 'expired', decided_at = ?
       WHERE id = ?
-    `).run(now, approval.id);
-    db.prepare(`
+    `,
+    ).run(now, approval.id);
+    db.prepare(
+      `
       UPDATE orders
       SET status = 'rejected', error = ?, updated_at = ?
       WHERE id = ?
-    `).run('Approval request expired — owner did not respond within 2 hours', now, approval.order_id);
-    recordDecision(
-      approval.api_key_id, approval.order_id, approval.amount_usdc,
-      'blocked', 'approval_expired', 'Approval request expired after 2 hours without a decision'
+    `,
+    ).run(
+      'Approval request expired — owner did not respond within 2 hours',
+      now,
+      approval.order_id,
     );
-    log(`  expired approval ${approval.id.slice(0, 8)} → order ${approval.order_id.slice(0, 8)} rejected`);
+    recordDecision(
+      approval.api_key_id,
+      approval.order_id,
+      approval.amount_usdc,
+      'blocked',
+      'approval_expired',
+      'Approval request expired after 2 hours without a decision',
+    );
+    log(
+      `  expired approval ${approval.id.slice(0, 8)} → order ${approval.order_id.slice(0, 8)} rejected`,
+    );
   }
 }
 
 // Clean up expired idempotency keys older than 24 hours
 function pruneIdempotencyKeys() {
-  const result = db.prepare(`
+  const result = db
+    .prepare(
+      `
     DELETE FROM idempotency_keys
     WHERE datetime(created_at) < datetime('now', '-24 hours')
-  `).run();
+  `,
+    )
+    .run();
   if (result.changes > 0) log(`pruned ${result.changes} expired idempotency key(s)`);
 }
 

@@ -52,7 +52,9 @@ router.post('/', (req, res) => {
   // and let the v2/v1 fallback paths handle it.
   let storedNonce = null;
   if (headerNonce && headerOrderId) {
-    const row = /** @type {any} */ (db.prepare(`SELECT callback_nonce FROM orders WHERE id = ?`).get(headerOrderId));
+    const row = /** @type {any} */ (
+      db.prepare(`SELECT callback_nonce FROM orders WHERE id = ?`).get(headerOrderId)
+    );
     const effectiveNonce = row?.callback_nonce || null;
     const effectiveHeader = headerNonce || null;
     storedNonce = effectiveNonce;
@@ -105,12 +107,23 @@ router.post('/', (req, res) => {
   }
 
   if (status === 'fulfilled' && card) {
-    const claimed = db.prepare(`
+    const claimed = db
+      .prepare(
+        `
       UPDATE orders
       SET status = 'delivered', card_number = @num, card_cvv = @cvv,
           card_expiry = @expiry, card_brand = @brand, updated_at = @now
       WHERE id = @id AND status NOT IN ('delivered', 'failed', 'refunded', 'refund_pending')
-    `).run({ id: order_id, num: card.number, cvv: card.cvv, expiry: card.expiry, brand: card.brand || null, now });
+    `,
+      )
+      .run({
+        id: order_id,
+        num: card.number,
+        cvv: card.cvv,
+        expiry: card.expiry,
+        brand: card.brand || null,
+        now,
+      });
     if (claimed.changes === 0) {
       // Another callback reached terminal state in the race window.
       return res.json({ ok: true, note: 'already_terminal_race' });
@@ -118,11 +131,13 @@ router.post('/', (req, res) => {
 
     // Track spend per API key
     if (order.api_key_id) {
-      db.prepare(`
+      db.prepare(
+        `
         UPDATE api_keys
         SET total_spent_usdc = printf('%.2f', CAST(total_spent_usdc AS REAL) + CAST(@amount AS REAL))
         WHERE id = @id
-      `).run({ id: order.api_key_id, amount: order.amount_usdc });
+      `,
+      ).run({ id: order.api_key_id, amount: order.amount_usdc });
     }
 
     bizEvent('order.fulfilled', {
@@ -134,25 +149,41 @@ router.post('/', (req, res) => {
 
     // Fire agent delivery webhook. Audit A-33: include amount + payment
     // asset so the agent can reconcile without an extra /v1/orders fetch.
-    const keyRow = /** @type {any} */ (order.api_key_id
-      ? db.prepare(`SELECT webhook_secret, default_webhook_url FROM api_keys WHERE id = ?`).get(order.api_key_id)
-      : null);
+    const keyRow = /** @type {any} */ (
+      order.api_key_id
+        ? db
+            .prepare(`SELECT webhook_secret, default_webhook_url FROM api_keys WHERE id = ?`)
+            .get(order.api_key_id)
+        : null
+    );
     const webhookUrl = order.webhook_url || keyRow?.default_webhook_url || null;
     if (webhookUrl) {
-      enqueueWebhook(webhookUrl, {
-        order_id,
-        status: 'delivered',
-        amount_usdc: order.amount_usdc,
-        payment_asset: order.payment_asset,
-        card: { number: card.number, cvv: card.cvv, expiry: card.expiry, brand: card.brand || null },
-      }, keyRow?.webhook_secret || null).catch(() => {});
+      enqueueWebhook(
+        webhookUrl,
+        {
+          order_id,
+          status: 'delivered',
+          amount_usdc: order.amount_usdc,
+          payment_asset: order.payment_asset,
+          card: {
+            number: card.number,
+            cvv: card.cvv,
+            expiry: card.expiry,
+            brand: card.brand || null,
+          },
+        },
+        keyRow?.webhook_secret || null,
+      ).catch(() => {});
     }
-
   } else if (status === 'failed') {
-    const claimed = db.prepare(`
+    const claimed = db
+      .prepare(
+        `
       UPDATE orders SET status = 'failed', error = @error, updated_at = @now
       WHERE id = @id AND status NOT IN ('delivered', 'failed', 'refunded', 'refund_pending')
-    `).run({ id: order_id, error: error || 'fulfillment_failed', now });
+    `,
+      )
+      .run({ id: order_id, error: error || 'fulfillment_failed', now });
     if (claimed.changes === 0) {
       return res.json({ ok: true, note: 'already_terminal_race' });
     }
@@ -166,25 +197,34 @@ router.post('/', (req, res) => {
     });
 
     // Fire agent failure webhook
-    const failedOrder = /** @type {any} */ (db.prepare(`
+    const failedOrder = /** @type {any} */ (
+      db
+        .prepare(
+          `
       SELECT o.webhook_url, k.webhook_secret, k.default_webhook_url
       FROM orders o LEFT JOIN api_keys k ON o.api_key_id = k.id
       WHERE o.id = ?
-    `).get(order_id));
+    `,
+        )
+        .get(order_id)
+    );
     const failureWebhookUrl = failedOrder?.webhook_url || failedOrder?.default_webhook_url || null;
     if (failureWebhookUrl) {
-      enqueueWebhook(failureWebhookUrl, {
-        order_id,
-        status: 'failed',
-        amount_usdc: order.amount_usdc,
-        payment_asset: order.payment_asset,
-        error: error || 'fulfillment_failed',
-      }, failedOrder?.webhook_secret || null).catch(() => {});
+      enqueueWebhook(
+        failureWebhookUrl,
+        {
+          order_id,
+          status: 'failed',
+          amount_usdc: order.amount_usdc,
+          payment_asset: order.payment_asset,
+          error: error || 'fulfillment_failed',
+        },
+        failedOrder?.webhook_secret || null,
+      ).catch(() => {});
     }
 
     // cards402 holds the funds — issue a refund to the agent
     scheduleRefund(order_id).catch(() => {});
-
   } else {
     return res.status(400).json({ error: 'invalid_status' });
   }

@@ -33,10 +33,12 @@ function makeHeaders(timestamp, signature) {
 function seedOrder(overrides = {}) {
   const { v4: uuidv4 } = require('uuid');
   const id = overrides.id || uuidv4();
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO orders (id, status, amount_usdc, payment_asset, api_key_id, webhook_url)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run(
+  `,
+  ).run(
     id,
     overrides.status ?? 'ordering',
     overrides.amount_usdc ?? '10.00',
@@ -115,10 +117,7 @@ describe('POST /vcc-callback — auth', () => {
 
 async function postCallback(payload) {
   const { timestamp, signature, bodyStr } = sign(payload);
-  return request
-    .post('/vcc-callback')
-    .set(makeHeaders(timestamp, signature))
-    .send(bodyStr);
+  return request.post('/vcc-callback').set(makeHeaders(timestamp, signature)).send(bodyStr);
 }
 
 // ── Field validation ──────────────────────────────────────────────────────────
@@ -180,7 +179,7 @@ describe('POST /vcc-callback — fulfilled', () => {
     await postCallback({ order_id: orderId, status: 'fulfilled', card });
 
     const keyRow = db.prepare(`SELECT total_spent_usdc FROM api_keys WHERE id = ?`).get(apiKeyId);
-    assert.equal(parseFloat(keyRow.total_spent_usdc), 10.00);
+    assert.equal(parseFloat(keyRow.total_spent_usdc), 10.0);
   });
 
   it('does not crash when api_key_id is null (anonymous order)', async () => {
@@ -208,8 +207,10 @@ describe('POST /vcc-callback — failed', () => {
     // somewhere to send the refund to. Without it the order is left in
     // refund_pending for manual action rather than going through the happy
     // refund path.
-    db.prepare(`UPDATE orders SET sender_address = ? WHERE id = ?`)
-      .run('GSENDER000000000000000000000000000000000000000000000000', id);
+    db.prepare(`UPDATE orders SET sender_address = ? WHERE id = ?`).run(
+      'GSENDER000000000000000000000000000000000000000000000000',
+      id,
+    );
 
     const res = await postCallback({ order_id: id, status: 'failed', error: 'ctx_unavailable' });
     assert.equal(res.status, 200);
@@ -221,8 +222,10 @@ describe('POST /vcc-callback — failed', () => {
     // three terminal-fail states is acceptable — the point of the assertion
     // is that cards402 moved the order off 'ordering' and recorded the
     // VCC-supplied error.
-    assert.ok(['failed', 'refund_pending', 'refunded'].includes(order.status),
-      `expected terminal-fail status, got ${order.status}`);
+    assert.ok(
+      ['failed', 'refund_pending', 'refunded'].includes(order.status),
+      `expected terminal-fail status, got ${order.status}`,
+    );
     assert.equal(order.error, 'ctx_unavailable');
   });
 

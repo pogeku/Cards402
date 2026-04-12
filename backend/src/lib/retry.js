@@ -9,9 +9,10 @@
  */
 async function withRetry(fn, { attempts = 3, backoffMs = 3000, label = '' } = {}) {
   // Allow tests to zero out retry delays without mocking the module
-  const effectiveBackoff = process.env.RETRY_BACKOFF_MS !== undefined
-    ? parseInt(process.env.RETRY_BACKOFF_MS, 10)
-    : backoffMs;
+  const effectiveBackoff =
+    process.env.RETRY_BACKOFF_MS !== undefined
+      ? parseInt(process.env.RETRY_BACKOFF_MS, 10)
+      : backoffMs;
 
   let lastErr;
   for (let i = 1; i <= attempts; i++) {
@@ -21,8 +22,10 @@ async function withRetry(fn, { attempts = 3, backoffMs = 3000, label = '' } = {}
       lastErr = err;
       if (i < attempts) {
         const wait = effectiveBackoff * i;
-        console.log(`[retry] ${label || 'operation'} attempt ${i}/${attempts} failed: ${err.message} — retrying in ${wait}ms`);
-        if (wait > 0) await new Promise(r => setTimeout(r, wait));
+        console.log(
+          `[retry] ${label || 'operation'} attempt ${i}/${attempts} failed: ${err.message} — retrying in ${wait}ms`,
+        );
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
       }
     }
   }

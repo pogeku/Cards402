@@ -7,10 +7,13 @@ const { withRetry } = require('../../src/lib/retry');
 describe('withRetry', () => {
   it('returns result immediately when fn succeeds on first call', async () => {
     let calls = 0;
-    const result = await withRetry(async () => {
-      calls++;
-      return 'ok';
-    }, { attempts: 3, backoffMs: 0 });
+    const result = await withRetry(
+      async () => {
+        calls++;
+        return 'ok';
+      },
+      { attempts: 3, backoffMs: 0 },
+    );
 
     assert.equal(result, 'ok');
     assert.equal(calls, 1);
@@ -18,11 +21,14 @@ describe('withRetry', () => {
 
   it('retries on failure and returns result on 2nd attempt', async () => {
     let calls = 0;
-    const result = await withRetry(async () => {
-      calls++;
-      if (calls < 2) throw new Error('transient');
-      return 'recovered';
-    }, { attempts: 3, backoffMs: 0 });
+    const result = await withRetry(
+      async () => {
+        calls++;
+        if (calls < 2) throw new Error('transient');
+        return 'recovered';
+      },
+      { attempts: 3, backoffMs: 0 },
+    );
 
     assert.equal(result, 'recovered');
     assert.equal(calls, 2);
@@ -30,11 +36,14 @@ describe('withRetry', () => {
 
   it('retries on failure and returns result on 3rd attempt', async () => {
     let calls = 0;
-    const result = await withRetry(async () => {
-      calls++;
-      if (calls < 3) throw new Error('transient');
-      return 'recovered';
-    }, { attempts: 3, backoffMs: 0 });
+    const result = await withRetry(
+      async () => {
+        calls++;
+        if (calls < 3) throw new Error('transient');
+        return 'recovered';
+      },
+      { attempts: 3, backoffMs: 0 },
+    );
 
     assert.equal(result, 'recovered');
     assert.equal(calls, 3);
@@ -43,11 +52,15 @@ describe('withRetry', () => {
   it('throws the last error after all attempts exhausted', async () => {
     let calls = 0;
     await assert.rejects(
-      () => withRetry(async () => {
-        calls++;
-        throw new Error(`attempt ${calls}`);
-      }, { attempts: 3, backoffMs: 0 }),
-      /attempt 3/
+      () =>
+        withRetry(
+          async () => {
+            calls++;
+            throw new Error(`attempt ${calls}`);
+          },
+          { attempts: 3, backoffMs: 0 },
+        ),
+      /attempt 3/,
     );
     assert.equal(calls, 3);
   });
@@ -55,8 +68,15 @@ describe('withRetry', () => {
   it('respects the attempts limit (does not over-retry)', async () => {
     let calls = 0;
     await assert.rejects(
-      () => withRetry(async () => { calls++; throw new Error('fail'); }, { attempts: 2, backoffMs: 0 }),
-      /fail/
+      () =>
+        withRetry(
+          async () => {
+            calls++;
+            throw new Error('fail');
+          },
+          { attempts: 2, backoffMs: 0 },
+        ),
+      /fail/,
     );
     assert.equal(calls, 2);
   });
@@ -64,8 +84,15 @@ describe('withRetry', () => {
   it('defaults to 3 attempts', async () => {
     let calls = 0;
     await assert.rejects(
-      () => withRetry(async () => { calls++; throw new Error('fail'); }, { backoffMs: 0 }),
-      /fail/
+      () =>
+        withRetry(
+          async () => {
+            calls++;
+            throw new Error('fail');
+          },
+          { backoffMs: 0 },
+        ),
+      /fail/,
     );
     assert.equal(calls, 3);
   });
@@ -74,10 +101,13 @@ describe('withRetry', () => {
     let calls = 0;
     let capturedErr;
     try {
-      await withRetry(async () => {
-        calls++;
-        throw new Error(`error from attempt ${calls}`);
-      }, { attempts: 3, backoffMs: 0 });
+      await withRetry(
+        async () => {
+          calls++;
+          throw new Error(`error from attempt ${calls}`);
+        },
+        { attempts: 3, backoffMs: 0 },
+      );
     } catch (e) {
       capturedErr = e;
     }

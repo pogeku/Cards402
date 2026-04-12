@@ -6,6 +6,7 @@ Cards are delivered in 30–60 seconds.
 ## Setup
 
 Your operator gives you:
+
 - **key** — your API key (starts with `cards402_`)
 - **api_url** — e.g. `https://api.cards402.com/v1`
 
@@ -49,21 +50,21 @@ console.log('Card:', card.number, 'CVV:', card.cvv, 'Exp:', card.expiry);
 
 ## Quick reference
 
-| Action | Command |
-|---|---|
-| Check wallet balance | `ows wallet get --name my-agent` |
-| Check spend budget | `curl $API_URL/usage -H "X-Api-Key: $KEY"` |
-| Check order status | `curl $API_URL/orders/$ID -H "X-Api-Key: $KEY"` |
-| List recent orders | `curl $API_URL/orders -H "X-Api-Key: $KEY"` |
+| Action               | Command                                         |
+| -------------------- | ----------------------------------------------- |
+| Check wallet balance | `ows wallet get --name my-agent`                |
+| Check spend budget   | `curl $API_URL/usage -H "X-Api-Key: $KEY"`      |
+| Check order status   | `curl $API_URL/orders/$ID -H "X-Api-Key: $KEY"` |
+| List recent orders   | `curl $API_URL/orders -H "X-Api-Key: $KEY"`     |
 
 ## Errors
 
-| Error | What to do |
-|---|---|
-| `insufficient_balance` | Ask operator for more XLM |
-| `spend_limit_exceeded` | Hit your daily/total budget |
-| `policy_requires_approval` | Operator must approve this amount |
-| `service_temporarily_unavailable` | Retry in a minute |
+| Error                             | What to do                        |
+| --------------------------------- | --------------------------------- |
+| `insufficient_balance`            | Ask operator for more XLM         |
+| `spend_limit_exceeded`            | Hit your daily/total budget       |
+| `policy_requires_approval`        | Operator must approve this amount |
+| `service_temporarily_unavailable` | Retry in a minute                 |
 
 ## Timing
 

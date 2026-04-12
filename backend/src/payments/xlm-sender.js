@@ -2,11 +2,20 @@
 // Stellar payment helpers — sends USDC or XLM from the treasury wallet.
 // Used for refunds to agents and for paying CTX.com gift card invoices.
 
-const { Horizon, Keypair, TransactionBuilder, Networks, Operation, Asset, Memo } = require('@stellar/stellar-sdk');
+const {
+  Horizon,
+  Keypair,
+  TransactionBuilder,
+  Networks,
+  Operation,
+  Asset,
+  Memo,
+} = require('@stellar/stellar-sdk');
 const { log, event: bizEvent } = require('../lib/logger');
 
 const NETWORK = process.env.STELLAR_NETWORK || 'mainnet';
-const HORIZON_URL = NETWORK === 'mainnet' ? 'https://horizon.stellar.org' : 'https://horizon-testnet.stellar.org';
+const HORIZON_URL =
+  NETWORK === 'mainnet' ? 'https://horizon.stellar.org' : 'https://horizon-testnet.stellar.org';
 const NETWORK_PASSPHRASE = NETWORK === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET;
 
 const server = new Horizon.Server(HORIZON_URL);
@@ -41,12 +50,15 @@ async function sendXlm({ destination, amount, memo }) {
   }
 
   const keypair = Keypair.fromSecret(secret);
-  return submitWithRetry((account) =>
-    new TransactionBuilder(account, { fee: '100000', networkPassphrase: NETWORK_PASSPHRASE })
-      .addOperation(Operation.payment({ destination, asset: Asset.native(), amount: String(amount) }))
-      .addMemo(Memo.text(memo))
-      .setTimeout(120)
-      .build(),
+  return submitWithRetry(
+    (account) =>
+      new TransactionBuilder(account, { fee: '100000', networkPassphrase: NETWORK_PASSPHRASE })
+        .addOperation(
+          Operation.payment({ destination, asset: Asset.native(), amount: String(amount) }),
+        )
+        .addMemo(Memo.text(memo))
+        .setTimeout(120)
+        .build(),
     keypair,
   );
 }
@@ -56,14 +68,22 @@ async function sendUsdc({ destination, amount, memo }) {
   const secret = process.env.STELLAR_XLM_SECRET;
   if (!secret) throw new Error('STELLAR_XLM_SECRET not set');
 
-  const USDC_ISSUER = process.env.STELLAR_USDC_ISSUER || 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
+  const USDC_ISSUER =
+    process.env.STELLAR_USDC_ISSUER || 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
   const keypair = Keypair.fromSecret(secret);
-  return submitWithRetry((account) =>
-    new TransactionBuilder(account, { fee: '100000', networkPassphrase: NETWORK_PASSPHRASE })
-      .addOperation(Operation.payment({ destination, asset: new Asset('USDC', USDC_ISSUER), amount: String(amount) }))
-      .addMemo(memo ? Memo.text(String(memo).slice(0, 28)) : Memo.none())
-      .setTimeout(120)
-      .build(),
+  return submitWithRetry(
+    (account) =>
+      new TransactionBuilder(account, { fee: '100000', networkPassphrase: NETWORK_PASSPHRASE })
+        .addOperation(
+          Operation.payment({
+            destination,
+            asset: new Asset('USDC', USDC_ISSUER),
+            amount: String(amount),
+          }),
+        )
+        .addMemo(memo ? Memo.text(String(memo).slice(0, 28)) : Memo.none())
+        .setTimeout(120)
+        .build(),
     keypair,
   );
 }

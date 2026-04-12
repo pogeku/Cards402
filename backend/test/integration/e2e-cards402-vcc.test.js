@@ -40,12 +40,21 @@ function resetFakeVcc() {
 
 function fakeVccHandler(req, res) {
   let body = '';
-  req.on('data', chunk => { body += chunk; });
+  req.on('data', (chunk) => {
+    body += chunk;
+  });
   req.on('end', () => {
     const { url, method } = req;
-    const parsedBody = body && req.headers['content-type']?.includes('application/json')
-      ? (() => { try { return JSON.parse(body); } catch { return body; } })()
-      : body;
+    const parsedBody =
+      body && req.headers['content-type']?.includes('application/json')
+        ? (() => {
+            try {
+              return JSON.parse(body);
+            } catch {
+              return body;
+            }
+          })()
+        : body;
     fakeVccCalls.push({ method, url, body: parsedBody, headers: { ...req.headers } });
 
     const json = (status, payload) => {
@@ -65,7 +74,12 @@ function fakeVccHandler(req, res) {
       // Idempotency — same tenant/order_id returns the same job
       for (const [jid, job] of fakeVccJobs) {
         if (job.order_id === order_id) {
-          return json(200, { job_id: jid, ctx_order_id: job.ctx_order_id, payment_url: job.payment_url, note: 'already_exists' });
+          return json(200, {
+            job_id: jid,
+            ctx_order_id: job.ctx_order_id,
+            payment_url: job.payment_url,
+            note: 'already_exists',
+          });
         }
       }
       const jobId = `job_${crypto.randomBytes(6).toString('hex')}`;
@@ -76,11 +90,16 @@ function fakeVccHandler(req, res) {
         callback_url,
         callback_secret,
         ctx_order_id: `ctx_${crypto.randomBytes(4).toString('hex')}`,
-        payment_url: 'web+stellar:pay?destination=GCTXTEST0000000000000000000000000000000000000000000000000&amount=10&memo=t',
+        payment_url:
+          'web+stellar:pay?destination=GCTXTEST0000000000000000000000000000000000000000000000000&amount=10&memo=t',
         status: 'invoice_issued',
       };
       fakeVccJobs.set(jobId, job);
-      return json(201, { job_id: jobId, ctx_order_id: job.ctx_order_id, payment_url: job.payment_url });
+      return json(201, {
+        job_id: jobId,
+        ctx_order_id: job.ctx_order_id,
+        payment_url: job.payment_url,
+      });
     }
 
     const paidMatch = url.match(/^\/api\/jobs\/([^/]+)\/paid$/);
@@ -95,7 +114,12 @@ function fakeVccHandler(req, res) {
     if (method === 'GET' && getJobMatch) {
       const job = fakeVccJobs.get(getJobMatch[1]);
       if (!job) return json(404, { error: 'not_found' });
-      return json(200, { id: job.id, status: job.status, ctx_order_id: job.ctx_order_id, payment_url: job.payment_url });
+      return json(200, {
+        id: job.id,
+        status: job.status,
+        ctx_order_id: job.ctx_order_id,
+        payment_url: job.payment_url,
+      });
     }
 
     json(404, { error: 'not_found' });
@@ -162,7 +186,7 @@ before(async () => {
 
 after(async () => {
   if (fakeVccServer) {
-    await new Promise(r => fakeVccServer.close(r));
+    await new Promise((r) => fakeVccServer.close(r));
   }
 });
 
@@ -191,7 +215,14 @@ async function createOrderViaApi(apiKey, amount = '10.00') {
     .send({ amount_usdc: amount, payment_asset: 'usdc' });
 }
 
-async function simulateSorobanPayment(orderId, { asset = 'usdc_soroban', amountUsdc = '10.00', senderAddress = 'GFAKESENDER00000000000000000000000000000000000000000000000' } = {}) {
+async function simulateSorobanPayment(
+  orderId,
+  {
+    asset = 'usdc_soroban',
+    amountUsdc = '10.00',
+    senderAddress = 'GFAKESENDER00000000000000000000000000000000000000000000000',
+  } = {},
+) {
   await handlePayment({
     txid: `fake-stellar-tx-${crypto.randomBytes(8).toString('hex')}`,
     paymentAsset: asset,
@@ -210,7 +241,11 @@ describe('e2e cards402 ↔ vcc: happy path', () => {
 
     // 1. Create the order via the HTTP API exactly like a real agent would.
     const createRes = await createOrderViaApi(key, '10.00');
-    assert.equal(createRes.status, 201, `create returned ${createRes.status}: ${JSON.stringify(createRes.body)}`);
+    assert.equal(
+      createRes.status,
+      201,
+      `create returned ${createRes.status}: ${JSON.stringify(createRes.body)}`,
+    );
     const orderId = createRes.body.order_id;
     assert.equal(createRes.body.status, 'pending_payment');
     assert.equal(createRes.body.payment.type, 'soroban_contract');
@@ -229,17 +264,24 @@ describe('e2e cards402 ↔ vcc: happy path', () => {
     assert.ok(afterHandler.stellar_txid, 'stellar_txid should be stored from the event');
 
     // 4. Assert the fake vcc received exactly the calls we expect.
-    const methods = fakeVccCalls.map(c => `${c.method} ${c.url.split('?')[0]}`);
-    assert.ok(methods.includes('POST /api/register'), `expected register, got: ${methods.join(', ')}`);
+    const methods = fakeVccCalls.map((c) => `${c.method} ${c.url.split('?')[0]}`);
+    assert.ok(
+      methods.includes('POST /api/register'),
+      `expected register, got: ${methods.join(', ')}`,
+    );
     assert.ok(methods.includes('POST /api/jobs/invoice'), `expected invoice call`);
-    const paidCall = fakeVccCalls.find(c => c.method === 'POST' && /\/api\/jobs\/.*\/paid$/.test(c.url));
+    const paidCall = fakeVccCalls.find(
+      (c) => c.method === 'POST' && /\/api\/jobs\/.*\/paid$/.test(c.url),
+    );
     assert.ok(paidCall, `expected /paid call, got: ${methods.join(', ')}`);
 
     // 5. The invoice call should have included the order_id + amount + our
     //    canonical callback URL + a ≥16 char secret. The backend stores
     //    amounts via `String(parseFloat(...))` so '10.00' lands as '10' in
     //    the DB and in the forwarded vcc call — compare numerically.
-    const invoiceCall = fakeVccCalls.find(c => c.method === 'POST' && c.url === '/api/jobs/invoice');
+    const invoiceCall = fakeVccCalls.find(
+      (c) => c.method === 'POST' && c.url === '/api/jobs/invoice',
+    );
     assert.equal(invoiceCall.body.order_id, orderId);
     assert.equal(parseFloat(invoiceCall.body.amount_usdc), 10);
     assert.match(invoiceCall.body.callback_url, /\/vcc-callback$/);
@@ -255,7 +297,11 @@ describe('e2e cards402 ↔ vcc: happy path', () => {
       .set('X-VCC-Timestamp', timestamp)
       .set('X-VCC-Signature', signature)
       .send(body);
-    assert.equal(callbackRes.status, 200, `callback returned ${callbackRes.status}: ${JSON.stringify(callbackRes.body)}`);
+    assert.equal(
+      callbackRes.status,
+      200,
+      `callback returned ${callbackRes.status}: ${JSON.stringify(callbackRes.body)}`,
+    );
 
     // 7. Agent polls and sees the card.
     const pollRes = await request.get(`/v1/orders/${orderId}`).set('X-Api-Key', key);
@@ -295,9 +341,13 @@ describe('e2e cards402 ↔ vcc: vcc reports failure', () => {
     // already 'refunded'. Either of those terminal states is acceptable —
     // what matters is that we captured the failure error and the phase the
     // agent sees is a clear terminal.
-    const row = db.prepare(`SELECT status, error, refund_stellar_txid FROM orders WHERE id = ?`).get(orderId);
-    assert.ok(['failed', 'refund_pending', 'refunded'].includes(row.status),
-      `expected terminal-fail status, got ${row.status}`);
+    const row = db
+      .prepare(`SELECT status, error, refund_stellar_txid FROM orders WHERE id = ?`)
+      .get(orderId);
+    assert.ok(
+      ['failed', 'refund_pending', 'refunded'].includes(row.status),
+      `expected terminal-fail status, got ${row.status}`,
+    );
     assert.equal(row.error, 'ctx_order_rejected');
     if (row.status === 'refunded') {
       assert.equal(row.refund_stellar_txid, 'fake-refund-usdc-txhash');
@@ -306,8 +356,10 @@ describe('e2e cards402 ↔ vcc: vcc reports failure', () => {
     // Poll and confirm the phase surface the agent sees. The phase mapping
     // groups refund_pending/failed under 'failed' and refunded under 'refunded'.
     const pollRes = await request.get(`/v1/orders/${orderId}`).set('X-Api-Key', key);
-    assert.ok(['failed', 'refunded'].includes(pollRes.body.phase),
-      `expected terminal phase, got ${pollRes.body.phase}`);
+    assert.ok(
+      ['failed', 'refunded'].includes(pollRes.body.phase),
+      `expected terminal phase, got ${pollRes.body.phase}`,
+    );
     assert.equal(pollRes.body.error, 'ctx_order_rejected');
   });
 });
@@ -320,13 +372,13 @@ describe('e2e cards402 ↔ vcc: duplicate payment event', () => {
     const orderId = (await createOrderViaApi(key)).body.order_id;
 
     await simulateSorobanPayment(orderId);
-    const invoiceCallsBefore = fakeVccCalls.filter(c => c.url === '/api/jobs/invoice').length;
+    const invoiceCallsBefore = fakeVccCalls.filter((c) => c.url === '/api/jobs/invoice').length;
 
     // Second event for the same order — the atomic UPDATE with
     // `WHERE status = 'pending_payment'` should reject it and we shouldn't
     // see a second POST /api/jobs/invoice on the fake vcc.
     await simulateSorobanPayment(orderId);
-    const invoiceCallsAfter = fakeVccCalls.filter(c => c.url === '/api/jobs/invoice').length;
+    const invoiceCallsAfter = fakeVccCalls.filter((c) => c.url === '/api/jobs/invoice').length;
 
     assert.equal(invoiceCallsAfter, invoiceCallsBefore, 'duplicate event should not re-call vcc');
   });
@@ -341,7 +393,11 @@ describe('e2e cards402 ↔ vcc: terminal callback ignored', () => {
     await simulateSorobanPayment(orderId);
 
     const card = { number: '4000000000000002', cvv: '456', expiry: '01/29', brand: 'Visa' };
-    const { timestamp, signature, body } = signVccCallback({ order_id: orderId, status: 'fulfilled', card });
+    const { timestamp, signature, body } = signVccCallback({
+      order_id: orderId,
+      status: 'fulfilled',
+      card,
+    });
     await request
       .post('/vcc-callback')
       .set('Content-Type', 'application/json')

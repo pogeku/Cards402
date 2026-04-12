@@ -31,8 +31,14 @@ router.get('/orders', (req, res) => {
     WHERE 1=1
   `;
   const params = [];
-  if (status) { query += ` AND o.status = ?`; params.push(status); }
-  if (api_key_id) { query += ` AND o.api_key_id = ?`; params.push(api_key_id); }
+  if (status) {
+    query += ` AND o.status = ?`;
+    params.push(status);
+  }
+  if (api_key_id) {
+    query += ` AND o.api_key_id = ?`;
+    params.push(api_key_id);
+  }
   query += ` ORDER BY o.created_at DESC LIMIT ?`;
   params.push(/** @type {any} */ (Math.min(parseInt(String(limit)) || 100, 1000)));
   res.json(db.prepare(query).all(...params));
@@ -40,14 +46,20 @@ router.get('/orders', (req, res) => {
 
 // GET /internal/unmatched — on-chain payments that couldn't be matched to an order
 router.get('/unmatched', (req, res) => {
-  res.json(db.prepare(`
+  res.json(
+    db
+      .prepare(
+        `
     SELECT id, stellar_txid, sender_address, payment_asset,
            amount_usdc, amount_xlm, claimed_order_id, reason,
            refund_stellar_txid, created_at
     FROM unmatched_payments
     ORDER BY created_at DESC
     LIMIT 200
-  `).all());
+  `,
+      )
+      .all(),
+  );
 });
 
 // GET /internal/platform-wallet — platform Stellar wallet public key + Horizon balance
@@ -68,8 +80,12 @@ router.get('/platform-wallet', (req, res) => {
 // Audit A-18: uses shared getOrderStats() plus additional operator/unmatched counts.
 router.get('/stats', (req, res) => {
   const totals = getOrderStats();
-  const operators = db.prepare(`SELECT COUNT(*) AS total, SUM(enabled) AS active FROM api_keys`).get();
-  const unmatched = db.prepare(`SELECT COUNT(*) AS count FROM unmatched_payments WHERE refund_stellar_txid IS NULL`).get();
+  const operators = db
+    .prepare(`SELECT COUNT(*) AS total, SUM(enabled) AS active FROM api_keys`)
+    .get();
+  const unmatched = db
+    .prepare(`SELECT COUNT(*) AS count FROM unmatched_payments WHERE refund_stellar_txid IS NULL`)
+    .get();
 
   res.json({
     ...totals,
@@ -93,14 +109,20 @@ router.post('/orders/:id/refund', async (req, res) => {
 
 // GET /internal/operators — all API keys with full detail
 router.get('/operators', (req, res) => {
-  res.json(db.prepare(`
+  res.json(
+    db
+      .prepare(
+        `
     SELECT id, label, spend_limit_usdc, total_spent_usdc,
            wallet_public_key, enabled, suspended, last_used_at, created_at,
            policy_daily_limit_usdc, policy_single_tx_limit_usdc,
            policy_require_approval_above_usdc
     FROM api_keys
     ORDER BY created_at DESC
-  `).all());
+  `,
+      )
+      .all(),
+  );
 });
 
 module.exports = router;

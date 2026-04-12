@@ -4,477 +4,494 @@
  */
 
 export interface paths {
-    "/orders": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List this agent's orders */
-        get: operations["listOrders"];
-        put?: never;
-        /**
-         * Create a new card order
-         * @description Creates a pending order and returns Soroban contract payment
-         *     instructions. The agent pays the contract on Stellar, the watcher
-         *     detects the event, and fulfillment begins automatically.
-         *
-         *     For amounts above the policy approval threshold, returns 202 with
-         *     `phase: awaiting_approval` instead of payment instructions.
-         */
-        post: operations["createOrder"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+  '/orders': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/orders/{orderId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get order details (poll for status)
-         * @description Returns the current state of an order. When `phase` is `ready`,
-         *     the `card` object contains the virtual card details.
-         *
-         *     Recommended polling interval: 3 seconds. Typical fulfillment
-         *     time: 30–60 seconds after payment lands.
-         */
-        get: operations["getOrder"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** List this agent's orders */
+    get: operations['listOrders'];
+    put?: never;
+    /**
+     * Create a new card order
+     * @description Creates a pending order and returns Soroban contract payment
+     *     instructions. The agent pays the contract on Stellar, the watcher
+     *     detects the event, and fulfillment begins automatically.
+     *
+     *     For amounts above the policy approval threshold, returns 202 with
+     *     `phase: awaiting_approval` instead of payment instructions.
+     */
+    post: operations['createOrder'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/orders/{orderId}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/usage": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get this agent's spend summary and budget */
-        get: operations["getUsage"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /**
+     * Get order details (poll for status)
+     * @description Returns the current state of an order. When `phase` is `ready`,
+     *     the `card` object contains the virtual card details.
+     *
+     *     Recommended polling interval: 3 seconds. Typical fulfillment
+     *     time: 30–60 seconds after payment lands.
+     */
+    get: operations['getOrder'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/usage': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/policy/check": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Dry-run policy check without creating an order
-         * @description Returns what would happen if the agent tried to create an order
-         *     for the given amount. Useful for pre-flight checks before
-         *     committing to a Stellar transaction.
-         */
-        get: operations["checkPolicy"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** Get this agent's spend summary and budget */
+    get: operations['getUsage'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/policy/check': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
+    /**
+     * Dry-run policy check without creating an order
+     * @description Returns what would happen if the agent tried to create an order
+     *     for the given amount. Useful for pre-flight checks before
+     *     committing to a Stellar transaction.
+     */
+    get: operations['checkPolicy'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
-    schemas: {
-        CreateOrderRequest: {
-            /**
-             * @description Card value in USD as a decimal string, e.g. "10.00"
-             * @example 10.00
-             * @example 25.50
-             * @example 100.00
-             */
-            amount_usdc: string;
-            /**
-             * Format: uri
-             * @description HTTPS URL to receive delivery/failure webhooks
-             */
-            webhook_url?: string;
-            /** @description Arbitrary JSON metadata stored with the order */
-            metadata?: {
-                [key: string]: unknown;
-            };
-        };
-        PaymentInstructions: {
-            /** @enum {string} */
-            type: "soroban_contract";
-            /** @description Soroban contract address (C...) */
-            contract_id: string;
-            /**
-             * Format: uuid
-             * @description Pass this as the order_id arg to pay_usdc/pay_xlm
-             */
-            order_id: string;
-            usdc: {
-                /** @description USDC amount as 7-decimal string */
-                amount: string;
-                /** @description CODE:ISSUER format, e.g. USDC:GA5Z... */
-                asset: string;
-            };
-            xlm?: {
-                /** @description Equivalent XLM amount (spot conversion) */
-                amount?: string;
-            };
-        };
-        Budget: {
-            /** @description Total spent by this API key */
-            spent_usdc: string;
-            /** @description Spend limit (null = unlimited) */
-            limit_usdc?: string | null;
-            /** @description Remaining budget (null = unlimited) */
-            remaining_usdc?: string | null;
-        };
-        CardDetails: {
-            /**
-             * @description Full 16-digit card number
-             * @example 4111111111111111
-             */
-            number: string;
-            /**
-             * @description 3-digit CVV
-             * @example 123
-             */
-            cvv: string;
-            /**
-             * @description MM/YY format
-             * @example 12/27
-             */
-            expiry: string;
-            /**
-             * @description Card brand (usually "Visa")
-             * @example Visa
-             */
-            brand?: string | null;
-        };
-        OrderCreatedResponse: {
-            /** Format: uuid */
-            order_id: string;
-            /** @enum {string} */
-            status: "pending_payment";
-            /** @enum {string} */
-            phase?: "awaiting_payment";
-            amount_usdc?: string;
-            payment: components["schemas"]["PaymentInstructions"];
-            /** @description Relative URL to poll for status */
-            poll_url: string;
-            budget: components["schemas"]["Budget"];
-        };
-        OrderAwaitingApprovalResponse: {
-            /** Format: uuid */
-            order_id: string;
-            /** @enum {string} */
-            phase: "awaiting_approval";
-            /** Format: uuid */
-            approval_request_id: string;
-            amount_usdc: string;
-            /** @description Human-readable reason the order requires approval */
-            message?: string;
-            /** @description Instruction for the agent */
-            note?: string;
-            /** Format: date-time */
-            expires_at?: string;
-        };
-        /** @enum {string} */
-        OrderPhase: "awaiting_approval" | "awaiting_payment" | "processing" | "ready" | "failed" | "refunded" | "rejected" | "expired";
-        OrderListItem: {
-            /** Format: uuid */
-            id: string;
-            status: string;
-            amount_usdc: string;
-            payment_asset: string;
-            /** Format: date-time */
-            created_at: string;
-            /** Format: date-time */
-            updated_at: string;
-        };
-        OrderStatus: {
-            /** Format: uuid */
-            order_id: string;
-            status: string;
-            phase: components["schemas"]["OrderPhase"];
-            amount_usdc: string;
-            payment_asset?: string;
-            payment?: components["schemas"]["PaymentInstructions"];
-            card?: components["schemas"]["CardDetails"];
-            error?: string | null;
-            note?: string | null;
-            refund?: {
-                stellar_txid?: string;
-            };
-            metadata?: {
-                [key: string]: unknown;
-            };
-            /** Format: uuid */
-            approval_request_id?: string;
-            /** Format: date-time */
-            expires_at?: string;
-            /** Format: date-time */
-            created_at: string;
-            /** Format: date-time */
-            updated_at: string;
-        };
-        UsageSummary: {
-            api_key_id: string;
-            label?: string | null;
-            budget: components["schemas"]["Budget"];
-            orders: {
-                total: number;
-                delivered: number;
-                failed: number;
-                refunded: number;
-                in_progress: number;
-            };
-        };
-        PolicyCheckResult: {
-            /** @enum {string} */
-            decision: "approved" | "blocked" | "pending_approval";
-            /** @description Which policy rule matched */
-            rule?: string | null;
-            /** @description Human-readable explanation */
-            reason?: string | null;
-        };
-        ErrorResponse: {
-            /**
-             * @description Machine-readable error code
-             * @example invalid_amount
-             * @example rate_limit_exceeded
-             * @example service_temporarily_unavailable
-             */
-            error: string;
-            /** @description Human-readable explanation */
-            message?: string;
-        };
-        /**
-         * @description Delivered to `webhook_url` when an order reaches a terminal state.
-         *     Signed with HMAC-SHA256 if a `webhook_secret` was issued with the
-         *     API key. Headers: `X-Cards402-Signature: sha256=<hex>`,
-         *     `X-Cards402-Timestamp: <epoch_ms>`.
-         */
-        WebhookPayload: {
-            /** Format: uuid */
-            order_id: string;
-            /** @enum {string} */
-            status: "delivered" | "failed";
-            amount_usdc?: string;
-            payment_asset?: string;
-            card?: components["schemas"]["CardDetails"];
-            error?: string;
-        };
+  schemas: {
+    CreateOrderRequest: {
+      /**
+       * @description Card value in USD as a decimal string, e.g. "10.00"
+       * @example 10.00
+       * @example 25.50
+       * @example 100.00
+       */
+      amount_usdc: string;
+      /**
+       * Format: uri
+       * @description HTTPS URL to receive delivery/failure webhooks
+       */
+      webhook_url?: string;
+      /** @description Arbitrary JSON metadata stored with the order */
+      metadata?: {
+        [key: string]: unknown;
+      };
     };
-    responses: {
-        /** @description Invalid request body or parameters */
-        BadRequest: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["ErrorResponse"];
-            };
-        };
-        /** @description Missing or invalid API key */
-        Unauthorized: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["ErrorResponse"];
-            };
-        };
-        /** @description Resource not found */
-        NotFound: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["ErrorResponse"];
-            };
-        };
-        /** @description Too many requests */
-        RateLimited: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["ErrorResponse"];
-            };
-        };
+    PaymentInstructions: {
+      /** @enum {string} */
+      type: 'soroban_contract';
+      /** @description Soroban contract address (C...) */
+      contract_id: string;
+      /**
+       * Format: uuid
+       * @description Pass this as the order_id arg to pay_usdc/pay_xlm
+       */
+      order_id: string;
+      usdc: {
+        /** @description USDC amount as 7-decimal string */
+        amount: string;
+        /** @description CODE:ISSUER format, e.g. USDC:GA5Z... */
+        asset: string;
+      };
+      xlm?: {
+        /** @description Equivalent XLM amount (spot conversion) */
+        amount?: string;
+      };
     };
-    parameters: never;
-    requestBodies: never;
-    headers: never;
-    pathItems: never;
+    Budget: {
+      /** @description Total spent by this API key */
+      spent_usdc: string;
+      /** @description Spend limit (null = unlimited) */
+      limit_usdc?: string | null;
+      /** @description Remaining budget (null = unlimited) */
+      remaining_usdc?: string | null;
+    };
+    CardDetails: {
+      /**
+       * @description Full 16-digit card number
+       * @example 4111111111111111
+       */
+      number: string;
+      /**
+       * @description 3-digit CVV
+       * @example 123
+       */
+      cvv: string;
+      /**
+       * @description MM/YY format
+       * @example 12/27
+       */
+      expiry: string;
+      /**
+       * @description Card brand (usually "Visa")
+       * @example Visa
+       */
+      brand?: string | null;
+    };
+    OrderCreatedResponse: {
+      /** Format: uuid */
+      order_id: string;
+      /** @enum {string} */
+      status: 'pending_payment';
+      /** @enum {string} */
+      phase?: 'awaiting_payment';
+      amount_usdc?: string;
+      payment: components['schemas']['PaymentInstructions'];
+      /** @description Relative URL to poll for status */
+      poll_url: string;
+      budget: components['schemas']['Budget'];
+    };
+    OrderAwaitingApprovalResponse: {
+      /** Format: uuid */
+      order_id: string;
+      /** @enum {string} */
+      phase: 'awaiting_approval';
+      /** Format: uuid */
+      approval_request_id: string;
+      amount_usdc: string;
+      /** @description Human-readable reason the order requires approval */
+      message?: string;
+      /** @description Instruction for the agent */
+      note?: string;
+      /** Format: date-time */
+      expires_at?: string;
+    };
+    /** @enum {string} */
+    OrderPhase:
+      | 'awaiting_approval'
+      | 'awaiting_payment'
+      | 'processing'
+      | 'ready'
+      | 'failed'
+      | 'refunded'
+      | 'rejected'
+      | 'expired';
+    OrderListItem: {
+      /** Format: uuid */
+      id: string;
+      status: string;
+      amount_usdc: string;
+      payment_asset: string;
+      /** Format: date-time */
+      created_at: string;
+      /** Format: date-time */
+      updated_at: string;
+    };
+    OrderStatus: {
+      /** Format: uuid */
+      order_id: string;
+      status: string;
+      phase: components['schemas']['OrderPhase'];
+      amount_usdc: string;
+      payment_asset?: string;
+      payment?: components['schemas']['PaymentInstructions'];
+      card?: components['schemas']['CardDetails'];
+      error?: string | null;
+      note?: string | null;
+      refund?: {
+        stellar_txid?: string;
+      };
+      metadata?: {
+        [key: string]: unknown;
+      };
+      /** Format: uuid */
+      approval_request_id?: string;
+      /** Format: date-time */
+      expires_at?: string;
+      /** Format: date-time */
+      created_at: string;
+      /** Format: date-time */
+      updated_at: string;
+    };
+    UsageSummary: {
+      api_key_id: string;
+      label?: string | null;
+      budget: components['schemas']['Budget'];
+      orders: {
+        total: number;
+        delivered: number;
+        failed: number;
+        refunded: number;
+        in_progress: number;
+      };
+    };
+    PolicyCheckResult: {
+      /** @enum {string} */
+      decision: 'approved' | 'blocked' | 'pending_approval';
+      /** @description Which policy rule matched */
+      rule?: string | null;
+      /** @description Human-readable explanation */
+      reason?: string | null;
+    };
+    ErrorResponse: {
+      /**
+       * @description Machine-readable error code
+       * @example invalid_amount
+       * @example rate_limit_exceeded
+       * @example service_temporarily_unavailable
+       */
+      error: string;
+      /** @description Human-readable explanation */
+      message?: string;
+    };
+    /**
+     * @description Delivered to `webhook_url` when an order reaches a terminal state.
+     *     Signed with HMAC-SHA256 if a `webhook_secret` was issued with the
+     *     API key. Headers: `X-Cards402-Signature: sha256=<hex>`,
+     *     `X-Cards402-Timestamp: <epoch_ms>`.
+     */
+    WebhookPayload: {
+      /** Format: uuid */
+      order_id: string;
+      /** @enum {string} */
+      status: 'delivered' | 'failed';
+      amount_usdc?: string;
+      payment_asset?: string;
+      card?: components['schemas']['CardDetails'];
+      error?: string;
+    };
+  };
+  responses: {
+    /** @description Invalid request body or parameters */
+    BadRequest: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        'application/json': components['schemas']['ErrorResponse'];
+      };
+    };
+    /** @description Missing or invalid API key */
+    Unauthorized: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        'application/json': components['schemas']['ErrorResponse'];
+      };
+    };
+    /** @description Resource not found */
+    NotFound: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        'application/json': components['schemas']['ErrorResponse'];
+      };
+    };
+    /** @description Too many requests */
+    RateLimited: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        'application/json': components['schemas']['ErrorResponse'];
+      };
+    };
+  };
+  parameters: never;
+  requestBodies: never;
+  headers: never;
+  pathItems: never;
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    listOrders: {
-        parameters: {
-            query?: {
-                status?: "pending_payment" | "ordering" | "delivered" | "failed" | "refunded" | "refund_pending" | "awaiting_approval" | "expired" | "rejected";
-                limit?: number;
-                offset?: number;
-                /** @description Only orders created at or after this timestamp. */
-                since_created_at?: string;
-                /** @description Only orders updated at or after this timestamp. */
-                since_updated_at?: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Array of order summaries */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OrderListItem"][];
-                };
-            };
-        };
+  listOrders: {
+    parameters: {
+      query?: {
+        status?:
+          | 'pending_payment'
+          | 'ordering'
+          | 'delivered'
+          | 'failed'
+          | 'refunded'
+          | 'refund_pending'
+          | 'awaiting_approval'
+          | 'expired'
+          | 'rejected';
+        limit?: number;
+        offset?: number;
+        /** @description Only orders created at or after this timestamp. */
+        since_created_at?: string;
+        /** @description Only orders updated at or after this timestamp. */
+        since_updated_at?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    createOrder: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description Deduplication key — same key + same body = cached response for 24h. */
-                "Idempotency-Key"?: string;
-            };
-            path?: never;
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Array of order summaries */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateOrderRequest"];
-            };
+        content: {
+          'application/json': components['schemas']['OrderListItem'][];
         };
-        responses: {
-            /** @description Order created, payment pending */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OrderCreatedResponse"];
-                };
-            };
-            /** @description Order requires owner approval before payment */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OrderAwaitingApprovalResponse"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            /** @description Idempotency-Key reused with different body */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            429: components["responses"]["RateLimited"];
-            /** @description Fulfillment system temporarily unavailable (frozen) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
+      };
     };
-    getOrder: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                orderId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Order details */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OrderStatus"];
-                };
-            };
-            404: components["responses"]["NotFound"];
-        };
+  };
+  createOrder: {
+    parameters: {
+      query?: never;
+      header?: {
+        /** @description Deduplication key — same key + same body = cached response for 24h. */
+        'Idempotency-Key'?: string;
+      };
+      path?: never;
+      cookie?: never;
     };
-    getUsage: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Budget and order count summary */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UsageSummary"];
-                };
-            };
-        };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['CreateOrderRequest'];
+      };
     };
-    checkPolicy: {
-        parameters: {
-            query: {
-                amount: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
+    responses: {
+      /** @description Order created, payment pending */
+      201: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Policy evaluation result */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PolicyCheckResult"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
+        content: {
+          'application/json': components['schemas']['OrderCreatedResponse'];
         };
+      };
+      /** @description Order requires owner approval before payment */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['OrderAwaitingApprovalResponse'];
+        };
+      };
+      400: components['responses']['BadRequest'];
+      401: components['responses']['Unauthorized'];
+      /** @description Idempotency-Key reused with different body */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      429: components['responses']['RateLimited'];
+      /** @description Fulfillment system temporarily unavailable (frozen) */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
     };
+  };
+  getOrder: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        orderId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Order details */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['OrderStatus'];
+        };
+      };
+      404: components['responses']['NotFound'];
+    };
+  };
+  getUsage: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Budget and order count summary */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UsageSummary'];
+        };
+      };
+    };
+  };
+  checkPolicy: {
+    parameters: {
+      query: {
+        amount: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Policy evaluation result */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PolicyCheckResult'];
+        };
+      };
+      400: components['responses']['BadRequest'];
+    };
+  };
 }

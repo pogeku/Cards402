@@ -41,7 +41,9 @@ function normalizeEmail(email) {
 router.post('/login', async (req, res) => {
   const { email } = req.body;
   if (!email || typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-    return res.status(400).json({ error: 'invalid_email', message: 'A valid email address is required.' });
+    return res
+      .status(400)
+      .json({ error: 'invalid_email', message: 'A valid email address is required.' });
   }
 
   const addr = normalizeEmail(email);
@@ -58,12 +60,18 @@ router.post('/login', async (req, res) => {
   }
 
   // Rate limit: max 3 active (unused, unexpired) codes per email per window
-  const recentCount = /** @type {any} */ (db.prepare(`
+  const recentCount = /** @type {any} */ (
+    db
+      .prepare(
+        `
     SELECT COUNT(*) AS n FROM auth_codes
     WHERE email = ?
       AND used_at IS NULL
       AND datetime(expires_at) > datetime('now')
-  `).get(addr)).n;
+  `,
+      )
+      .get(addr)
+  ).n;
 
   if (recentCount >= CODE_MAX_PER_WINDOW) {
     return res.status(429).json({
@@ -75,10 +83,12 @@ router.post('/login', async (req, res) => {
   const code = generateCode();
   const expiresAt = new Date(Date.now() + CODE_TTL_MINUTES * 60 * 1000).toISOString();
 
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO auth_codes (id, email, code_hash, expires_at)
     VALUES (?, ?, ?, ?)
-  `).run(uuidv4(), addr, hashToken(code), expiresAt);
+  `,
+  ).run(uuidv4(), addr, hashToken(code), expiresAt);
 
   // In non-production, log that a code was sent (but not the value itself).
   if (process.env.NODE_ENV !== 'production') {
@@ -108,7 +118,9 @@ router.post('/login', async (req, res) => {
 router.post('/verify', (req, res) => {
   const { email, code } = req.body;
   if (!email || !code) {
-    return res.status(400).json({ error: 'missing_fields', message: 'email and code are required.' });
+    return res
+      .status(400)
+      .json({ error: 'missing_fields', message: 'email and code are required.' });
   }
 
   const addr = normalizeEmail(email);
@@ -117,13 +129,17 @@ router.post('/verify', (req, res) => {
   // Atomic: mark code used in one statement so concurrent verify requests
   // with the same code cannot both succeed (race-free single-use enforcement).
   const now = new Date().toISOString();
-  const used = db.prepare(`
+  const used = db
+    .prepare(
+      `
     UPDATE auth_codes SET used_at = ?
     WHERE email = ?
       AND code_hash = ?
       AND used_at IS NULL
       AND datetime(expires_at) > datetime('now')
-  `).run(now, addr, codeHash);
+  `,
+    )
+    .run(now, addr, codeHash);
 
   if (used.changes === 0) {
     return res.status(401).json({ error: 'invalid_code', message: 'Invalid or expired code.' });
@@ -132,33 +148,46 @@ router.post('/verify', (req, res) => {
   // Find or create user
   let user = /** @type {any} */ (db.prepare(`SELECT * FROM users WHERE email = ?`).get(addr));
   if (!user) {
-    const isFirst = /** @type {any} */ (db.prepare(`SELECT COUNT(*) AS n FROM users`).get()).n === 0;
+    const isFirst =
+      /** @type {any} */ (db.prepare(`SELECT COUNT(*) AS n FROM users`).get()).n === 0;
     const id = uuidv4();
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO users (id, email, role) VALUES (?, ?, ?)
-    `).run(id, addr, isFirst ? 'owner' : 'user');
+    `,
+    ).run(id, addr, isFirst ? 'owner' : 'user');
     user = /** @type {any} */ (db.prepare(`SELECT * FROM users WHERE id = ?`).get(id));
   }
 
   db.prepare(`UPDATE users SET last_login_at = ? WHERE id = ?`).run(now, user.id);
 
   // Find or create dashboard for this user
-  let dashboard = /** @type {any} */ (db.prepare(`SELECT id, name FROM dashboards WHERE user_id = ?`).get(user.id));
+  let dashboard = /** @type {any} */ (
+    db.prepare(`SELECT id, name FROM dashboards WHERE user_id = ?`).get(user.id)
+  );
   if (!dashboard) {
     const dashId = uuidv4();
     const name = addr.split('@')[0];
-    db.prepare(`INSERT INTO dashboards (id, user_id, name) VALUES (?, ?, ?)`).run(dashId, user.id, name);
+    db.prepare(`INSERT INTO dashboards (id, user_id, name) VALUES (?, ?, ?)`).run(
+      dashId,
+      user.id,
+      name,
+    );
     dashboard = { id: dashId, name };
   }
 
   // Create session
   const rawToken = crypto.randomBytes(32).toString('hex');
-  const sessionExpiresAt = new Date(Date.now() + SESSION_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const sessionExpiresAt = new Date(
+    Date.now() + SESSION_TTL_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString();
 
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO sessions (id, user_id, token_hash, expires_at)
     VALUES (?, ?, ?, ?)
-  `).run(uuidv4(), user.id, hashToken(rawToken), sessionExpiresAt);
+  `,
+  ).run(uuidv4(), user.id, hashToken(rawToken), sessionExpiresAt);
 
   res.json({
     token: rawToken,
@@ -183,13 +212,17 @@ router.get('/me', (req, res) => {
   const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
   if (!token) return res.status(401).json({ error: 'unauthorized' });
 
-  const row = db.prepare(`
+  const row = db
+    .prepare(
+      `
     SELECT u.id, u.email, u.role
     FROM sessions s
     JOIN users u ON s.user_id = u.id
     WHERE s.token_hash = ?
       AND datetime(s.expires_at) > datetime('now')
-  `).get(hashToken(token));
+  `,
+    )
+    .get(hashToken(token));
 
   if (!row) return res.status(401).json({ error: 'unauthorized' });
 

@@ -229,7 +229,7 @@ components:
           description: CTX.com gift card order UUID
         payment_url:
           type: string
-          description: "web+stellar:pay URI — cards402 pays this directly"
+          description: 'web+stellar:pay URI — cards402 pays this directly'
         note:
           type: string
           description: "'already_exists' if this is a duplicate"
