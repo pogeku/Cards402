@@ -1,0 +1,49 @@
+{
+  "name": "cards402-monorepo",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "web",
+    "sdk"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w web",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "npm run typecheck -w web --if-present && npm run typecheck -w sdk --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build -w sdk && npm run build -w web",
+    "api:generate": "openapi-typescript contract/api/agent-api.openapi.yaml -o contract/api/agent-api.d.ts && openapi-typescript contract/api/vcc-internal.openapi.yaml -o contract/api/vcc-internal.d.ts",
+    "api:validate": "openapi-typescript contract/api/agent-api.openapi.yaml -o /dev/null && openapi-typescript contract/api/vcc-internal.openapi.yaml -o /dev/null",
+    "verify": "./scripts/verify.sh",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^20.0.0",
+    "@commitlint/config-conventional": "^20.0.0",
+    "@eslint/js": "^9.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "concurrently": "^9.0.0",
+    "eslint": "^9.0.0",
+    "eslint-plugin-react": "^7.37.0",
+    "eslint-plugin-react-hooks": "^5.0.0",
+    "globals": "^15.0.0",
+    "husky": "^9.0.0",
+    "lint-staged": "^16.0.0",
+    "openapi-typescript": "^7.13.0",
+    "prettier": "^3.0.0",
+    "typescript-eslint": "^8.0.0"
+  },
+  "lint-staged": {
+    "*.{js,ts,tsx,mjs}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md,css}": [
+      "prettier --write"
+    ]
+  }
+}

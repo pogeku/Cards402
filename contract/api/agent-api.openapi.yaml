@@ -1,0 +1,519 @@
+openapi: 3.1.0
+info:
+  title: cards402 Agent API
+  version: 0.1.0
+  description: |
+    Virtual Visa cards for AI agents. Pay with USDC or XLM on Stellar,
+    receive a card number, CVV, and expiry within ~40 seconds.
+
+    **Authentication:** Every request requires an `X-Api-Key` header with
+    a valid API key obtained from the cards402 dashboard.
+
+    **Idempotency:** `POST /orders` accepts an `Idempotency-Key` header.
+    Duplicate requests within 24h return the cached response.
+  contact:
+    name: cards402
+    url: https://cards402.com
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://api.cards402.com/v1
+    description: Production
+  - url: http://localhost:4000/v1
+    description: Local development
+
+security:
+  - apiKey: []
+
+paths:
+  /orders:
+    post:
+      operationId: createOrder
+      summary: Create a new card order
+      description: |
+        Creates a pending order and returns Soroban contract payment
+        instructions. The agent pays the contract on Stellar, the watcher
+        detects the event, and fulfillment begins automatically.
+
+        For amounts above the policy approval threshold, returns 202 with
+        `phase: awaiting_approval` instead of payment instructions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrderRequest'
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+            maxLength: 128
+          description: Deduplication key — same key + same body = cached response for 24h.
+      responses:
+        '201':
+          description: Order created, payment pending
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderCreatedResponse'
+        '202':
+          description: Order requires owner approval before payment
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderAwaitingApprovalResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Idempotency-Key reused with different body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          description: Fulfillment system temporarily unavailable (frozen)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      operationId: listOrders
+      summary: List this agent's orders
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending_payment, ordering, delivered, failed, refunded, refund_pending, awaiting_approval, expired, rejected]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: since_created_at
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Only orders created at or after this timestamp.
+        - name: since_updated_at
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Only orders updated at or after this timestamp.
+      responses:
+        '200':
+          description: Array of order summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/OrderListItem'
+
+  /orders/{orderId}:
+    get:
+      operationId: getOrder
+      summary: Get order details (poll for status)
+      description: |
+        Returns the current state of an order. When `phase` is `ready`,
+        the `card` object contains the virtual card details.
+
+        Recommended polling interval: 3 seconds. Typical fulfillment
+        time: 30–60 seconds after payment lands.
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Order details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderStatus'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /usage:
+    get:
+      operationId: getUsage
+      summary: Get this agent's spend summary and budget
+      responses:
+        '200':
+          description: Budget and order count summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageSummary'
+
+  /policy/check:
+    get:
+      operationId: checkPolicy
+      summary: Dry-run policy check without creating an order
+      description: |
+        Returns what would happen if the agent tried to create an order
+        for the given amount. Useful for pre-flight checks before
+        committing to a Stellar transaction.
+      parameters:
+        - name: amount
+          in: query
+          required: true
+          schema:
+            type: number
+            exclusiveMinimum: 0
+      responses:
+        '200':
+          description: Policy evaluation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyCheckResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+      description: API key from the cards402 dashboard
+
+  schemas:
+    CreateOrderRequest:
+      type: object
+      required:
+        - amount_usdc
+      properties:
+        amount_usdc:
+          type: string
+          pattern: '^\d+(\.\d+)?$'
+          description: Card value in USD as a decimal string, e.g. "10.00"
+          examples: ["10.00", "25.50", "100.00"]
+        webhook_url:
+          type: string
+          format: uri
+          description: HTTPS URL to receive delivery/failure webhooks
+        metadata:
+          type: object
+          description: Arbitrary JSON metadata stored with the order
+          additionalProperties: true
+
+    PaymentInstructions:
+      type: object
+      required: [type, contract_id, order_id, usdc]
+      properties:
+        type:
+          type: string
+          enum: [soroban_contract]
+        contract_id:
+          type: string
+          description: Soroban contract address (C...)
+        order_id:
+          type: string
+          format: uuid
+          description: Pass this as the order_id arg to pay_usdc/pay_xlm
+        usdc:
+          type: object
+          required: [amount, asset]
+          properties:
+            amount:
+              type: string
+              description: USDC amount as 7-decimal string
+            asset:
+              type: string
+              description: "CODE:ISSUER format, e.g. USDC:GA5Z..."
+        xlm:
+          type: object
+          properties:
+            amount:
+              type: string
+              description: Equivalent XLM amount (spot conversion)
+
+    Budget:
+      type: object
+      required: [spent_usdc]
+      properties:
+        spent_usdc:
+          type: string
+          description: Total spent by this API key
+        limit_usdc:
+          type: string
+          nullable: true
+          description: Spend limit (null = unlimited)
+        remaining_usdc:
+          type: string
+          nullable: true
+          description: Remaining budget (null = unlimited)
+
+    CardDetails:
+      type: object
+      required: [number, cvv, expiry]
+      properties:
+        number:
+          type: string
+          description: Full 16-digit card number
+          examples: ["4111111111111111"]
+        cvv:
+          type: string
+          description: 3-digit CVV
+          examples: ["123"]
+        expiry:
+          type: string
+          description: MM/YY format
+          examples: ["12/27"]
+        brand:
+          type: string
+          nullable: true
+          description: Card brand (usually "Visa")
+          examples: ["Visa"]
+
+    OrderCreatedResponse:
+      type: object
+      required: [order_id, status, payment, poll_url, budget]
+      properties:
+        order_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending_payment]
+        phase:
+          type: string
+          enum: [awaiting_payment]
+        amount_usdc:
+          type: string
+        payment:
+          $ref: '#/components/schemas/PaymentInstructions'
+        poll_url:
+          type: string
+          description: Relative URL to poll for status
+        budget:
+          $ref: '#/components/schemas/Budget'
+
+    OrderAwaitingApprovalResponse:
+      type: object
+      required: [order_id, phase, approval_request_id, amount_usdc]
+      properties:
+        order_id:
+          type: string
+          format: uuid
+        phase:
+          type: string
+          enum: [awaiting_approval]
+        approval_request_id:
+          type: string
+          format: uuid
+        amount_usdc:
+          type: string
+        message:
+          type: string
+          description: Human-readable reason the order requires approval
+        note:
+          type: string
+          description: Instruction for the agent
+        expires_at:
+          type: string
+          format: date-time
+
+    OrderPhase:
+      type: string
+      enum:
+        - awaiting_approval
+        - awaiting_payment
+        - processing
+        - ready
+        - failed
+        - refunded
+        - rejected
+        - expired
+
+    OrderListItem:
+      type: object
+      required: [id, status, amount_usdc, payment_asset, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        amount_usdc:
+          type: string
+        payment_asset:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    OrderStatus:
+      type: object
+      required: [order_id, status, phase, amount_usdc, created_at, updated_at]
+      properties:
+        order_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        phase:
+          $ref: '#/components/schemas/OrderPhase'
+        amount_usdc:
+          type: string
+        payment_asset:
+          type: string
+        payment:
+          $ref: '#/components/schemas/PaymentInstructions'
+        card:
+          $ref: '#/components/schemas/CardDetails'
+        error:
+          type: string
+          nullable: true
+        note:
+          type: string
+          nullable: true
+        refund:
+          type: object
+          properties:
+            stellar_txid:
+              type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        approval_request_id:
+          type: string
+          format: uuid
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    UsageSummary:
+      type: object
+      required: [api_key_id, budget, orders]
+      properties:
+        api_key_id:
+          type: string
+        label:
+          type: string
+          nullable: true
+        budget:
+          $ref: '#/components/schemas/Budget'
+        orders:
+          type: object
+          required: [total, delivered, failed, refunded, in_progress]
+          properties:
+            total:
+              type: integer
+            delivered:
+              type: integer
+            failed:
+              type: integer
+            refunded:
+              type: integer
+            in_progress:
+              type: integer
+
+    PolicyCheckResult:
+      type: object
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [approved, blocked, pending_approval]
+        rule:
+          type: string
+          nullable: true
+          description: Which policy rule matched
+        reason:
+          type: string
+          nullable: true
+          description: Human-readable explanation
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Machine-readable error code
+          examples: [invalid_amount, rate_limit_exceeded, service_temporarily_unavailable]
+        message:
+          type: string
+          description: Human-readable explanation
+
+    WebhookPayload:
+      type: object
+      description: |
+        Delivered to `webhook_url` when an order reaches a terminal state.
+        Signed with HMAC-SHA256 if a `webhook_secret` was issued with the
+        API key. Headers: `X-Cards402-Signature: sha256=<hex>`,
+        `X-Cards402-Timestamp: <epoch_ms>`.
+      required: [order_id, status]
+      properties:
+        order_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [delivered, failed]
+        amount_usdc:
+          type: string
+        payment_asset:
+          type: string
+        card:
+          $ref: '#/components/schemas/CardDetails'
+        error:
+          type: string
+
+  responses:
+    BadRequest:
+      description: Invalid request body or parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Missing or invalid API key
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RateLimited:
+      description: Too many requests
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

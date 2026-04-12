@@ -1,0 +1,48 @@
+# Never commit the backend — closed source, contains card procurement logic
+backend/
+
+# Environment files
+.env
+.env.local
+**/.env
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build outputs
+dist/
+build/
+.next/
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Debug artifacts
+/tmp/stage2-debug-*.png
+*.png
+
+# Test coverage
+sdk/coverage/
+
+# Rust build artifacts
+contract/target/
+**/target/
+
+# OS files
+.DS_Store
+**/.DS_Store
+
+# Claude local state
+.claude/
+
+# Old audit files (rolled into docs/audits/)
+audit-fixes.md
+claude-audit.md
+codex-audit.md
+
+# OWS tarball (local build artifact)
+sdk/open-wallet-standard-core-*.tgz
+web/.env.production

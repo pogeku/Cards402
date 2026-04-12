@@ -1,0 +1,4 @@
+#!/bin/sh
+npm run typecheck
+npm run lint
+npm test --workspaces --if-present

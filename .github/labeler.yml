@@ -1,0 +1,25 @@
+backend:
+  - changed-files:
+    - any-glob-to-any-file: 'backend/**'
+
+web:
+  - changed-files:
+    - any-glob-to-any-file: 'web/**'
+
+sdk:
+  - changed-files:
+    - any-glob-to-any-file: 'sdk/**'
+
+docs:
+  - changed-files:
+    - any-glob-to-any-file:
+      - '*.md'
+      - 'docs/**'
+
+ci:
+  - changed-files:
+    - any-glob-to-any-file: '.github/**'
+
+dependencies:
+  - changed-files:
+    - any-glob-to-any-file: '**/package.json'

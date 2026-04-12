@@ -1,0 +1,7 @@
+# All PRs require review
+* @ash
+
+# Security-sensitive paths require explicit review
+backend/src/payments/ @ash
+backend/src/fulfillment.js @ash
+backend/src/api/ @ash

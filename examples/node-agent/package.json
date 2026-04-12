@@ -1,0 +1,11 @@
+{
+  "name": "cards402-node-agent-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "cards402": "^0.1.0"
+  }
+}

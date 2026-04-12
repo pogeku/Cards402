@@ -1,0 +1,124 @@
+name: Cross-repo E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      vcc_ref:
+        description: 'VCC repo branch/tag/SHA to test against'
+        required: false
+        default: 'main'
+  # Uncomment to run on every PR that touches the VCC integration paths:
+  # pull_request:
+  #   paths:
+  #     - 'backend/src/vcc-client.js'
+  #     - 'backend/src/api/vcc-callback.js'
+  #     - 'backend/src/fulfillment.js'
+  #     - 'backend/src/payment-handler.js'
+  #     - 'contract/api/vcc-internal.openapi.yaml'
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cross-repo-e2e:
+    name: cards402 + vcc integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NODE_ENV: test
+      # cards402 backend
+      DB_PATH: ':memory:'
+      PORT: '4000'
+      STELLAR_NETWORK: testnet
+      STELLAR_XLM_SECRET: ${{ secrets.TESTNET_XLM_SECRET }}
+      STELLAR_USDC_ISSUER: GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN
+      RECEIVER_CONTRACT_ID: ${{ secrets.TESTNET_RECEIVER_CONTRACT_ID }}
+      SOROBAN_RPC_URL: https://soroban-testnet.stellar.org
+      VCC_API_BASE: http://localhost:5000
+      CARDS402_BASE_URL: http://localhost:4000
+      VCC_CALLBACK_SECRET: ${{ secrets.VCC_CALLBACK_SECRET_TEST || 'test-callback-secret-at-least-32-chars-long-ok' }}
+      # vcc api
+      VCC_PORT: '5000'
+      CTX_API_BASE: https://spend.ctx.com
+      CTX_MERCHANT_ID: ${{ secrets.CTX_MERCHANT_ID_TEST }}
+      CTX_EMAIL: ${{ secrets.CTX_EMAIL_TEST }}
+      TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY_TEST }}
+      VCC_DATA_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+      STAGE1_DIRECT_API: '1'
+      CTX_STREAM: '1'
+
+    steps:
+      - name: Checkout cards402
+        uses: actions/checkout@v4
+        with:
+          path: cards402
+
+      - name: Checkout vcc
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/vcc
+          ref: ${{ inputs.vcc_ref || 'main' }}
+          path: vcc
+          token: ${{ secrets.VCC_REPO_TOKEN || github.token }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            cards402/package-lock.json
+            vcc/api/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd cards402 && npm ci
+          cd ../vcc/api && npm ci
+
+      - name: Run cards402 backend tests
+        working-directory: cards402/backend
+        run: npm test
+
+      - name: Run vcc tests
+        working-directory: vcc/api
+        run: npm test
+
+      - name: Validate OpenAPI contracts
+        working-directory: cards402
+        run: npm run api:validate
+
+      - name: Boot vcc in background
+        working-directory: vcc/api
+        run: |
+          PORT=$VCC_PORT nohup node src/index.js > /tmp/vcc.log 2>&1 &
+          echo "VCC_PID=$!" >> $GITHUB_ENV
+          sleep 3
+          curl -sf http://localhost:$VCC_PORT/health || { cat /tmp/vcc.log; exit 1; }
+
+      - name: Boot cards402 in background
+        working-directory: cards402/backend
+        run: |
+          nohup node --env-file=.env.test src/index.js > /tmp/cards402.log 2>&1 &
+          echo "CARDS402_PID=$!" >> $GITHUB_ENV
+          sleep 3
+          curl -sf http://localhost:$PORT/status || { cat /tmp/cards402.log; exit 1; }
+
+      - name: Run cross-repo integration test
+        working-directory: cards402/backend
+        run: node test/integration/e2e-cards402-vcc.test.js
+        timeout-minutes: 5
+
+      # Optional: run the real batch test against testnet (slow, uses real money)
+      # Uncomment if you have testnet secrets configured.
+      # - name: Batch e2e (testnet, 2 orders)
+      #   working-directory: cards402/backend
+      #   run: node test-batch-e2e.js 2 0.02
+      #   timeout-minutes: 10
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          echo "=== vcc logs ==="
+          cat /tmp/vcc.log || true
+          echo "=== cards402 logs ==="
+          cat /tmp/cards402.log || true

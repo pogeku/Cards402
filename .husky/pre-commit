@@ -1,0 +1,13 @@
+#!/bin/sh
+
+# Block .env files from being committed (belt-and-suspenders: .gitignore alone won't
+# catch a force-add, and accidental credential commits are hard to undo once pushed)
+staged_env=$(git diff --cached --name-only | grep -E '(^|/)\.env(\.|$)')
+if [ -n "$staged_env" ]; then
+  echo "ERROR: Refusing to commit .env file(s):"
+  echo "$staged_env"
+  echo "Remove them with: git reset HEAD <file>"
+  exit 1
+fi
+
+npx lint-staged

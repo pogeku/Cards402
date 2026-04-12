@@ -1,0 +1,378 @@
+openapi: 3.1.0
+info:
+  title: VCC Internal API
+  version: 0.1.0
+  description: |
+    Internal contract between cards402 and the VCC fulfillment engine.
+    Not agent-facing — agents interact with cards402's /v1/* API only.
+
+    **Authentication:** Self-registered bearer token via `X-VCC-Token` header.
+    Tokens are SHA-256 hashed at rest; registration is via POST /api/register.
+
+    **Callback authentication:** HMAC-SHA256 v2 protocol. vcc signs
+    `<timestamp>.<order_id>.<raw_body>` with the per-job `callback_secret`.
+    See cards402/ARCHITECTURE.md §"Callback signature" for the wire format.
+
+servers:
+  - url: http://localhost:5000
+    description: Local VCC service
+
+paths:
+  /api/register:
+    post:
+      operationId: registerTenant
+      summary: Self-register a new tenant (cards402 instance)
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label:
+                  type: string
+                  description: Human-readable tenant label
+      responses:
+        '201':
+          description: Tenant created, token shown once
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
+        '429':
+          description: Rate limited (10/hour/IP)
+
+  /api/jobs/invoice:
+    post:
+      operationId: createInvoice
+      summary: Create a CTX gift card order and get payment URL
+      description: |
+        cards402 calls this after an agent creates an order. VCC creates
+        the CTX order and returns a `web+stellar:pay` URI that cards402
+        pays directly from its treasury wallet.
+
+        **Idempotent** per `(tenant_id, order_id)` — a duplicate call
+        returns the existing invoice without creating a new CTX order.
+      security:
+        - vccToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvoiceRequest'
+      parameters:
+        - name: X-Request-ID
+          in: header
+          schema:
+            type: string
+          description: Correlation ID from cards402 for end-to-end tracing
+      responses:
+        '201':
+          description: Invoice created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvoiceResponse'
+        '200':
+          description: Duplicate — existing invoice returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvoiceResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          description: CTX order creation failed
+        '503':
+          description: VCC fulfillment system is frozen
+
+  /api/jobs/{jobId}/paid:
+    post:
+      operationId: notifyPaid
+      summary: Notify VCC that cards402 has paid the CTX invoice
+      description: |
+        Transitions the job from `invoice_issued` to `queued` and kicks
+        off the fulfillment pipeline (SSE monitoring → stage1 scrape →
+        stage2 scrape → callback).
+      security:
+        - vccToken: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: OK (may include note already_queued for idempotent calls)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  note:
+                    type: string
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/jobs/{jobId}:
+    get:
+      operationId: getJobStatus
+      summary: Poll job status (fallback when callback fails)
+      security:
+        - vccToken: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Job details (sensitive card fields stripped)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobStatus'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /health:
+    get:
+      operationId: healthCheck
+      summary: Health check for uptime monitors
+      security: []
+      responses:
+        '200':
+          description: System healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: System frozen
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /metrics:
+    get:
+      operationId: getMetrics
+      summary: JSON metrics for dashboards
+      security: []
+      responses:
+        '200':
+          description: System metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsResponse'
+
+components:
+  securitySchemes:
+    vccToken:
+      type: apiKey
+      in: header
+      name: X-VCC-Token
+      description: Self-registered bearer token from POST /api/register
+
+  schemas:
+    RegisterResponse:
+      type: object
+      required: [tenant_id, token]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        token:
+          type: string
+          description: "Bearer token (shown once, starts with 'vcc_')"
+        note:
+          type: string
+
+    InvoiceRequest:
+      type: object
+      required: [order_id, amount_usdc, callback_url, callback_secret]
+      properties:
+        order_id:
+          type: string
+          description: cards402 order UUID
+        amount_usdc:
+          type: string
+          pattern: '^\d+(\.\d+)?$'
+        callback_url:
+          type: string
+          format: uri
+          description: HTTPS URL for the HMAC-signed result callback
+        callback_secret:
+          type: string
+          minLength: 16
+          description: Shared secret for HMAC signing the callback
+
+    InvoiceResponse:
+      type: object
+      required: [job_id, ctx_order_id, payment_url]
+      properties:
+        job_id:
+          type: string
+          format: uuid
+        ctx_order_id:
+          type: string
+          description: CTX.com gift card order UUID
+        payment_url:
+          type: string
+          description: "web+stellar:pay URI — cards402 pays this directly"
+        note:
+          type: string
+          description: "'already_exists' if this is a duplicate"
+
+    JobStatus:
+      type: object
+      required: [id, tenant_id, order_id, amount_usdc, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+        order_id:
+          type: string
+        amount_usdc:
+          type: string
+        ctx_order_id:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [invoice_issued, queued, running, delivered, failed]
+        error:
+          type: string
+          nullable: true
+        card_brand:
+          type: string
+          nullable: true
+        card_last4:
+          type: string
+          nullable: true
+        request_id:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CallbackPayload:
+      type: object
+      description: |
+        POST to callback_url when a job reaches terminal state. Signed
+        with HMAC-SHA256 v2 (order_id in signing payload). Headers:
+        X-VCC-Signature, X-VCC-Timestamp, X-VCC-Order-Id, X-Request-ID.
+      required: [order_id, status]
+      properties:
+        order_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [fulfilled, failed]
+        card:
+          type: object
+          description: Present only when status=fulfilled
+          properties:
+            number:
+              type: string
+            cvv:
+              type: string
+            expiry:
+              type: string
+            brand:
+              type: string
+              nullable: true
+        error:
+          type: string
+          description: Present only when status=failed
+
+    HealthResponse:
+      type: object
+      required: [ok, frozen]
+      properties:
+        ok:
+          type: boolean
+        frozen:
+          type: boolean
+        consecutive_failures:
+          type: integer
+        running_jobs:
+          type: integer
+        queued_jobs:
+          type: integer
+
+    MetricsResponse:
+      type: object
+      properties:
+        frozen_global:
+          type: boolean
+        frozen_tenants:
+          type: integer
+        jobs_last_hour:
+          type: object
+          additionalProperties:
+            type: integer
+        jobs_total:
+          type: object
+          properties:
+            delivered:
+              type: integer
+            failed:
+              type: integer
+            running:
+              type: integer
+            queued:
+              type: integer
+            total:
+              type: integer
+        callback_deadletter_pending:
+          type: integer
+        now:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Missing or invalid token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

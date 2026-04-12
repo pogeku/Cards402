@@ -1,0 +1,96 @@
+name: PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    name: AI Code Review
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Get PR diff
+        id: diff
+        run: |
+          gh pr diff ${{ github.event.pull_request.number }} > /tmp/pr.diff
+          echo "diff_size=$(wc -l < /tmp/pr.diff)" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run AI review
+        if: steps.diff.outputs.diff_size != '0'
+        id: ai_review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          REVIEW=$(claude -p --print "Review this PR diff for the cards402 project.
+
+          cards402 is an agentic VCC (virtual credit card) service: agents send a 402 HTTP challenge response,
+          pay via Stellar (USDC or XLM), and receive a virtual card. The stack is:
+          - Node.js/Express backend (better-sqlite3, no ORM, raw parameterised queries)
+          - Next.js web frontend (TypeScript, App Router)
+          - TypeScript SDK for agent integrations
+          - Soroban Rust smart contract on Stellar
+          - VCC provider API (vcc-client.js) for card issuance
+
+          Key subsystems to check carefully:
+          - Sandbox mode (orders.js): any path where mode='sandbox' could trigger real VCC dispatch or charge funds
+          - Policy engine (policy.js): spend limits, daily caps, approval thresholds — changes that bypass or weaken them
+          - VCC callback handler (vcc-callback.js): HMAC signature verification, status transition guards
+          - Payment watcher (payments/stellar.js): double-credit, replay, or skipped payment detection
+          - Spend alert debouncing (system_state table): threshold logic that could suppress or double-fire alerts
+          - Key rotation (admin.js): key material exposure in logs, timing-safe comparison
+          - Time-limited keys (middleware/auth.js): expiry check placement, clock skew edge cases
+          - Webhook queue (fulfillment.js): SSRF via unvalidated webhook URLs, secret exposure
+          - Order metadata: unvalidated or unbounded JSON payloads reaching the database
+          - Approval flow (dashboard.js): expired approval bypass, missing decided_by audit trail
+          - SQL column allowlist (ALLOWED_COLUMNS): any dynamic SQL that bypasses the allowlist
+          - Admin API (admin.js): missing requireOwner on sensitive endpoints
+
+          General checks:
+          - Hardcoded secrets, API keys, or credentials
+          - Missing error handling on async operations
+          - \`any\` types in TypeScript without justification
+          - console.log left in production code paths
+          - Missing .env.example updates when new env vars are added
+          - SQL injection risks (raw better-sqlite3 queries, template literals in SQL)
+          - XSS risks in the web app
+          - Breaking changes to the public orders API (/v1/*) without a version bump
+          - VCC client changes that alter the fulfillment pipeline
+
+          Be concise. Only flag real issues, not style nits (Prettier/ESLint handle those).
+          Format as a bulleted list grouped by severity (Critical / Warning / Info).
+          If nothing to flag, say 'LGTM'.
+
+          $(cat /tmp/pr.diff)" 2>/dev/null || echo "Review unavailable")
+
+          echo "review<<EOF" >> $GITHUB_OUTPUT
+          echo "$REVIEW" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Post review comment
+        if: steps.diff.outputs.diff_size != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --body "### 🤖 AI Code Review
+
+          ${{ steps.ai_review.outputs.review }}
+
+          <sub>Powered by Claude · cards402 CI</sub>"
