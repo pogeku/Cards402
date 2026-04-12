@@ -165,10 +165,7 @@ export async function purchaseCard(opts: {
       return { ...card, order_id: orderId };
     }
   } else {
-    const order = await client.createOrder({
-      amount_usdc: opts.amountUsdc,
-      payment_asset: paymentAsset,
-    });
+    const order = await client.createOrder({ amount_usdc: opts.amountUsdc });
     orderId = order.order_id;
     payment = order.payment;
   }

@@ -39,7 +39,7 @@ export interface UsageSummary {
 export interface OrderOptions {
   amount_usdc: string;
   webhook_url?: string;
-  payment_asset?: 'usdc' | 'xlm';
+  metadata?: Record<string, unknown>;
 }
 
 export interface PaymentInstructions {

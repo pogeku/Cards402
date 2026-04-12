@@ -60,14 +60,28 @@ function getStellarAddress(wallet: WalletInfo): string {
 }
 
 /**
- * Create a new OWS wallet with a fresh BIP-39 mnemonic.
- * The wallet is stored encrypted in the OWS vault (~/.ows/vault by default).
+ * Create an OWS wallet, or return the existing one if a wallet with this
+ * name already exists in the vault. Idempotent by design — calling it
+ * twice with the same name is safe and returns the same keys, so skill.md
+ * flows and agent retries don't duplicate state.
+ *
+ * Wallets are stored encrypted at `~/.ows/vault/<name>.vault` by default.
+ * Pass a custom `vaultPath` if you need the wallet somewhere else
+ * (e.g. a mounted volume that survives container restarts).
  */
 export function createOWSWallet(
   name: string,
   passphrase?: string,
   vaultPath?: string,
 ): { walletId: string; publicKey: string } {
+  // Fast path: existing wallet. Returns immediately if one is already in
+  // the vault under this name.
+  try {
+    const existing = owsGet(name, vaultPath ?? null);
+    return { walletId: existing.id, publicKey: getStellarAddress(existing) };
+  } catch {
+    /* not found — fall through to create */
+  }
   const wallet = owsCreate(name, passphrase ?? null, undefined, vaultPath ?? null);
   return { walletId: wallet.id, publicKey: getStellarAddress(wallet) };
 }
@@ -302,12 +316,46 @@ export async function purchaseCardOWS(
       return { ...card, order_id: orderId };
     }
   } else {
-    const order = await client.createOrder({
-      amount_usdc: opts.amountUsdc,
-      payment_asset: paymentAsset,
-    });
+    const order = await client.createOrder({ amount_usdc: opts.amountUsdc });
     orderId = order.order_id;
     payment = order.payment;
+  }
+
+  // USDC payments need a trustline on the wallet's Stellar account. If the
+  // agent is paying in USDC and never added one, add it now so the
+  // purchase doesn't silently fail on the payment step.
+  if (paymentAsset === 'usdc') {
+    try {
+      const bal = await getOWSBalance(opts.walletName, opts.vaultPath);
+      // getOWSBalance returns '0' when no USDC trustline exists, so we
+      // also need to check the raw Horizon payload — any USDC entry
+      // (even 0 balance) means the trustline is already present.
+      if (bal.usdc === '0') {
+        const publicKey = getOWSPublicKey(opts.walletName, opts.vaultPath);
+        const server = new Horizon.Server(HORIZON_URL);
+        const account = await withTimeout(server.loadAccount(publicKey));
+        const hasTrustline = account.balances.some(
+          (b) =>
+            b.asset_type === 'credit_alphanum4' &&
+            b.asset_code === 'USDC' &&
+            b.asset_issuer === USDC_ISSUER,
+        );
+        if (!hasTrustline) {
+          await addUsdcTrustlineOWS({
+            walletName: opts.walletName,
+            passphrase: opts.passphrase,
+            vaultPath: opts.vaultPath,
+            networkPassphrase: opts.networkPassphrase,
+          });
+        }
+      }
+    } catch (err) {
+      throw new Error(
+        `Failed to ensure USDC trustline for wallet "${opts.walletName}": ${
+          err instanceof Error ? err.message : String(err)
+        }. The wallet needs at least 2 XLM (1 for the account reserve, 1 for the trustline). Fund it with 'addUsdcTrustlineOWS' manually or retry once the wallet has enough XLM.`,
+      );
+    }
   }
 
   await payViaContractOWS({

@@ -544,7 +544,7 @@ function NewKeyResult({
     'Read https://cards402.com/skill.md',
     'and set up this agent with:',
     `  key: ${data.key}`,
-    '  api_url: api.cards402.com',
+    '  api_url: https://api.cards402.com/v1',
   ].join('\n');
 
   async function copy() {

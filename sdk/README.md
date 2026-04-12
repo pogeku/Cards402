@@ -1,362 +1,133 @@
-# cards402
+# @ctx.com/cards402
 
-Virtual Visa cards for AI agents — pay with USDC or XLM on Stellar.
+Virtual Visa cards for AI agents — pay with USDC or XLM on Stellar, get a card number, CVV, and expiry in ~60 seconds.
 
-[cards402.com](https://cards402.com) issues prepaid Visa virtual cards on demand. This SDK lets AI agents create orders, pay via the cards402 Soroban smart contract on Stellar, and retrieve card details programmatically.
+[cards402.com](https://cards402.com) issues prepaid Visa virtual cards on demand. This SDK lets AI agents create an order, pay the cards402 Soroban receiver contract on Stellar, and receive card details programmatically — all in one call.
 
-## Installation
+## Install
 
 ```bash
-npm install cards402
+npm install @ctx.com/cards402
 ```
+
+Requires Node.js 18 or newer (the SDK uses native `fetch`, `ReadableStream`, and `WebCrypto`). Supported platforms via the bundled `@ctx.com/stellar-ows-core` native wallet bindings: macOS (arm64 + x64), Linux (arm64 + x64). Windows is not currently supported.
 
 ## Quick start
 
 ```typescript
-import { purchaseCardOWS } from 'cards402';
+import { createOWSWallet, getOWSBalance, purchaseCardOWS } from '@ctx.com/cards402';
 
+// 1. Create (or fetch existing) encrypted wallet. Idempotent.
+const { publicKey } = createOWSWallet('my-agent');
+console.log('Fund this Stellar address:', publicKey);
+
+// 2. Pause here until the address has funds. Re-run to check:
+const bal = await getOWSBalance('my-agent');
+console.log(`XLM: ${bal.xlm}  USDC: ${bal.usdc}`);
+
+// 3. Purchase a card — only do this when the user explicitly asks.
 const card = await purchaseCardOWS({
   apiKey: process.env.CARDS402_API_KEY!,
-  walletName: process.env.OWS_WALLET_NAME!,
-  amountUsdc: '10.00',
-});
-
-console.log(card.number, card.cvv, card.expiry);
-```
-
-## Wallet setup
-
-Cards402 uses [OWS](https://github.com/open-wallet-standard/core) — keys are stored encrypted in a local vault file, not as plaintext env vars.
-
-1. **Set environment variables**:
-
-   ```
-   OWS_WALLET_NAME=my-agent       # wallet identifier
-   OWS_WALLET_PASSPHRASE=secret   # encryption passphrase (recommended)
-   CARDS402_API_KEY=cards402_...  # from cards402.com
-   ```
-
-2. **Create and fund your wallet**:
-
-   ```typescript
-   import { createOWSWallet, addUsdcTrustlineOWS } from 'cards402';
-
-   // Creates the wallet in ~/.ows/vault (or OWS_VAULT_PATH)
-   const { publicKey } = createOWSWallet('my-agent', process.env.OWS_WALLET_PASSPHRASE);
-   console.log('Fund this address:', publicKey);
-
-   // After funding with XLM, add a USDC trustline:
-   await addUsdcTrustlineOWS({ walletName: 'my-agent' });
-   ```
-
-3. **Fund the wallet**: send at least 2 XLM for account activation, then deposit USDC (if paying with USDC) from an exchange or another Stellar account.
-
-The vault file is at `~/.ows/vault` by default. Override with `OWS_VAULT_PATH`.
-
----
-
-## API reference
-
-### `purchaseCardOWS(opts)`
-
-All-in-one: create order, pay via Soroban contract, wait for card.
-
-```typescript
-import { purchaseCardOWS } from 'cards402';
-
-const card = await purchaseCardOWS({
-  apiKey: process.env.CARDS402_API_KEY!,
-  walletName: process.env.OWS_WALLET_NAME!,
-  amountUsdc: '10.00',
-  paymentAsset: 'usdc', // or 'xlm' — defaults to 'usdc'
-  passphrase: process.env.OWS_WALLET_PASSPHRASE,
-  vaultPath: process.env.OWS_VAULT_PATH,
-});
-
-// card: { number, cvv, expiry, brand, order_id }
-```
-
----
-
-### OWS wallet helpers
-
-#### `createOWSWallet(name, passphrase?, vaultPath?)`
-
-Create a new encrypted wallet in the OWS vault.
-
-```typescript
-import { createOWSWallet } from 'cards402';
-
-const { walletId, publicKey } = createOWSWallet('my-agent', 'passphrase');
-console.log('Fund this address:', publicKey);
-```
-
-#### `importStellarKey(name, stellarSecret, passphrase?, vaultPath?)`
-
-Migrate an existing Stellar secret key into the OWS vault.
-
-```typescript
-import { importStellarKey } from 'cards402';
-
-const { publicKey } = importStellarKey('my-agent', 'S...existing-secret...');
-```
-
-#### `getOWSPublicKey(walletName, vaultPath?)`
-
-Get the Stellar G-address for a named wallet.
-
-```typescript
-import { getOWSPublicKey } from 'cards402';
-
-const publicKey = getOWSPublicKey('my-agent');
-```
-
-#### `getOWSBalance(walletName, vaultPath?)`
-
-Check XLM and USDC balances.
-
-```typescript
-import { getOWSBalance } from 'cards402';
-
-const { xlm, usdc } = await getOWSBalance('my-agent');
-console.log(`XLM: ${xlm}, USDC: ${usdc}`);
-```
-
-#### `addUsdcTrustlineOWS(opts)`
-
-Add a USDC trustline (required before receiving USDC).
-
-```typescript
-import { addUsdcTrustlineOWS } from 'cards402';
-
-const txHash = await addUsdcTrustlineOWS({ walletName: 'my-agent' });
-```
-
-#### `payVCCOWS(opts)`
-
-Pay VCC directly on Stellar using an OWS wallet. The payment instructions come from a `createOrder()` response. Called automatically by `purchaseCardOWS`.
-
-```typescript
-import { payVCCOWS } from 'cards402';
-
-const txHash = await payVCCOWS({
   walletName: 'my-agent',
-  payment: order.payment, // from createOrder()
-  paymentAsset: 'usdc', // or 'xlm'
-  passphrase: process.env.OWS_WALLET_PASSPHRASE,
-});
-```
-
----
-
-### Raw keypair helpers
-
-Use these if you manage Stellar keys directly (no OWS vault). For new integrations, prefer the OWS equivalents above.
-
-#### `createWallet()`
-
-Generate a new Stellar keypair. Store the secret key securely — it is not persisted anywhere.
-
-```typescript
-import { createWallet } from 'cards402';
-
-const { publicKey, secret } = createWallet();
-console.log('Fund this address:', publicKey);
-// secret: 'S...' — keep private
-```
-
-#### `getBalance(publicKey, networkPassphrase?)`
-
-Fetch XLM and USDC balances for any Stellar address.
-
-```typescript
-import { getBalance } from 'cards402';
-
-const { xlm, usdc } = await getBalance('G...');
-console.log(`XLM: ${xlm}, USDC: ${usdc}`);
-```
-
-#### `addUsdcTrustline(secret, networkPassphrase?)`
-
-Add a USDC trustline using a raw Stellar secret key.
-
-```typescript
-import { addUsdcTrustline } from 'cards402';
-
-const txHash = await addUsdcTrustline('S...your-secret...');
-```
-
-#### `payVCC(opts)`
-
-Send a Stellar payment to VCC using a raw secret key. The payment instructions come from a `createOrder()` response.
-
-```typescript
-import { payVCC } from 'cards402';
-
-const txHash = await payVCC({
-  walletSecret: 'S...your-secret...',
-  payment: order.payment, // from createOrder()
-  paymentAsset: 'usdc', // or 'xlm'
-});
-```
-
-#### `purchaseCard(opts)`
-
-All-in-one: create order, pay VCC on Stellar, wait for card — using a raw secret key.
-
-```typescript
-import { purchaseCard } from 'cards402';
-
-const card = await purchaseCard({
-  apiKey: process.env.CARDS402_API_KEY!,
-  walletSecret: process.env.STELLAR_SECRET!,
   amountUsdc: '10.00',
-  paymentAsset: 'usdc', // or 'xlm'
+  paymentAsset: 'xlm', // or 'usdc' (trustline added automatically)
 });
 
 console.log(card.number, card.cvv, card.expiry);
 ```
 
----
+`purchaseCardOWS` handles the whole flow:
 
-### `Cards402Client`
+1. `POST /v1/orders` with the amount
+2. Sign + submit the Soroban payment from your OWS wallet
+3. Subscribe to the SSE stream at `/v1/orders/:id/stream`
+4. Return the card details as soon as the `ready` event arrives
 
-The HTTP client for the cards402 API.
+No polling loops, no webhook endpoint required.
+
+## Funding your wallet
+
+Stellar accounts need a minimum balance to be activated on-chain:
+
+- **Pay with XLM:** send ≥ 1 XLM to cover the base reserve, plus whatever XLM the card costs at the current spot rate (shown in `payment.xlm.amount` when you create an order).
+- **Pay with USDC:** send ≥ 2 XLM (1 base reserve + 1 for the USDC trustline entry), plus the USDC card amount. The SDK will add the trustline automatically the first time you purchase with USDC, so you just need the ≥ 2 XLM on-chain before calling `purchaseCardOWS`.
+
+## Step-by-step API (for more control)
 
 ```typescript
-import { Cards402Client } from 'cards402';
+import { Cards402Client } from '@ctx.com/cards402';
 
 const client = new Cards402Client({
-  apiKey: 'your-api-key',
-  baseUrl: 'https://api.cards402.com', // optional
-});
-```
-
-#### `client.createOrder(opts)`
-
-```typescript
-const order = await client.createOrder({
-  amount_usdc: '25.00',
-  payment_asset: 'usdc', // or 'xlm'
-  webhook_url: 'https://yourapp.com/webhook', // optional
+  apiKey: process.env.CARDS402_API_KEY!,
+  // baseUrl defaults to https://api.cards402.com/v1
 });
 
-// USDC order: order.payment.contract, .usdc_contract, .amount, .order_id
-// XLM order:  order.payment.contract, .xlm_sac_contract, .xlm_amount, .order_id
+// Create the order
+const order = await client.createOrder({ amount_usdc: '10.00' });
+console.log(`Pay ${order.payment.xlm.amount} XLM to contract ${order.payment.contract_id}`);
+
+// ... submit the Soroban transaction yourself, or use the payViaContract helpers ...
+
+// Wait for delivery (uses SSE under the hood, with polling fallback)
+const card = await client.waitForCard(order.order_id, { timeoutMs: 120000 });
+console.log(card.number, card.cvv, card.expiry);
 ```
 
-#### `client.waitForCard(orderId, options?)`
+## MCP server — for Claude Desktop, Cursor, and other MCP clients
 
-Poll until the card is delivered or the order fails. Throws typed errors on failure or timeout.
-
-```typescript
-const card = await client.waitForCard(order.order_id, {
-  timeoutMs: 300000, // 5 minutes (default)
-  intervalMs: 3000, // poll every 3s (default)
-});
-```
-
-#### `client.getUsage()`
-
-```typescript
-const usage = await client.getUsage();
-console.log(usage.budget.spent_usdc); // "15.00"
-console.log(usage.budget.limit_usdc); // "100.00" or null (unlimited)
-console.log(usage.orders.delivered);
-```
-
----
-
-## Webhook verification
-
-Every webhook from cards402 includes `X-Cards402-Signature` and `X-Cards402-Timestamp` headers.
-
-```typescript
-import { createHmac, timingSafeEqual } from 'crypto';
-
-function verifyWebhook(
-  rawBody: string,
-  signature: string,
-  timestamp: string,
-  secret: string,
-): boolean {
-  // Reject stale webhooks (>5 minutes)
-  if (Math.abs(Date.now() - parseInt(timestamp)) > 5 * 60 * 1000) return false;
-  // Signature covers "<timestamp>.<body>"
-  const expected = `sha256=${createHmac('sha256', secret).update(`${timestamp}.${rawBody}`).digest('hex')}`;
-  return timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
-}
-```
-
----
-
-## MCP server
-
-The cards402 MCP server exposes tools to any MCP-compatible AI client (Claude Desktop, Cursor, etc.).
-
-### Setup
-
-Add to your MCP client config (e.g. `~/.config/claude/claude_desktop_config.json`):
+Add to your client's `mcpServers` config:
 
 ```json
 {
   "mcpServers": {
     "cards402": {
       "command": "npx",
-      "args": ["cards402-mcp"],
-      "env": {
-        "CARDS402_API_KEY": "cards402_...",
-        "OWS_WALLET_NAME": "my-agent",
-        "OWS_WALLET_PASSPHRASE": "...",
-        "OWS_VAULT_PATH": "/path/to/vault"
-      }
+      "args": ["-y", "@ctx.com/cards402"],
+      "env": { "CARDS402_API_KEY": "cards402_<your key>" }
     }
   }
 }
 ```
 
-### Available tools
+The MCP server exposes four tools: `setup_wallet`, `check_budget`, `check_order`, and `purchase_vcc`.
 
-**`setup_wallet`** — Create or inspect the OWS wallet. Run this first to get your public key and funding instructions.
+## Error handling
 
-**`purchase_vcc`** — Buy a virtual Visa card  
-Inputs: `amount_usdc` (string), `payment_asset` (`"usdc"` | `"xlm"`, optional)
+All SDK errors inherit from `Cards402Error`. Typed subclasses let you react to specific failure modes:
 
-**`check_order`** — Check order status  
-Input: `order_id` (string)
+```typescript
+import {
+  Cards402Error,
+  AuthError,
+  SpendLimitError,
+  RateLimitError,
+  ServiceUnavailableError,
+  InvalidAmountError,
+  OrderFailedError,
+  WaitTimeoutError,
+} from '@ctx.com/cards402';
 
-**`check_budget`** — View spend summary and remaining budget
-
-### Environment variables
-
-| Variable                | Required | Description                               |
-| ----------------------- | -------- | ----------------------------------------- |
-| `CARDS402_API_KEY`      | ✓        | Your cards402 API key                     |
-| `OWS_WALLET_NAME`       | ✓        | OWS wallet identifier                     |
-| `OWS_WALLET_PASSPHRASE` | —        | Wallet encryption passphrase              |
-| `OWS_VAULT_PATH`        | —        | Vault file path (default: `~/.ows/vault`) |
-| `CARDS402_BASE_URL`     | —        | Override the API base URL                 |
-
----
-
-## Claude Code skills
-
-Two slash commands are included in `skill/`:
-
-```bash
-cp node_modules/cards402/skill/buy-vcc.md ~/.claude/commands/buy-vcc.md
-cp node_modules/cards402/skill/check-vcc.md ~/.claude/commands/check-vcc.md
+try {
+  const card = await purchaseCardOWS({ ... });
+} catch (err) {
+  if (err instanceof SpendLimitError) { /* cap reached — ask owner to raise */ }
+  else if (err instanceof OrderFailedError) { /* check err.refund for refund tx */ }
+  else if (err instanceof WaitTimeoutError) { /* network flake or stalled fulfillment */ }
+  else if (err instanceof AuthError) { /* bad key */ }
+}
 ```
 
-Then in Claude Code:
+## Keeping card details safe
 
-```
-/buy-vcc 25
-/check-vcc order_abc123
-```
+`purchaseCardOWS` returns the card PAN, CVV, and expiry as plain strings. **Treat them as secrets.** Don't log them, don't write them to disk, don't send them to observability pipelines unless those pipelines are explicitly PCI-compliant.
 
-Required env vars: `CARDS402_API_KEY`, `OWS_WALLET_NAME`, `OWS_WALLET_PASSPHRASE` (optional).
+## Links
+
+- [cards402.com](https://cards402.com) — dashboard and docs
+- [cards402.com/docs](https://cards402.com/docs) — full API reference
+- [cards402.com/agents.txt](https://cards402.com/agents.txt) — machine-readable agent integration guide
+- [github.com/CTX-com/Cards402](https://github.com/CTX-com/Cards402) — source
 
 ## License
 
-MIT
+MIT — see [LICENSE](./LICENSE).
