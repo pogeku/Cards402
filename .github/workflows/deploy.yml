@@ -33,15 +33,20 @@ jobs:
             echo "=== Build SDK ==="
             npm run build -w sdk
 
+            echo "=== Build web (Next.js production) ==="
+            npm run build -w web
+
             echo "=== Backend (separate package, not a workspace) ==="
             cd backend && npm ci --omit=dev && cd ..
 
             echo "=== Restarting services ==="
-            pm2 describe cards402-api > /dev/null 2>&1 && pm2 restart cards402-api || \
+            pm2 describe cards402-api > /dev/null 2>&1 && pm2 restart cards402-api --update-env || \
               pm2 start "node src/index.js" --name cards402-api --cwd /opt/cards402/backend
 
-            pm2 describe cards402-web > /dev/null 2>&1 && pm2 restart cards402-web || \
-              pm2 start "npx next dev -p 3100" --name cards402-web --cwd /opt/cards402/web
+            # Force a clean recreate so the command switches from 'next dev'
+            # to 'next start' on the first deploy after this change.
+            pm2 delete cards402-web > /dev/null 2>&1 || true
+            pm2 start "npx next start -p 3100" --name cards402-web --cwd /opt/cards402/web
 
             pm2 save
             echo "=== Deploy complete ==="
