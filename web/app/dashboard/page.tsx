@@ -218,8 +218,6 @@ function CreateKeyModal({
 }) {
   const [label, setLabel] = useState('');
   const [spendLimit, setSpendLimit] = useState('');
-  const [webhookUrl, setWebhookUrl] = useState('');
-  const [walletKey, setWalletKey] = useState('');
   const [approvalAbove, setApprovalAbove] = useState('');
   const [err, setErr] = useState('');
   const [saving, setSaving] = useState(false);
@@ -229,8 +227,6 @@ function CreateKeyModal({
     setErr('');
     const body: Record<string, string | null> = { label: label || null };
     if (spendLimit) body.spend_limit_usdc = spendLimit;
-    if (webhookUrl) body.default_webhook_url = webhookUrl;
-    if (walletKey) body.wallet_public_key = walletKey;
     if (approvalAbove) body.policy_require_approval_above_usdc = approvalAbove;
     const res = await fetch(`${API_BASE}/dashboard/api-keys`, {
       method: 'POST',
@@ -330,44 +326,19 @@ function CreateKeyModal({
               placeholder="e.g. 50.00 (blank = never)"
             />
           </div>
-          <div>
-            <label
-              style={{
-                fontSize: '0.75rem',
-                color: 'var(--muted)',
-                fontFamily: 'var(--font-mono)',
-                display: 'block',
-                marginBottom: '0.375rem',
-              }}
-            >
-              Default webhook URL (HTTPS)
-            </label>
-            <input
-              style={inputStyle}
-              value={webhookUrl}
-              onChange={(e) => setWebhookUrl(e.target.value)}
-              placeholder="https://your-server.com/webhook"
-            />
-          </div>
-          <div>
-            <label
-              style={{
-                fontSize: '0.75rem',
-                color: 'var(--muted)',
-                fontFamily: 'var(--font-mono)',
-                display: 'block',
-                marginBottom: '0.375rem',
-              }}
-            >
-              Agent Stellar address (for refunds)
-            </label>
-            <input
-              style={inputStyle}
-              value={walletKey}
-              onChange={(e) => setWalletKey(e.target.value)}
-              placeholder="G... (optional)"
-            />
-          </div>
+          <p
+            style={{
+              color: 'var(--muted)',
+              fontSize: '0.75rem',
+              lineHeight: 1.55,
+              margin: 0,
+              paddingTop: '0.25rem',
+            }}
+          >
+            Refunds automatically go back to whichever Stellar address paid the failed order — no
+            wallet address needed here. Delivery notifications show up in this dashboard; attach a
+            webhook later from the key&apos;s Edit screen if you want push delivery too.
+          </p>
           {err && <p style={{ color: '#f87171', fontSize: '0.8125rem', margin: 0 }}>{err}</p>}
         </div>
         <div
