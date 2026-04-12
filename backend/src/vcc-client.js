@@ -52,7 +52,7 @@ function encryptToken(plaintext) {
   const key = getEncryptionKey();
   if (!key) return plaintext; // no key configured — store as-is
   const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
   const ct = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
   const tag = cipher.getAuthTag();
   return `enc:${iv.toString('hex')}:${tag.toString('hex')}:${ct.toString('hex')}`;
@@ -63,7 +63,7 @@ function decryptToken(stored) {
   const key = getEncryptionKey();
   if (!key) return stored; // can't decrypt without key — let caller handle the error
   const [, ivHex, tagHex, ctHex] = stored.split(':');
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivHex, 'hex'));
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivHex, 'hex'), { authTagLength: 16 });
   decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
   return decipher.update(Buffer.from(ctHex, 'hex')) + decipher.final('utf8');
 }
