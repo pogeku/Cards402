@@ -1,0 +1,46 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy to production
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: root
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/cards402
+
+            echo "=== Pulling latest ==="
+            git pull origin main
+
+            echo "=== Installing SDK deps ==="
+            cd sdk && npm ci --production=false && npm run build && cd ..
+
+            echo "=== Installing web deps ==="
+            cd web && npm ci && npm run build && cd ..
+
+            echo "=== Restarting web ==="
+            pm2 describe cards402-web > /dev/null 2>&1 && pm2 restart cards402-web || \
+              pm2 start "npm run start" --name cards402-web --cwd /opt/cards402/web -- -p 3100
+
+            echo "=== Copying skill.md + install script ==="
+            # These are served by nginx directly
+            cp skill.md /opt/cards402/skill.md
+            cp scripts/install-ows.sh /opt/cards402/scripts/install-ows.sh
+
+            echo "=== Deploy complete ==="
+            pm2 save
