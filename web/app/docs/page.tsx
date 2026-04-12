@@ -298,14 +298,11 @@ export default function DocsPage() {
           <p style={{ color: 'var(--muted)', fontSize: '1rem', lineHeight: 1.65, margin: 0 }}>
             Base URL: <Code>https://api.cards402.com</Code>
             <br />
-            All requests require an <Code>X-Api-Key</Code> header. Contact{' '}
-            <a
-              href="mailto:api@cards402.com"
-              style={{ color: 'var(--green)', textDecoration: 'none' }}
-            >
-              api@cards402.com
-            </a>{' '}
-            to get a key.
+            All requests require an <Code>X-Api-Key</Code> header. Sign in at{' '}
+            <Link href="/dashboard" style={{ color: 'var(--green)', textDecoration: 'none' }}>
+              /dashboard
+            </Link>{' '}
+            with your email to create one in seconds — no manual onboarding.
           </p>
         </div>
 
@@ -315,6 +312,15 @@ export default function DocsPage() {
           <Para>
             Every request must include an <Code>X-Api-Key</Code> header. Keys are prefixed with{' '}
             <Code>cards402_</Code> and scoped to a spend limit in USDC.
+          </Para>
+          <Para>
+            Create a key: sign in at{' '}
+            <Link href="/dashboard" style={{ color: 'var(--green)', textDecoration: 'none' }}>
+              /dashboard
+            </Link>{' '}
+            with any email (you&apos;ll get a 6-digit login code), open the <strong>Keys</strong>{' '}
+            tab, and click <strong>New key</strong>. The raw token is shown once in a copy modal,
+            then stored as a salted hash — keep it in your password manager.
           </Para>
           <CodeBlock label="Header">{`X-Api-Key: cards402_a1b2c3d4e5f6...`}</CodeBlock>
           <Para>
