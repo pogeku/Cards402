@@ -15,70 +15,46 @@ Your operator gives you:
 curl -fsSL https://cards402.com/install-ows.sh | bash
 ```
 
-This installs the Open Wallet Standard CLI + Node bindings with Stellar support.
-
 ### 2. Create your wallet
 
 ```bash
-ows create-wallet my-agent
+ows wallet create --name my-agent
 ```
 
-This creates an encrypted wallet on your machine. Get your Stellar address:
+Find your Stellar address in the output — the line starting `stellar:pubnet →`.
 
-```bash
-ows get-wallet my-agent | grep stellar
-```
-
-**Tell your operator:** "Please send at least 3 XLM to `<your G... address>`"
-
-Wait for them to confirm funding, then verify:
-
-```bash
-ows get-balance my-agent stellar
-```
+**Tell your operator:** "Please send at least 3 XLM to `G...`" (your stellar address).
 
 ### 3. Buy a card
 
+Once funded, install the SDK and buy:
+
 ```bash
-cd /path/to/cards402/sdk
+npm install cards402
+```
 
-export CARDS402_API_KEY="<your key>"
-export CARDS402_API_URL="<your api url>"
+```javascript
+const { purchaseCardOWS } = require('cards402/ows');
 
-node -e "
-const { purchaseCardOWS } = require('./dist/ows');
-purchaseCardOWS({
-  apiKey: process.env.CARDS402_API_KEY,
-  baseUrl: process.env.CARDS402_API_URL,
+const card = await purchaseCardOWS({
+  apiKey: '<your key>',
+  baseUrl: '<your api_url>',
   walletName: 'my-agent',
   amountUsdc: '10.00',
   paymentAsset: 'xlm',
-}).then(r => {
-  console.log('Card:', r.number);
-  console.log('CVV:', r.cvv);
-  console.log('Expiry:', r.expiry);
-}).catch(e => console.error(e.message));
-"
+});
+
+console.log('Card:', card.number, 'CVV:', card.cvv, 'Exp:', card.expiry);
 ```
 
 ## Quick reference
 
-### Check balance
-```bash
-ows get-balance my-agent stellar
-```
-
-### Check budget
-```bash
-curl -s $CARDS402_API_URL/usage -H "X-Api-Key: $CARDS402_API_KEY"
-```
-
-### Check order status
-```bash
-curl -s $CARDS402_API_URL/orders/$ORDER_ID -H "X-Api-Key: $CARDS402_API_KEY"
-```
-
-When `phase` is `ready`, the `card` object has `number`, `cvv`, `expiry`.
+| Action | Command |
+|---|---|
+| Check wallet balance | `ows wallet get --name my-agent` |
+| Check spend budget | `curl $API_URL/usage -H "X-Api-Key: $KEY"` |
+| Check order status | `curl $API_URL/orders/$ID -H "X-Api-Key: $KEY"` |
+| List recent orders | `curl $API_URL/orders -H "X-Api-Key: $KEY"` |
 
 ## Errors
 
@@ -88,21 +64,7 @@ When `phase` is `ready`, the `card` object has `number`, `cvv`, `expiry`.
 | `spend_limit_exceeded` | Hit your daily/total budget |
 | `policy_requires_approval` | Operator must approve this amount |
 | `service_temporarily_unavailable` | Retry in a minute |
-| `rate_limit_exceeded` | Back off and retry |
 
-## Alternative: raw keypair (no OWS)
+## Timing
 
-If you manage your own Stellar secret key instead of OWS:
-
-```bash
-node -e "
-const { purchaseCard } = require('./dist/stellar');
-purchaseCard({
-  apiKey: process.env.CARDS402_API_KEY,
-  walletSecret: process.env.STELLAR_WALLET_SECRET,
-  baseUrl: process.env.CARDS402_API_URL,
-  amountUsdc: '10.00',
-  paymentAsset: 'xlm',
-}).then(r => console.log('Card:', r.number, 'CVV:', r.cvv, 'Exp:', r.expiry));
-"
-```
+Order → payment → card: **30–60 seconds**
