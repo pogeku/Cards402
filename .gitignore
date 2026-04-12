@@ -1,5 +1,3 @@
-# Never commit the backend — closed source, contains card procurement logic
-backend/
 
 # Environment files
 .env

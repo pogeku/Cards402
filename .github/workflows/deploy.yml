@@ -27,20 +27,21 @@ jobs:
             echo "=== Pulling latest ==="
             git pull origin main
 
-            echo "=== Installing SDK deps ==="
+            echo "=== Backend ==="
+            cd backend && npm ci --omit=dev && cd ..
+
+            echo "=== SDK ==="
             cd sdk && npm ci --production=false && npm run build && cd ..
 
-            echo "=== Installing web deps ==="
-            cd web && npm ci && npm run build && cd ..
+            echo "=== Web ==="
+            cd web && npm ci --ignore-scripts && cd ..
 
-            echo "=== Restarting web ==="
+            echo "=== Restarting services ==="
+            pm2 describe cards402-api > /dev/null 2>&1 && pm2 restart cards402-api || \
+              pm2 start "node src/index.js" --name cards402-api --cwd /opt/cards402/backend
+
             pm2 describe cards402-web > /dev/null 2>&1 && pm2 restart cards402-web || \
-              pm2 start "npm run start" --name cards402-web --cwd /opt/cards402/web -- -p 3100
+              pm2 start "npx next dev -p 3100" --name cards402-web --cwd /opt/cards402/web
 
-            echo "=== Copying skill.md + install script ==="
-            # These are served by nginx directly
-            cp skill.md /opt/cards402/skill.md
-            cp scripts/install-ows.sh /opt/cards402/scripts/install-ows.sh
-
-            echo "=== Deploy complete ==="
             pm2 save
+            echo "=== Deploy complete ==="
