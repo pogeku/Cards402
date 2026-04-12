@@ -539,6 +539,20 @@ function NewKeyResult({
   data: { key: string; webhook_secret: string; label: string | null };
   onClose: () => void;
 }) {
+  const [copied, setCopied] = useState(false);
+  const snippet = [
+    'Read https://cards402.com/skill.md',
+    'and set up this agent with:',
+    `  key: ${data.key}`,
+    '  api_url: api.cards402.com',
+  ].join('\n');
+
+  async function copy() {
+    await navigator.clipboard.writeText(snippet);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
   return (
     <div
       style={{
@@ -557,8 +571,8 @@ function NewKeyResult({
           border: '1px solid var(--green-border)',
           borderRadius: 12,
           padding: '2rem',
-          width: 520,
-          maxWidth: '90vw',
+          width: 620,
+          maxWidth: '92vw',
         }}
       >
         <div
@@ -569,79 +583,91 @@ function NewKeyResult({
             fontWeight: 700,
             textTransform: 'uppercase',
             letterSpacing: '0.06em',
-            marginBottom: '0.75rem',
+            marginBottom: '0.5rem',
           }}
         >
-          Key created — save these now
+          Send this to your new agent
         </div>
         <p
           style={{
             color: 'var(--muted)',
             fontSize: '0.8125rem',
             marginBottom: '1.25rem',
-            lineHeight: 1.6,
+            lineHeight: 1.55,
           }}
         >
-          These secrets will not be shown again. Store them securely before closing.
+          The key is shown once. Copy the whole block below and paste it to your agent — it tells
+          them how to set themselves up from scratch.
         </p>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
-          <div>
-            <div
-              style={{
-                fontSize: '0.7rem',
-                fontFamily: 'var(--font-mono)',
-                color: 'var(--muted)',
-                marginBottom: '0.375rem',
-              }}
-            >
-              API KEY
-            </div>
-            <pre
-              style={{
-                background: 'var(--surface)',
-                border: '1px solid var(--border)',
-                borderRadius: 6,
-                padding: '0.75rem',
-                fontSize: '0.8125rem',
-                wordBreak: 'break-all',
-                margin: 0,
-                color: 'var(--green)',
-                fontFamily: 'var(--font-mono)',
-              }}
-            >
-              {data.key}
-            </pre>
-          </div>
-          <div>
-            <div
-              style={{
-                fontSize: '0.7rem',
-                fontFamily: 'var(--font-mono)',
-                color: 'var(--muted)',
-                marginBottom: '0.375rem',
-              }}
-            >
-              WEBHOOK SECRET
-            </div>
-            <pre
-              style={{
-                background: 'var(--surface)',
-                border: '1px solid var(--border)',
-                borderRadius: 6,
-                padding: '0.75rem',
-                fontSize: '0.8125rem',
-                wordBreak: 'break-all',
-                margin: 0,
-                fontFamily: 'var(--font-mono)',
-              }}
-            >
-              {data.webhook_secret}
-            </pre>
-          </div>
+        <div style={{ position: 'relative' }}>
+          <pre
+            style={{
+              background: 'var(--surface)',
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              padding: '1rem 1.125rem',
+              fontSize: '0.8125rem',
+              lineHeight: 1.55,
+              margin: 0,
+              fontFamily: 'var(--font-mono)',
+              whiteSpace: 'pre',
+              overflowX: 'auto',
+              color: 'var(--fg)',
+            }}
+          >
+            {snippet}
+          </pre>
+          <button
+            onClick={copy}
+            style={{
+              position: 'absolute',
+              top: '0.625rem',
+              right: '0.625rem',
+              background: copied ? 'var(--green)' : 'var(--bg)',
+              color: copied ? '#000' : 'var(--fg)',
+              border: '1px solid var(--border)',
+              borderRadius: 6,
+              padding: '0.25rem 0.625rem',
+              fontSize: '0.6875rem',
+              fontFamily: 'var(--font-mono)',
+              cursor: 'pointer',
+              fontWeight: 600,
+            }}
+          >
+            {copied ? 'Copied' : 'Copy'}
+          </button>
         </div>
+        <details style={{ marginTop: '1.25rem' }}>
+          <summary
+            style={{
+              color: 'var(--muted)',
+              fontSize: '0.75rem',
+              fontFamily: 'var(--font-mono)',
+              cursor: 'pointer',
+              userSelect: 'none',
+            }}
+          >
+            Webhook secret (only if the agent wants push notifications)
+          </summary>
+          <pre
+            style={{
+              background: 'var(--surface)',
+              border: '1px solid var(--border)',
+              borderRadius: 6,
+              padding: '0.625rem 0.75rem',
+              fontSize: '0.75rem',
+              wordBreak: 'break-all',
+              margin: '0.625rem 0 0',
+              fontFamily: 'var(--font-mono)',
+              color: 'var(--muted)',
+            }}
+          >
+            {data.webhook_secret}
+          </pre>
+        </details>
         <div style={{ marginTop: '1.5rem', display: 'flex', justifyContent: 'flex-end' }}>
           <button style={btnStyle('primary')} onClick={onClose}>
-            I&apos;ve saved these
+            Done
           </button>
         </div>
       </div>
