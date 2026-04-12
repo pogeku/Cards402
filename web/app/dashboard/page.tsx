@@ -217,8 +217,6 @@ function CreateKeyModal({
   }) => void;
 }) {
   const [label, setLabel] = useState('');
-  const [spendLimit, setSpendLimit] = useState('');
-  const [approvalAbove, setApprovalAbove] = useState('');
   const [err, setErr] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -226,8 +224,6 @@ function CreateKeyModal({
     setSaving(true);
     setErr('');
     const body: Record<string, string | null> = { label: label || null };
-    if (spendLimit) body.spend_limit_usdc = spendLimit;
-    if (approvalAbove) body.policy_require_approval_above_usdc = approvalAbove;
     const res = await fetch(`${API_BASE}/dashboard/api-keys`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -286,44 +282,6 @@ function CreateKeyModal({
               value={label}
               onChange={(e) => setLabel(e.target.value)}
               placeholder="e.g. research-bot-1"
-            />
-          </div>
-          <div>
-            <label
-              style={{
-                fontSize: '0.75rem',
-                color: 'var(--muted)',
-                fontFamily: 'var(--font-mono)',
-                display: 'block',
-                marginBottom: '0.375rem',
-              }}
-            >
-              Spend limit (USDC)
-            </label>
-            <input
-              style={inputStyle}
-              value={spendLimit}
-              onChange={(e) => setSpendLimit(e.target.value)}
-              placeholder="e.g. 100.00 (leave blank for unlimited)"
-            />
-          </div>
-          <div>
-            <label
-              style={{
-                fontSize: '0.75rem',
-                color: 'var(--muted)',
-                fontFamily: 'var(--font-mono)',
-                display: 'block',
-                marginBottom: '0.375rem',
-              }}
-            >
-              Require approval above (USDC)
-            </label>
-            <input
-              style={inputStyle}
-              value={approvalAbove}
-              onChange={(e) => setApprovalAbove(e.target.value)}
-              placeholder="e.g. 50.00 (blank = never)"
             />
           </div>
           {err && <p style={{ color: '#f87171', fontSize: '0.8125rem', margin: 0 }}>{err}</p>}
