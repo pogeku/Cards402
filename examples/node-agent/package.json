@@ -6,6 +6,6 @@
     "start": "node index.mjs"
   },
   "dependencies": {
-    "cards402": "^0.1.0"
+    "@ctx.com/cards402": "^0.1.0"
   }
 }

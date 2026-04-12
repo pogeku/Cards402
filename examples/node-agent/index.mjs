@@ -3,13 +3,13 @@
  * cards402 Node.js agent example — order a $2 virtual Visa card using XLM.
  *
  * Prerequisites:
- *   1. npm install cards402
+ *   1. npm install @ctx.com/cards402
  *   2. Set environment variables:
  *      - CARDS402_API_KEY   — from your cards402 dashboard
  *      - OWS_WALLET_NAME   — your OWS encrypted wallet name
  *      - (Optional) OWS_WALLET_PASSPHRASE
- *   3. Fund your OWS wallet with at least 5 XLM (run setup_wallet via MCP
- *      or manually: npx cards402-mcp then call setup_wallet)
+ *   3. Fund the wallet's public key (printed by createOWSWallet) with
+ *      enough XLM or USDC for the order plus ~2 XLM for reserves/fees.
  *
  * Run:
  *   node index.mjs
@@ -21,7 +21,7 @@
  *   4. Prints the card number, CVV, and expiry
  */
 
-import { Cards402Client, purchaseCardOWS } from 'cards402';
+import { Cards402Client, purchaseCardOWS } from '@ctx.com/cards402';
 
 const API_KEY = process.env.CARDS402_API_KEY;
 const BASE_URL = process.env.CARDS402_BASE_URL || 'https://api.cards402.com/v1';

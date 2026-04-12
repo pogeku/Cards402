@@ -89,13 +89,13 @@ The cards402 MCP server exposes four tools that handle the entire flow:
 Setup:
 
   1. Install the MCP server:
-       npx -y cards402-mcp
+       npx -y @ctx.com/cards402
      or add to your MCP config:
        {
          "mcpServers": {
            "cards402": {
              "command": "npx",
-             "args": ["-y", "cards402-mcp"],
+             "args": ["-y", "@ctx.com/cards402"],
              "env": { "CARDS402_API_KEY": "cards402_<your key>" }
            }
          }
@@ -119,11 +119,11 @@ Setup:
 PATH 2: TYPESCRIPT/NODE SDK (for agents that run Node.js)
 ────────────────────────────────────────────────────────────────────────────────
 
-  npm install cards402
+  npm install @ctx.com/cards402
 
 Minimal example (XLM payment):
 
-  import { purchaseCardOWS, createOWSWallet, getOWSPublicKey } from 'cards402';
+  import { purchaseCardOWS, createOWSWallet, getOWSPublicKey } from '@ctx.com/cards402';
 
   // First time: create wallet and fund it
   const { publicKey } = createOWSWallet('my-wallet');

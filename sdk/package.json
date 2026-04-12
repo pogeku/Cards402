@@ -1,7 +1,7 @@
 {
-  "name": "cards402",
+  "name": "@ctx.com/cards402",
   "version": "0.1.0",
-  "description": "Virtual Visa cards for AI agents — pay USDC or XLM on Stellar",
+  "description": "Virtual Visa cards for AI agents — pay USDC or XLM on Stellar, get a card in ~60s",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -15,7 +15,7 @@
     }
   },
   "bin": {
-    "cards402-mcp": "./dist/mcp.js"
+    "cards402": "./dist/mcp.js"
   },
   "files": [
     "dist",
@@ -47,9 +47,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/cards402/cards402"
+    "url": "https://github.com/CTX-com/Cards402"
   },
   "homepage": "https://cards402.com",
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@ctx.com/stellar-ows-core": "^1.3.0-stellar",
