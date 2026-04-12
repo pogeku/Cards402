@@ -1,4 +1,5 @@
 'use client';
+export const dynamic = 'force-dynamic';
 
 // Per-user dashboard — manage your agents (API keys), view orders, handle approvals.
 // Authenticated via email login code → session Bearer token.

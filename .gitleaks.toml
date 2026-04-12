@@ -1,0 +1,25 @@
+title = "cards402 gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures, obvious placeholders, and acknowledged historic leaks"
+
+paths = [
+  '''backend/test/helpers/env\.js''',
+  '''\.github/workflows/e2e-cross-repo\.yml''',
+]
+
+regexes = [
+  '''test-idempotency-key-[0-9]+''',
+  '''test-[a-z0-9-]+-at-least-[0-9]+-chars''',
+]
+
+# Historic finding: backend/test-scraper.js (deleted in a later commit)
+# contained a JWT redemption token for a $0.02 gift card that was
+# consumed during live E2E testing. The token is non-reusable.
+commits = [
+  "6d24d5ce82ea19fd9f234aae26bb813695e36da6",
+  "22599043625d9bcde9432b3fcdab0cbe8092961c",
+]
