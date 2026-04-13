@@ -16,6 +16,7 @@ const { v4: uuidv4 } = require('uuid');
 const crypto = require('crypto');
 const db = require('../db');
 const { sendLoginCode } = require('../lib/email');
+const { isPlatformOwner } = require('../lib/platform');
 
 const router = Router();
 
@@ -191,7 +192,15 @@ router.post('/verify', (req, res) => {
 
   res.json({
     token: rawToken,
-    user: { id: user.id, email: user.email, role: user.role },
+    user: {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      // Platform-owner is a deployment-level attribute (CARDS402_PLATFORM_OWNER_EMAIL).
+      // It controls whether the user sees system-level alerts and similar
+      // platform-operator UI. Distinct from the dashboard-scoped role.
+      is_platform_owner: isPlatformOwner(user.email),
+    },
     dashboard: { id: dashboard.id, name: dashboard.name },
   });
 });
@@ -229,7 +238,12 @@ router.get('/me', (req, res) => {
   // Wrap in { user } to match /auth/verify's response shape — both web
   // clients read data.user.role, so a flat response made /admin think a
   // real owner was a non-owner and redirect them to /dashboard.
-  res.json({ user: row });
+  res.json({
+    user: {
+      ...row,
+      is_platform_owner: isPlatformOwner(row.email),
+    },
+  });
 });
 
 module.exports = router;

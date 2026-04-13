@@ -520,6 +520,104 @@ applyMigration(15, () => {
   `);
 });
 
+// Migration 16: audit_log table. Every mutating dashboard action emits a
+// row so operators can reconstruct "who did what when". The details
+// column is JSON for forward-compatibility — new actions don't require
+// a schema change.
+applyMigration(16, () => {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      dashboard_id    TEXT NOT NULL,
+      actor_user_id   TEXT,
+      actor_email     TEXT NOT NULL,
+      actor_role      TEXT NOT NULL,
+      action          TEXT NOT NULL,
+      resource_type   TEXT,
+      resource_id     TEXT,
+      details         TEXT,
+      ip              TEXT,
+      user_agent      TEXT,
+      created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_log_dashboard  ON audit_log(dashboard_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_action     ON audit_log(action, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_actor      ON audit_log(actor_email, created_at DESC);
+  `);
+});
+
+// Migration 17: alert_rules + alert_firings. The evaluator runs against
+// each rule every 60s (see lib/alerts/evaluator.js). When a rule trips,
+// we append a row to alert_firings and fire the Discord webhook. Rules
+// are per-dashboard so team members can tune them independently.
+applyMigration(17, () => {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS alert_rules (
+      id              TEXT PRIMARY KEY,
+      dashboard_id    TEXT NOT NULL,
+      name            TEXT NOT NULL,
+      kind            TEXT NOT NULL,
+      config          TEXT NOT NULL DEFAULT '{}',
+      enabled         INTEGER NOT NULL DEFAULT 1,
+      snoozed_until   TEXT,
+      created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_alert_rules_dashboard ON alert_rules(dashboard_id, enabled);
+    CREATE TABLE IF NOT EXISTS alert_firings (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      rule_id         TEXT NOT NULL,
+      dashboard_id    TEXT NOT NULL,
+      fired_at        TEXT NOT NULL DEFAULT (datetime('now')),
+      context         TEXT,
+      notified        INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_alert_firings_rule  ON alert_firings(rule_id, fired_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_alert_firings_dash  ON alert_firings(dashboard_id, fired_at DESC);
+  `);
+});
+
+// Migration 18: webhook_deliveries log. Every outbound webhook we send
+// (fulfillment callbacks, test payloads) gets a row with the full
+// request body, response code, latency, and signing. Retained 30 days.
+applyMigration(18, () => {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS webhook_deliveries (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      dashboard_id    TEXT NOT NULL,
+      api_key_id      TEXT,
+      url             TEXT NOT NULL,
+      method          TEXT NOT NULL DEFAULT 'POST',
+      request_body    TEXT,
+      response_status INTEGER,
+      response_body   TEXT,
+      latency_ms      INTEGER,
+      error           TEXT,
+      signature       TEXT,
+      created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_dash ON webhook_deliveries(dashboard_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_key  ON webhook_deliveries(api_key_id, created_at DESC);
+  `);
+});
+
+// Migration 19: per-rule notification channels. A user-level alert
+// rule notifies the configured email and/or webhook URL when it fires;
+// system-level rules still go to the operator Discord webhook by
+// default but can override via the same columns.
+applyMigration(19, () => {
+  for (const sql of [
+    `ALTER TABLE alert_rules ADD COLUMN notify_email TEXT`,
+    `ALTER TABLE alert_rules ADD COLUMN notify_webhook_url TEXT`,
+  ]) {
+    try {
+      db.prepare(sql).run();
+    } catch (_) {
+      /* column already exists — safe */
+    }
+  }
+});
+
 // Audit A-5: post-migration sanity check. If a newer release has rolled
 // through here and bumped the on-disk schema beyond what this binary
 // knows about, fail hard instead of running against a schema we don't
@@ -530,7 +628,7 @@ applyMigration(15, () => {
 //
 // EXPECTED_SCHEMA_VERSION must match the last `applyMigration(N)` call
 // above. Bump it in lock-step with any new migration.
-const EXPECTED_SCHEMA_VERSION = 15;
+const EXPECTED_SCHEMA_VERSION = 19;
 const actualVersion = getSchemaVersion();
 if (actualVersion > EXPECTED_SCHEMA_VERSION) {
   console.error(

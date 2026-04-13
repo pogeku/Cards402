@@ -581,7 +581,32 @@ function startJobs() {
   checkAgentFundingStatus();
   setInterval(checkAgentFundingStatus, FUNDING_INTERVAL_MS);
 
+  // Alert evaluator — walks every enabled rule once a minute, fires
+  // Discord on new firings, persists history. Cheap + bounded, runs in
+  // the same process as everything else.
+  const ALERT_INTERVAL_MS = parseInt(process.env.ALERT_INTERVAL_MS || '60000', 10);
+  evaluateAlertsForAllDashboards().catch(() => {});
+  setInterval(
+    () => evaluateAlertsForAllDashboards().catch((err) => log(`alerts error: ${err.message}`)),
+    ALERT_INTERVAL_MS,
+  );
+
   log('background jobs started');
+}
+
+// Evaluate alert rules for every dashboard. Per-dashboard to honour
+// rules seeded under different operators once we have multi-user.
+async function evaluateAlertsForAllDashboards() {
+  const alerts = require('./lib/alerts');
+  const db = require('./db');
+  const rows = /** @type {any[]} */ (db.prepare(`SELECT id FROM dashboards`).all());
+  for (const row of rows) {
+    try {
+      await alerts.evaluateRules(row.id);
+    } catch (err) {
+      log(`alerts dashboard=${row.id} error: ${err.message}`);
+    }
+  }
 }
 
 module.exports = {

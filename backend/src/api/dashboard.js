@@ -8,13 +8,18 @@ const { v4: uuidv4 } = require('uuid');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 /** @type {any} */ const db = require('../db');
-const { enqueueWebhook } = require('../fulfillment');
+const { enqueueWebhook, fireWebhook: fireWebhookRaw } = require('../fulfillment');
 const { assertSafeUrl } = require('../lib/ssrf');
 const { recordDecision } = require('../policy');
 const { usdToXlm } = require('../payments/xlm-price');
 const requireAuth = require('../middleware/requireAuth');
 const requireDashboard = require('../middleware/requireDashboard');
 const { event: bizEvent } = require('../lib/logger');
+const { requirePermission } = require('../lib/permissions');
+const { recordAuditFromReq, listAudit } = require('../lib/audit');
+const alerts = require('../lib/alerts');
+const enabledMerchants = require('../lib/enabled-merchants');
+const webhookLog = require('../lib/webhook-log');
 
 const router = Router();
 
@@ -299,7 +304,7 @@ router.get('/api-keys', (req, res) => {
 });
 
 // POST /dashboard/api-keys — create a new agent API key
-router.post('/api-keys', async (req, res) => {
+router.post('/api-keys', requirePermission('agent:create'), async (req, res) => {
   const { label, spend_limit_usdc, default_webhook_url, wallet_public_key } = req.body;
   const validationErr = validateApiKeyFields(
     /** @type {any} */ ({ spend_limit_usdc, default_webhook_url, wallet_public_key }),
@@ -371,6 +376,11 @@ router.post('/api-keys', async (req, res) => {
     api_key_id: id,
     actor: req.user.email,
   });
+  recordAuditFromReq(req, 'agent.create', {
+    resourceType: 'agent',
+    resourceId: id,
+    details: { label: label || null },
+  });
 
   res.status(201).json({
     id,
@@ -388,7 +398,7 @@ router.post('/api-keys', async (req, res) => {
 });
 
 // PATCH /dashboard/api-keys/:id — update limits/policy
-router.patch('/api-keys/:id', async (req, res) => {
+router.patch('/api-keys/:id', requirePermission('agent:update'), async (req, res) => {
   const owned = db
     .prepare(`SELECT id FROM api_keys WHERE id = ? AND dashboard_id = ?`)
     .get(req.params.id, req.dashboard.id);
@@ -470,11 +480,16 @@ router.patch('/api-keys/:id', async (req, res) => {
     ...fields,
   });
 
+  recordAuditFromReq(req, 'agent.update', {
+    resourceType: 'agent',
+    resourceId: req.params.id,
+    details: fields,
+  });
   res.json({ ok: true });
 });
 
 // DELETE /dashboard/api-keys/:id
-router.delete('/api-keys/:id', (req, res) => {
+router.delete('/api-keys/:id', requirePermission('agent:delete'), (req, res) => {
   const result = db
     .prepare(`DELETE FROM api_keys WHERE id = ? AND dashboard_id = ?`)
     .run(req.params.id, req.dashboard.id);
@@ -484,11 +499,15 @@ router.delete('/api-keys/:id', (req, res) => {
     api_key_id: req.params.id,
     actor: req.user.email,
   });
+  recordAuditFromReq(req, 'agent.delete', {
+    resourceType: 'agent',
+    resourceId: req.params.id,
+  });
   res.json({ ok: true });
 });
 
 // POST /dashboard/api-keys/:id/suspend
-router.post('/api-keys/:id/suspend', (req, res) => {
+router.post('/api-keys/:id/suspend', requirePermission('agent:suspend'), (req, res) => {
   const result = db
     .prepare(`UPDATE api_keys SET suspended = 1 WHERE id = ? AND dashboard_id = ?`)
     .run(req.params.id, req.dashboard.id);
@@ -521,11 +540,15 @@ router.post('/api-keys/:id/suspend', (req, res) => {
     api_key_id: req.params.id,
     actor: req.user.email,
   });
+  recordAuditFromReq(req, 'agent.suspend', {
+    resourceType: 'agent',
+    resourceId: req.params.id,
+  });
   res.json({ ok: true });
 });
 
 // POST /dashboard/api-keys/:id/unsuspend
-router.post('/api-keys/:id/unsuspend', (req, res) => {
+router.post('/api-keys/:id/unsuspend', requirePermission('agent:suspend'), (req, res) => {
   const result = db
     .prepare(`UPDATE api_keys SET suspended = 0 WHERE id = ? AND dashboard_id = ?`)
     .run(req.params.id, req.dashboard.id);
@@ -534,6 +557,10 @@ router.post('/api-keys/:id/unsuspend', (req, res) => {
     dashboard_id: req.dashboard.id,
     api_key_id: req.params.id,
     actor: req.user.email,
+  });
+  recordAuditFromReq(req, 'agent.unsuspend', {
+    resourceType: 'agent',
+    resourceId: req.params.id,
   });
   res.json({ ok: true });
 });
@@ -561,86 +588,99 @@ router.get('/approval-requests', (req, res) => {
 });
 
 // POST /dashboard/approval-requests/:id/approve
-router.post('/approval-requests/:id/approve', async (req, res) => {
-  const approval = db
-    .prepare(
-      `
+router.post(
+  '/approval-requests/:id/approve',
+  requirePermission('approval:decide'),
+  async (req, res) => {
+    const approval = db
+      .prepare(
+        `
     SELECT ar.* FROM approval_requests ar
     JOIN api_keys k ON ar.api_key_id = k.id
     WHERE ar.id = ? AND k.dashboard_id = ?
   `,
-    )
-    .get(req.params.id, req.dashboard.id);
-  if (!approval) return res.status(404).json({ error: 'not_found' });
-  if (approval.status !== 'pending')
-    return res.status(409).json({ error: 'already_decided', current_status: approval.status });
-  // B-4: reject expired approvals — avoids dispatching a card after the approval window closed
-  if (new Date(approval.expires_at) <= new Date())
-    return res.status(410).json({ error: 'approval_expired' });
+      )
+      .get(req.params.id, req.dashboard.id);
+    if (!approval) return res.status(404).json({ error: 'not_found' });
+    if (approval.status !== 'pending')
+      return res.status(409).json({ error: 'already_decided', current_status: approval.status });
+    // B-4: reject expired approvals — avoids dispatching a card after the approval window closed
+    if (new Date(approval.expires_at) <= new Date())
+      return res.status(410).json({ error: 'approval_expired' });
 
-  // Build the Soroban receiver-contract payment instructions for the agent.
-  // VCC is not contacted until the Soroban watcher sees the agent's payment —
-  // so there's no vccJobId yet; that's assigned later in index.js handlePayment.
-  let xlmAmount = null;
-  try {
-    xlmAmount = await usdToXlm(String(approval.amount_usdc));
-  } catch (err) {
-    console.warn(`[dashboard] XLM price lookup failed: ${err.message}`);
-  }
-  const USDC_ISSUER =
-    process.env.STELLAR_USDC_ISSUER || 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
-  const contractPayment = {
-    type: 'soroban_contract',
-    contract_id: process.env.RECEIVER_CONTRACT_ID,
-    order_id: approval.order_id,
-    usdc: { amount: String(approval.amount_usdc), asset: `USDC:${USDC_ISSUER}` },
-    ...(xlmAmount && { xlm: { amount: xlmAmount } }),
-  };
+    // Build the Soroban receiver-contract payment instructions for the agent.
+    // VCC is not contacted until the Soroban watcher sees the agent's payment —
+    // so there's no vccJobId yet; that's assigned later in index.js handlePayment.
+    let xlmAmount = null;
+    try {
+      xlmAmount = await usdToXlm(String(approval.amount_usdc));
+    } catch (err) {
+      console.warn(`[dashboard] XLM price lookup failed: ${err.message}`);
+    }
+    const USDC_ISSUER =
+      process.env.STELLAR_USDC_ISSUER || 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
+    const contractPayment = {
+      type: 'soroban_contract',
+      contract_id: process.env.RECEIVER_CONTRACT_ID,
+      order_id: approval.order_id,
+      usdc: { amount: String(approval.amount_usdc), asset: `USDC:${USDC_ISSUER}` },
+      ...(xlmAmount && { xlm: { amount: xlmAmount } }),
+    };
 
-  const now = new Date().toISOString();
-  db.prepare(
-    `UPDATE approval_requests SET status = 'approved', decided_at = ?, decided_by = ?, decision_note = ? WHERE id = ?`,
-  ).run(now, req.user.email, req.body.note || null, req.params.id);
-  db.prepare(
-    `
+    const now = new Date().toISOString();
+    db.prepare(
+      `UPDATE approval_requests SET status = 'approved', decided_at = ?, decided_by = ?, decision_note = ? WHERE id = ?`,
+    ).run(now, req.user.email, req.body.note || null, req.params.id);
+    db.prepare(
+      `
     UPDATE orders
     SET status = 'pending_payment',
         vcc_payment_json = ?,
         updated_at = ?
     WHERE id = ?
   `,
-  ).run(JSON.stringify(contractPayment), now, approval.order_id);
-  recordDecision(
-    approval.api_key_id,
-    approval.order_id,
-    approval.amount_usdc,
-    'approved',
-    'owner_approved',
-    req.body.note || 'Approved by dashboard owner',
-  );
+    ).run(JSON.stringify(contractPayment), now, approval.order_id);
+    recordDecision(
+      approval.api_key_id,
+      approval.order_id,
+      approval.amount_usdc,
+      'approved',
+      'owner_approved',
+      req.body.note || 'Approved by dashboard owner',
+    );
 
-  const order = db.prepare(`SELECT * FROM orders WHERE id = ?`).get(approval.order_id);
-  const keyRow = db
-    .prepare(`SELECT webhook_secret, default_webhook_url FROM api_keys WHERE id = ?`)
-    .get(approval.api_key_id);
-  const webhookUrl = order?.webhook_url || keyRow?.default_webhook_url || null;
-  if (webhookUrl) {
-    enqueueWebhook(
-      webhookUrl,
-      {
+    const order = db.prepare(`SELECT * FROM orders WHERE id = ?`).get(approval.order_id);
+    const keyRow = db
+      .prepare(`SELECT webhook_secret, default_webhook_url FROM api_keys WHERE id = ?`)
+      .get(approval.api_key_id);
+    const webhookUrl = order?.webhook_url || keyRow?.default_webhook_url || null;
+    if (webhookUrl) {
+      enqueueWebhook(
+        webhookUrl,
+        {
+          order_id: approval.order_id,
+          status: 'pending_payment',
+          phase: 'awaiting_payment',
+          note: 'Approved.',
+        },
+        keyRow?.webhook_secret || null,
+      ).catch(() => {});
+    }
+    recordAuditFromReq(req, 'approval.approve', {
+      resourceType: 'approval',
+      resourceId: req.params.id,
+      details: {
         order_id: approval.order_id,
-        status: 'pending_payment',
-        phase: 'awaiting_payment',
-        note: 'Approved.',
+        amount_usdc: approval.amount_usdc,
+        note: req.body.note || null,
       },
-      keyRow?.webhook_secret || null,
-    ).catch(() => {});
-  }
-  res.json({ ok: true });
-});
+    });
+    res.json({ ok: true });
+  },
+);
 
 // POST /dashboard/approval-requests/:id/reject
-router.post('/approval-requests/:id/reject', (req, res) => {
+router.post('/approval-requests/:id/reject', requirePermission('approval:decide'), (req, res) => {
   const approval = db
     .prepare(
       `
@@ -685,7 +725,196 @@ router.post('/approval-requests/:id/reject', (req, res) => {
       keyRow?.webhook_secret || null,
     ).catch(() => {});
   }
+  recordAuditFromReq(req, 'approval.reject', {
+    resourceType: 'approval',
+    resourceId: req.params.id,
+    details: {
+      order_id: approval.order_id,
+      amount_usdc: approval.amount_usdc,
+      note,
+    },
+  });
   res.json({ ok: true });
+});
+
+// ── Alert rules ──────────────────────────────────────────────────────────────
+//
+// Alert rules split into SYSTEM (platform-operator-only) and USER (any
+// dashboard owner). System kinds are visible + editable only by the
+// caller flagged `req.user.is_platform_owner`. User kinds are scoped
+// to the caller's own dashboard via the existing dashboard_id JOIN
+// inside the evaluator (see lib/alerts.js).
+
+// GET /dashboard/alert-rules
+router.get('/alert-rules', requirePermission('alert:read'), (req, res) => {
+  const isPlatformOwner = !!req.user.is_platform_owner;
+  // Seed defaults for this dashboard if it has none yet. The seed
+  // function knows to skip system kinds for non-platform-owners.
+  alerts.seedDefaultRules(req.dashboard.id, { isPlatformOwner });
+  res.json({
+    rules: alerts.listRules(req.dashboard.id, { isPlatformOwner }),
+    available_kinds: isPlatformOwner ? alerts.KNOWN_KINDS : alerts.USER_KINDS,
+    is_platform_owner: isPlatformOwner,
+  });
+});
+
+// POST /dashboard/alert-rules
+router.post('/alert-rules', requirePermission('alert:write'), (req, res) => {
+  const { name, kind, config, notify_email, notify_webhook_url } = req.body || {};
+  if (!name || !kind) return res.status(400).json({ error: 'missing_fields' });
+  try {
+    const rule = alerts.createRule({
+      dashboardId: req.dashboard.id,
+      name: String(name).slice(0, 120),
+      kind: String(kind),
+      config: config || {},
+      notifyEmail: notify_email || null,
+      notifyWebhookUrl: notify_webhook_url || null,
+      isPlatformOwner: !!req.user.is_platform_owner,
+    });
+    recordAuditFromReq(req, 'alert.create', {
+      resourceType: 'alert_rule',
+      resourceId: rule?.id,
+      details: { kind, name },
+    });
+    res.status(201).json({ rule });
+  } catch (err) {
+    const msg = /** @type {Error} */ (err).message;
+    // Distinguish authz vs validation so the frontend can render a
+    // sensible error toast.
+    const status = /platform owner/i.test(msg) ? 403 : 400;
+    res.status(status).json({ error: 'invalid_rule', message: msg });
+  }
+});
+
+// PATCH /dashboard/alert-rules/:id
+router.patch('/alert-rules/:id', requirePermission('alert:write'), (req, res) => {
+  const { name, config, enabled, snoozedUntil, notify_email, notify_webhook_url } = req.body || {};
+  try {
+    const rule = alerts.updateRule(
+      req.dashboard.id,
+      req.params.id,
+      {
+        name,
+        config,
+        enabled,
+        snoozedUntil,
+        notifyEmail: notify_email,
+        notifyWebhookUrl: notify_webhook_url,
+      },
+      { isPlatformOwner: !!req.user.is_platform_owner },
+    );
+    if (!rule) return res.status(404).json({ error: 'not_found' });
+    recordAuditFromReq(req, 'alert.update', {
+      resourceType: 'alert_rule',
+      resourceId: req.params.id,
+      details: { name, enabled, snoozedUntil },
+    });
+    res.json({ rule });
+  } catch (err) {
+    const msg = /** @type {Error} */ (err).message;
+    res.status(/platform owner/i.test(msg) ? 403 : 400).json({
+      error: 'update_failed',
+      message: msg,
+    });
+  }
+});
+
+// DELETE /dashboard/alert-rules/:id
+router.delete('/alert-rules/:id', requirePermission('alert:write'), (req, res) => {
+  try {
+    const ok = alerts.deleteRule(req.dashboard.id, req.params.id, {
+      isPlatformOwner: !!req.user.is_platform_owner,
+    });
+    if (!ok) return res.status(404).json({ error: 'not_found' });
+    recordAuditFromReq(req, 'alert.delete', {
+      resourceType: 'alert_rule',
+      resourceId: req.params.id,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    const msg = /** @type {Error} */ (err).message;
+    res.status(/platform owner/i.test(msg) ? 403 : 400).json({
+      error: 'delete_failed',
+      message: msg,
+    });
+  }
+});
+
+// GET /dashboard/alert-firings
+router.get('/alert-firings', requirePermission('alert:read'), (req, res) => {
+  const q = /** @type {Record<string, any>} */ (req.query);
+  const firings = alerts.listFirings(req.dashboard.id, {
+    limit: q.limit ? parseInt(q.limit, 10) : undefined,
+    isPlatformOwner: !!req.user.is_platform_owner,
+  });
+  res.json({ firings });
+});
+
+// ── Merchants (cards402-enabled catalog) ─────────────────────────────────────
+
+// GET /dashboard/merchants
+router.get('/merchants', requirePermission('merchant:read'), (_req, res) => {
+  res.json({ merchants: enabledMerchants.listEnabledMerchants() });
+});
+
+// ── Webhook delivery log ─────────────────────────────────────────────────────
+
+// GET /dashboard/webhook-deliveries
+router.get('/webhook-deliveries', requirePermission('webhook:read'), (req, res) => {
+  const q = /** @type {Record<string, any>} */ (req.query);
+  const deliveries = webhookLog.listDeliveries(req.dashboard.id, {
+    limit: q.limit ? parseInt(q.limit, 10) : undefined,
+    apiKeyId: q.api_key_id ? String(q.api_key_id) : undefined,
+  });
+  res.json({ deliveries });
+});
+
+// POST /dashboard/webhook-deliveries/test
+// Fires a sample webhook to the caller-supplied URL so an operator can
+// verify their endpoint works before an agent goes live. Uses the
+// same `fireWebhook` helper so SSRF protection + signing + logging
+// all apply uniformly.
+router.post('/webhook-deliveries/test', requirePermission('webhook:test'), async (req, res) => {
+  const { url, webhook_secret } = req.body || {};
+  if (!url) return res.status(400).json({ error: 'missing_url' });
+
+  const testPayload = {
+    order_id: `test-${Date.now()}`,
+    status: 'delivered',
+    amount_usdc: '0.00',
+    payment_asset: 'usdc',
+    card: { number: '4111 1111 1111 1111', cvv: '123', expiry: '12/30', brand: 'VISA' },
+    test: true,
+  };
+
+  try {
+    await fireWebhookRaw(url, testPayload, webhook_secret || null, null);
+    recordAuditFromReq(req, 'webhook.test', {
+      resourceType: 'webhook',
+      details: { url },
+    });
+    res.json({ ok: true, note: 'Delivered — check webhook log for details' });
+  } catch (err) {
+    res.status(502).json({
+      error: 'delivery_failed',
+      message: /** @type {Error} */ (err).message,
+    });
+  }
+});
+
+// ── Audit log ─────────────────────────────────────────────────────────────────
+
+// GET /dashboard/audit-log
+router.get('/audit-log', requirePermission('audit:read'), (req, res) => {
+  const q = /** @type {Record<string, any>} */ (req.query);
+  const entries = listAudit(req.dashboard.id, {
+    limit: q.limit ? parseInt(q.limit, 10) : undefined,
+    offset: q.offset ? parseInt(q.offset, 10) : undefined,
+    action: q.action ? String(q.action) : undefined,
+    actor: q.actor ? String(q.actor) : undefined,
+  });
+  res.json({ entries });
 });
 
 // ── Policy audit log ──────────────────────────────────────────────────────────

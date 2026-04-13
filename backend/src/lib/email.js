@@ -233,4 +233,23 @@ async function sendSpendAlertEmail(ownerEmail, { keyLabel, pct, spentUsdc, limit
   });
 }
 
-module.exports = { sendLoginCode, sendApprovalEmail, sendSpendAlertEmail };
+// Generic alert dispatcher used by lib/alerts.js. Subject + body are
+// pre-rendered by the alert evaluator so the template stays simple.
+async function sendAlertEmail({ to, subject, body }) {
+  const transporter = getTransporter();
+  if (!transporter) return;
+  await transporter.sendMail({
+    from: from(),
+    to,
+    subject,
+    text: `${body}\n\n— cards402.com`,
+    html: wrap(subject, `<p>${escapeHtml(body)}</p>`),
+  });
+}
+
+module.exports = {
+  sendLoginCode,
+  sendApprovalEmail,
+  sendSpendAlertEmail,
+  sendAlertEmail,
+};

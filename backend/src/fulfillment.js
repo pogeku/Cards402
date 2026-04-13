@@ -88,11 +88,13 @@ async function fireWebhook(url, payload, webhookSecret, _log) {
   const body = JSON.stringify(payload);
   const headers = { 'Content-Type': 'application/json' };
 
+  let signatureHeader = null;
   if (webhookSecret) {
     const ts = String(Date.now());
     const sig = crypto.createHmac('sha256', webhookSecret).update(`${ts}.${body}`).digest('hex');
     headers['X-Cards402-Signature'] = `sha256=${sig}`;
     headers['X-Cards402-Timestamp'] = ts;
+    signatureHeader = headers['X-Cards402-Signature'];
   }
 
   // Pin to the resolved IP to close the DNS rebinding window.
@@ -107,6 +109,12 @@ async function fireWebhook(url, payload, webhookSecret, _log) {
     headers['Host'] = new URL(url).host; // original hostname:port
   }
 
+  const startedAt = Date.now();
+  const { recordWebhookDelivery } = require('./lib/webhook-log');
+  let responseStatus = null;
+  let responseBodyText = null;
+  let deliveryError = null;
+
   try {
     const res = await fetch(fetchUrl, {
       method: 'POST',
@@ -114,15 +122,35 @@ async function fireWebhook(url, payload, webhookSecret, _log) {
       body,
       signal: AbortSignal.timeout(10000),
     });
+    responseStatus = res.status;
+    try {
+      // Clone so we don't consume the body if a caller later reads it.
+      responseBodyText = (await res.clone().text()).slice(0, 2000);
+    } catch {
+      /* ignore — not all responses are readable */
+    }
     if (!res.ok) {
       recordCircuitFailure(origin);
+      deliveryError = `HTTP ${res.status}`;
       throw new Error(`webhook HTTP ${res.status}`);
     }
     recordCircuitSuccess(origin);
   } catch (err) {
     // AbortError / network failures also open the circuit on repeat.
     if (!/circuit open/.test(err.message)) recordCircuitFailure(origin);
+    deliveryError = deliveryError || err.message;
     throw err;
+  } finally {
+    recordWebhookDelivery({
+      url,
+      method: 'POST',
+      requestBody: payload,
+      responseStatus: responseStatus ?? undefined,
+      responseBody: responseBodyText ?? undefined,
+      latencyMs: Date.now() - startedAt,
+      error: deliveryError ?? undefined,
+      signature: signatureHeader ?? undefined,
+    });
   }
 }
 
