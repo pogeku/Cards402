@@ -157,7 +157,6 @@ const errors = [
     status: 400,
     meaning: 'amount_usdc is missing or not a positive number.',
   },
-  { code: 'invalid_payment_asset', status: 400, meaning: 'payment_asset must be "usdc" or "xlm".' },
   {
     code: 'spend_limit_exceeded',
     status: 403,
@@ -382,17 +381,6 @@ export default function DocsPage() {
                 </tr>
                 <tr>
                   <td>
-                    <Code>payment_asset</Code>
-                  </td>
-                  <td style={{ color: 'var(--muted)' }}>string</td>
-                  <td style={{ color: 'var(--muted)' }}>No</td>
-                  <td style={{ color: 'var(--muted)' }}>
-                    <Code>&quot;usdc&quot;</Code> (default) or <Code>&quot;xlm&quot;</Code>.
-                    Determines the payment asset and returned quote.
-                  </td>
-                </tr>
-                <tr>
-                  <td>
                     <Code>webhook_url</Code>
                   </td>
                   <td style={{ color: 'var(--muted)' }}>string</td>
@@ -401,20 +389,35 @@ export default function DocsPage() {
                     HTTPS URL to receive webhook POSTs on status changes.
                   </td>
                 </tr>
+                <tr>
+                  <td>
+                    <Code>metadata</Code>
+                  </td>
+                  <td style={{ color: 'var(--muted)' }}>object</td>
+                  <td style={{ color: 'var(--muted)' }}>No</td>
+                  <td style={{ color: 'var(--muted)' }}>
+                    Arbitrary JSON stored with the order and echoed back on every read.
+                  </td>
+                </tr>
               </tbody>
             </table>
           </div>
 
-          <SubTitle>Example — USDC payment</SubTitle>
+          <Para>
+            Asset choice happens at <strong>payment time</strong>, not order creation. The response
+            below always carries both a <Code>payment.usdc</Code> quote and a
+            <Code>payment.xlm</Code> quote — call <Code>pay_usdc()</Code> or <Code>pay_xlm()</Code>{' '}
+            on the Soroban contract with whichever asset you want to settle in.
+          </Para>
+
           <CodeBlock label="Request">
-            {`POST /orders
+            {`POST /v1/orders
 X-Api-Key: cards402_your_key_here
 Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000
 Content-Type: application/json
 
 {
   "amount_usdc": "25.00",
-  "payment_asset": "usdc",
   "webhook_url": "https://your-agent.com/webhook"
 }`}
           </CodeBlock>
@@ -422,12 +425,14 @@ Content-Type: application/json
             {`{
   "order_id": "a3f7c2d1-4e8b-4f0a-9c2d-1b3e5a7f9c0e",
   "status": "pending_payment",
+  "phase": "awaiting_payment",
+  "amount_usdc": "25.00",
   "payment": {
     "type": "soroban_contract",
     "contract_id": "CAAAA...cards402_receiver_contract...",
     "order_id": "a3f7c2d1-4e8b-4f0a-9c2d-1b3e5a7f9c0e",
     "usdc": {
-      "amount": "25.00",
+      "amount": "25.0000000",
       "asset": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
     },
     "xlm": { "amount": "192.84" }
@@ -441,21 +446,15 @@ Content-Type: application/json
 }`}
           </CodeBlock>
 
-          <SubTitle>Example — XLM payment</SubTitle>
+          <SubTitle>Skipping all of this with the CLI</SubTitle>
           <Para>
-            When <Code>payment_asset</Code> is <Code>&quot;xlm&quot;</Code>, the XLM amount is
-            quoted at the current market rate. The SDK calls <Code>pay_xlm()</Code> on the Soroban
-            contract with this exact amount — no memo or address handling required.
+            Most agents should never talk to the raw API. After{' '}
+            <Code>cards402 onboard --claim &lt;code&gt;</Code>, a single command handles
+            create-order → sign Soroban tx → stream → return card:
           </Para>
-          <CodeBlock label="Request">
-            {`POST /orders
-X-Api-Key: cards402_your_key_here
-Content-Type: application/json
-
-{
-  "amount_usdc": "25.00",
-  "payment_asset": "xlm"
-}`}
+          <CodeBlock label="Shell">
+            {`npx cards402 purchase --amount 25
+# optional: --asset usdc  (default: xlm)`}
           </CodeBlock>
           <CodeBlock label="Response — 201 Created">
             {`{

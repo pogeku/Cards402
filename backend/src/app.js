@@ -282,7 +282,7 @@ app.get('/v1/policy/check', (req, res) => {
 // an agent can POST the same state repeatedly without side-effects.
 app.post('/v1/agent/status', (req, res) => {
   const { emit: emitBusEvent } = require('./lib/event-bus');
-  const ALLOWED_STATES = new Set(['initializing', 'awaiting_funding']);
+  const ALLOWED_STATES = new Set(['initializing', 'awaiting_funding', 'funded']);
   const { state, wallet_public_key, detail } = req.body || {};
 
   if (state !== undefined && !ALLOWED_STATES.has(state)) {

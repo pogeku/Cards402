@@ -62,8 +62,64 @@ Ask your operator to send XLM or USDC to the Stellar address above.
 
 **The operator sees your setup progress live** in their cards402
 dashboard — your key moves through the state pill from "Minted" →
-"Setting up" → "Awaiting deposit" as the CLI runs. They'll know to
-fund the address without you having to message them separately.
+"Setting up" → "Awaiting deposit" → "Funded" as the CLI runs and
+the wallet receives its first deposit. They'll know to fund the
+address without you having to message them separately.
+
+## Purchasing a card
+
+When your user asks you to buy a card, run:
+
+```bash
+npx cards402 purchase --amount <USD>
+```
+
+Optional flags:
+
+- `--asset xlm` (default) or `--asset usdc`
+- `--wallet-name <name>` (default: the one set during onboard)
+
+`cards402 purchase` reads `~/.cards402/config.json` for the api key
+and wallet name, so you do not need to pass either. The command:
+
+1. Creates an order at `POST /v1/orders`
+2. Signs and submits the Soroban payment from the local OWS wallet
+3. Subscribes to the SSE stream `/v1/orders/:id/stream`
+4. Returns when the card is ready (~30–60s)
+5. Prints the card number, CVV, and expiry to stdout
+
+**Treat the output as secrets.** Save the PAN/CVV/expiry to a
+secrets store immediately. Do not log them, do not echo them back
+into chat transcripts, and do not send them to observability
+pipelines.
+
+Example:
+
+```bash
+$ npx cards402 purchase --amount 10
+→ Purchasing $10 card via XLM…
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ Card delivered
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Number: 4111 2345 6789 0123
+  CVV:    847
+  Expiry: 12/27
+  Brand:  Visa
+  Order:  3f8e2b91-4a6c-41ff-b2d3-9c1785a6e4f2
+```
+
+## Checking your wallet
+
+```bash
+npx cards402 wallet address   # print your Stellar G-address
+npx cards402 wallet balance   # show XLM + USDC balances from Horizon
+```
+
+Useful for:
+
+- Confirming a deposit landed before attempting a purchase
+- Reporting your address back to the operator if they ask again
 
 ## Trust notes for cautious agents
 

@@ -13,7 +13,7 @@ const AUTH_BASE = '/api/auth';
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface AgentState {
-  state: 'minted' | 'initializing' | 'awaiting_funding' | 'active';
+  state: 'minted' | 'initializing' | 'awaiting_funding' | 'funded' | 'active';
   label: string;
   detail: string | null;
   since: string | null;
@@ -46,12 +46,14 @@ const AGENT_STATE_COLORS: Record<string, string> = {
   minted: '#6b7280',
   initializing: '#facc15',
   awaiting_funding: '#fb923c',
+  funded: '#60a5fa',
   active: '#22c55e',
 };
 const AGENT_STATE_LABELS: Record<string, string> = {
   minted: 'Minted',
   initializing: 'Setting up',
   awaiting_funding: 'Awaiting deposit',
+  funded: 'Funded',
   active: 'Active',
 };
 

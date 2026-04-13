@@ -16,6 +16,7 @@ const STATE_LABELS = {
   minted: 'Minted',
   initializing: 'Setting up',
   awaiting_funding: 'Awaiting deposit',
+  funded: 'Funded',
   active: 'Active',
 };
 
@@ -53,7 +54,13 @@ function deriveAgentState(key) {
   }
 
   // Explicitly-reported transient states take precedence over 'minted'.
-  if (key.agent_state === 'initializing' || key.agent_state === 'awaiting_funding') {
+  // 'funded' is set by the background Horizon poller once the agent
+  // wallet has enough balance to transact (see jobs.js :: checkAgentFundingStatus).
+  if (
+    key.agent_state === 'initializing' ||
+    key.agent_state === 'awaiting_funding' ||
+    key.agent_state === 'funded'
+  ) {
     return {
       state: key.agent_state,
       label: STATE_LABELS[key.agent_state],

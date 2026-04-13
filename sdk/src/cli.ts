@@ -21,9 +21,15 @@ async function main(): Promise<number> {
 
 Usage:
   cards402 onboard --claim <code>    Set up an agent from a dashboard claim code
+  cards402 purchase --amount <USDC>  Buy a card using the wallet from onboard
+  cards402 wallet address            Print this agent's Stellar address
+  cards402 wallet balance            Print XLM + USDC balances from Horizon
   cards402 mcp                       Start the MCP server over stdio (default)
   cards402 version                   Print the SDK version
   cards402 --help                    Show this message
+
+All the 'purchase' and 'wallet' subcommands read ~/.cards402/config.json
+(written by 'cards402 onboard') so you don't need to pass an api key.
 
 Docs: https://cards402.com/docs
 Onboarding guide for agents: https://cards402.com/skill.md
@@ -41,6 +47,16 @@ Onboarding guide for agents: https://cards402.com/skill.md
   if (cmd === 'onboard') {
     const { onboardCommand } = await import('./commands/onboard');
     return onboardCommand(rest);
+  }
+
+  if (cmd === 'purchase' || cmd === 'buy') {
+    const { purchaseCommand } = await import('./commands/purchase');
+    return purchaseCommand(rest);
+  }
+
+  if (cmd === 'wallet') {
+    const { walletCommand } = await import('./commands/wallet');
+    return walletCommand(rest);
   }
 
   if (cmd === 'mcp') {

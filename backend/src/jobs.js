@@ -479,6 +479,78 @@ function pruneIdempotencyKeys() {
   if (result.changes > 0) log(`pruned ${result.changes} expired idempotency key(s)`);
 }
 
+// Poll Horizon for every agent wallet sitting in 'awaiting_funding'.
+// As soon as a wallet has enough XLM to pay the base reserve + any
+// balance, transition the api_keys row to 'funded' and emit an
+// agent_state event. Keeps the main dashboard pill in sync with
+// on-chain reality without requiring the agent's CLI to keep
+// reporting — the CLI disconnects after onboarding, so this is the
+// only way the dashboard finds out funds landed.
+async function checkAgentFundingStatus() {
+  const USDC_ISSUER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
+  const awaiting = /** @type {any[]} */ (
+    db
+      .prepare(
+        `SELECT id, wallet_public_key
+         FROM api_keys
+         WHERE agent_state = 'awaiting_funding'
+           AND wallet_public_key IS NOT NULL`,
+      )
+      .all()
+  );
+  if (awaiting.length === 0) return;
+
+  const { emit: emitBusEvent } = require('./lib/event-bus');
+  for (const row of awaiting) {
+    try {
+      const res = await fetch(`https://horizon.stellar.org/accounts/${row.wallet_public_key}`);
+      if (!res.ok) continue; // 404 = unactivated, try again next tick
+      const data = /** @type {any} */ (await res.json());
+      const balances = Array.isArray(data.balances) ? data.balances : [];
+      const xlmStr = balances.find((b) => b.asset_type === 'native')?.balance ?? '0';
+      const usdcStr =
+        balances.find(
+          (b) =>
+            b.asset_type === 'credit_alphanum4' &&
+            b.asset_code === 'USDC' &&
+            b.asset_issuer === USDC_ISSUER,
+        )?.balance ?? '0';
+      const xlm = parseFloat(xlmStr);
+      const usdc = parseFloat(usdcStr);
+      // Funded = at least 1 XLM past the Stellar base reserve, OR any
+      // spendable USDC. Both cases mean the wallet can actually
+      // attempt a purchase.
+      const funded = xlm >= 2 || usdc > 0;
+      if (!funded) continue;
+
+      db.prepare(
+        `UPDATE api_keys
+         SET agent_state = 'funded',
+             agent_state_at = @at,
+             agent_state_detail = @detail
+         WHERE id = @id`,
+      ).run({
+        id: row.id,
+        at: new Date().toISOString(),
+        detail: `xlm=${xlm.toFixed(4)} usdc=${usdc.toFixed(2)}`,
+      });
+      emitBusEvent('agent_state', {
+        api_key_id: row.id,
+        state: 'funded',
+        wallet_public_key: row.wallet_public_key,
+        detail: `xlm=${xlm.toFixed(4)} usdc=${usdc.toFixed(2)}`,
+      });
+    } catch (err) {
+      // Transient Horizon failure — retry next tick.
+      console.error(
+        `[jobs] funding check failed for ${row.id}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+}
+
 async function runJobs() {
   try {
     await expireStaleOrders();
@@ -493,9 +565,19 @@ async function runJobs() {
 }
 
 function startJobs() {
-  // Run immediately on startup, then every 5 minutes
+  // Main reconciler tick — the slow one. Order expiry, stuck-order
+  // recovery, webhook retries, etc. Safe to run at 5-minute cadence.
   runJobs();
   setInterval(runJobs, JOBS_INTERVAL_MS);
+
+  // Funding check — runs on its own fast interval because the user is
+  // actively waiting for the dashboard pill to flip after depositing.
+  // Horizon is cheap, the query is bounded (only awaiting_funding rows),
+  // and the emitted SSE event pushes to any open dashboard immediately.
+  const FUNDING_INTERVAL_MS = parseInt(process.env.FUNDING_CHECK_INTERVAL_MS || '15000', 10);
+  checkAgentFundingStatus();
+  setInterval(checkAgentFundingStatus, FUNDING_INTERVAL_MS);
+
   log('background jobs started');
 }
 

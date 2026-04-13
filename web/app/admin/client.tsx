@@ -40,7 +40,7 @@ interface Order {
 }
 
 interface AgentState {
-  state: 'minted' | 'initializing' | 'awaiting_funding' | 'active';
+  state: 'minted' | 'initializing' | 'awaiting_funding' | 'funded' | 'active';
   label: string;
   detail: string | null;
   since: string | null;
@@ -479,12 +479,14 @@ const AGENT_STATE_COLORS: Record<string, string> = {
   minted: '#6b7280', // grey — never seen
   initializing: '#facc15', // yellow — working on it
   awaiting_funding: '#fb923c', // orange — waiting on operator
+  funded: '#60a5fa', // blue — has balance, hasn't ordered yet
   active: '#22c55e', // green — delivered at least one order
 };
 const AGENT_STATE_LABELS: Record<string, string> = {
   minted: 'Minted',
   initializing: 'Setting up',
   awaiting_funding: 'Awaiting deposit',
+  funded: 'Funded',
   active: 'Active',
 };
 
