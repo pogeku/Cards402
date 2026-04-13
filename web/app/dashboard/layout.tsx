@@ -56,9 +56,14 @@ function ShellInner({ children }: { children: ReactNode }) {
       }}
     >
       <Sidebar />
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      <div
+        className="dashboard-backdrop"
+        style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}
+      >
         <Header />
-        <main style={{ flex: 1, overflowY: 'auto' }}>{children}</main>
+        <main style={{ flex: 1, overflowY: 'auto', position: 'relative', zIndex: 1 }}>
+          {children}
+        </main>
       </div>
       <FeedbackLauncher />
       <CommandPalette />

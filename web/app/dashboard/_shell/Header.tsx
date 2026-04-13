@@ -69,12 +69,13 @@ export function Header() {
 
   return (
     <header
+      className="dashboard-header"
       style={{
         height: 52,
         display: 'flex',
         alignItems: 'center',
-        gap: '1rem',
-        padding: '0 1.25rem',
+        gap: '0.75rem',
+        padding: '0 1rem',
         borderBottom: '1px solid var(--border)',
         background: 'var(--bg)',
         position: 'sticky',
@@ -82,13 +83,16 @@ export function Header() {
         zIndex: 20,
       }}
     >
-      <GlobalSearch />
+      <div style={{ flex: 1, minWidth: 0, maxWidth: 320 }}>
+        <GlobalSearch />
+      </div>
 
       <div style={{ flex: 1 }} />
 
       {/* Live indicator. Non-owners always see "Live"; platform owners
           see "Frozen" when the fulfillment circuit breaker trips. */}
       <div
+        className="dashboard-header-live"
         title={systemHealthy ? (isPlatformOwner ? 'Live — mainnet' : 'Live') : 'Fulfillment frozen'}
         style={{
           display: 'flex',
@@ -101,6 +105,8 @@ export function Header() {
           fontSize: '0.7rem',
           fontFamily: 'var(--font-mono)',
           color: systemHealthy ? 'var(--green)' : 'var(--red)',
+          whiteSpace: 'nowrap',
+          flexShrink: 0,
         }}
       >
         <span
@@ -115,10 +121,13 @@ export function Header() {
         {systemHealthy ? 'Live' : 'Frozen'}
       </div>
 
-      {/* Theme toggle */}
+      {/* Theme toggle — hidden on iPhone-SE-class viewports to make
+          room for the live pill, bell, and avatar. Theme preference
+          persists in localStorage so users only need to set it once. */}
       <button
         onClick={cycleTheme}
         title={`Theme: ${theme}`}
+        className="dashboard-header-theme"
         style={{
           width: 32,
           height: 32,
@@ -130,6 +139,7 @@ export function Header() {
           borderRadius: 6,
           color: 'var(--fg-muted)',
           cursor: 'pointer',
+          flexShrink: 0,
         }}
       >
         {theme === 'light' ? (
@@ -156,6 +166,7 @@ export function Header() {
           borderRadius: 6,
           color: 'var(--fg-muted)',
           cursor: 'pointer',
+          flexShrink: 0,
         }}
       >
         <SvgIcon d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0" />
@@ -185,7 +196,7 @@ export function Header() {
       </button>
 
       {/* Avatar / menu */}
-      <div style={{ position: 'relative' }}>
+      <div style={{ position: 'relative', flexShrink: 0 }}>
         <button
           onClick={() => setAvatarOpen((v) => !v)}
           style={{

@@ -460,7 +460,15 @@ pre {
     border-left: none !important;
     border-top: 1px solid var(--border) !important;
   }
-  /* Tables become horizontally scrollable instead of crunching columns. */
+  /* Overview "spend chart + system health" split collapses to a
+     single column. Same rule should hold for any other 2-col
+     dashboard split that uses .overview-split. */
+  .overview-split {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  /* Tables become horizontally scrollable instead of crunching columns.
+     The Card component's inner div sets overflow-x: auto when padding=0
+     so the min-width here doesn't blow out the parent. */
   table {
     min-width: 580px;
   }
@@ -474,6 +482,115 @@ pre {
      wrap into three lines on an iPhone SE. */
   .type-display {
     letter-spacing: -0.02em;
+  }
+  /* Live pill tightens to just the dot + 'Live' and the dashboard
+     header gap shrinks so the search, live, bell, and avatar all
+     fit on a 375px-wide viewport without the bell clipping. */
+  .dashboard-header {
+    gap: 0.5rem !important;
+    padding: 0 0.75rem !important;
+  }
+}
+
+@media (max-width: 480px) {
+  /* Theme toggle hides on the smallest viewport — preference is in
+     localStorage so it's set-once anyway. Reclaims a 32px column for
+     the bell and avatar. */
+  .dashboard-header-theme {
+    display: none !important;
+  }
+}
+
+/* ── Dashboard card scroll hint ───────────────────────────────────── */
+
+/* When a borderless table card overflows horizontally (mobile + tablet
+   viewports where the table forces min-width: 580px), fade the right
+   edge so users see there's more content to scroll to. We layer the
+   fade via a pseudo-element so it doesn't scroll with the content. */
+.dashboard-card-scroll {
+  position: relative;
+}
+.dashboard-card-scroll::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 32px;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--surface));
+  opacity: 0;
+  transition: opacity 0.3s var(--ease-out);
+}
+@media (max-width: 900px) {
+  .dashboard-card-scroll::after {
+    opacity: 1;
+  }
+}
+
+/* ── Dashboard backdrop texture ───────────────────────────────────── */
+
+/* Subtle dot-grid behind the main dashboard content area. Low enough
+   opacity to feel like texture, not decoration. Applied via a class
+   the dashboard layout wraps around the main column. */
+.dashboard-backdrop {
+  position: relative;
+}
+.dashboard-backdrop::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(180deg, black, transparent 60%);
+  -webkit-mask-image: linear-gradient(180deg, black, transparent 60%);
+  z-index: 0;
+}
+html[data-theme='light'] .dashboard-backdrop::before {
+  background-image: radial-gradient(circle, rgba(10, 10, 10, 0.045) 1px, transparent 1px);
+}
+
+/* ── Dashboard microinteractions ──────────────────────────────────── */
+
+/* KPI tile hover — quietly raise the border to the green accent and
+   lift one pixel. Subtle enough for a financial surface, just enough
+   to confirm the tile is interactive. */
+.kpi-tile:hover {
+  transform: translateY(-1px);
+  border-color: var(--green-border) !important;
+  box-shadow:
+    0 8px 24px -16px var(--green-glow),
+    0 0 0 1px var(--green-border) inset;
+}
+
+/* Table row hover — the global tr:hover already paints a subtle
+   surface tint; this adds a sliver of accent on the leading edge so
+   rows feel selectable without highlighting the whole row. */
+tbody tr {
+  position: relative;
+  transition: background 0.3s var(--ease-out);
+}
+tbody tr td:first-child {
+  position: relative;
+}
+tbody tr:hover td:first-child::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--green);
+  box-shadow: 0 0 12px var(--green-glow);
+  animation: row-accent-in 0.3s var(--ease-out) both;
+}
+@keyframes row-accent-in {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
   }
 }
 

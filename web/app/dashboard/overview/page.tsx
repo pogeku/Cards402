@@ -106,6 +106,7 @@ export default function OverviewPage() {
       </KpiRow>
 
       <div
+        className="overview-split"
         style={{
           display: 'grid',
           gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)',
