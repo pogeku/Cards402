@@ -636,6 +636,25 @@ applyMigration(20, () => {
   }
 });
 
+// Migration 21: per-code verify attempt counter for /auth/verify brute-force
+// protection. Adversarial audit F3: before this, /auth/verify had no
+// per-email failed-attempt tracking, so a 6-digit code could be guessed
+// across 10^6 attempts with nothing to stop it. Failed verifies increment
+// failed_attempts on every active code for the email; once any code
+// crosses the lockout threshold, all active codes for that email are
+// invalidated, forcing a fresh /auth/login.
+applyMigration(21, () => {
+  for (const sql of [
+    `ALTER TABLE auth_codes ADD COLUMN failed_attempts INTEGER NOT NULL DEFAULT 0`,
+  ]) {
+    try {
+      db.prepare(sql).run();
+    } catch (_) {
+      /* column already exists */
+    }
+  }
+});
+
 // Audit A-5: post-migration sanity check. If a newer release has rolled
 // through here and bumped the on-disk schema beyond what this binary
 // knows about, fail hard instead of running against a schema we don't
@@ -646,7 +665,7 @@ applyMigration(20, () => {
 //
 // EXPECTED_SCHEMA_VERSION must match the last `applyMigration(N)` call
 // above. Bump it in lock-step with any new migration.
-const EXPECTED_SCHEMA_VERSION = 20;
+const EXPECTED_SCHEMA_VERSION = 21;
 const actualVersion = getSchemaVersion();
 if (actualVersion > EXPECTED_SCHEMA_VERSION) {
   console.error(

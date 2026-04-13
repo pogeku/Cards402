@@ -14,6 +14,7 @@
 const { Router } = require('express');
 const { v4: uuidv4 } = require('uuid');
 const crypto = require('crypto');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const db = require('../db');
 const { sendLoginCode } = require('../lib/email');
 const { isPlatformOwner } = require('../lib/platform');
@@ -23,6 +24,36 @@ const router = Router();
 const CODE_TTL_MINUTES = 15;
 const CODE_MAX_PER_WINDOW = 3;
 const SESSION_TTL_DAYS = 7;
+
+// Adversarial audit F3 — OTP brute-force protection.
+//
+// The login code is 6 digits (10^6 possible values) and the old
+// /auth/verify had no per-IP throttling and no per-email failed-attempt
+// counter, so a 10M-request brute force could have guessed any active
+// code in under an hour. Two layers here:
+//
+//  1. Per-IP express-rate-limit on /auth/verify: 20 attempts per 10
+//     minutes is well above any legitimate user flow (they type one
+//     code once, maybe retype once if they fat-fingered) while cutting
+//     the keyspace-search rate by ~5 orders of magnitude.
+//
+//  2. Per-email failed-attempts lockout on the auth_codes row itself
+//     (see the inline logic in POST /auth/verify). After 5 bad tries,
+//     every active code for the email is marked used, forcing the user
+//     back through /auth/login to mint a fresh one.
+const VERIFY_FAILED_ATTEMPT_LIMIT = 5;
+const verifyLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  limit: 20,
+  keyGenerator: (req) => /** @type {any} */ (ipKeyGenerator)(req),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  handler: (req, res) =>
+    res.status(429).json({
+      error: 'too_many_attempts',
+      message: 'Too many verification attempts from this IP. Try again in a few minutes.',
+    }),
+});
 
 function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
@@ -116,7 +147,7 @@ router.post('/login', async (req, res) => {
 
 // ── POST /auth/verify ────────────────────────────────────────────────────────
 
-router.post('/verify', (req, res) => {
+router.post('/verify', verifyLimiter, (req, res) => {
   const { email, code } = req.body;
   if (!email || !code) {
     return res
@@ -143,6 +174,44 @@ router.post('/verify', (req, res) => {
     .run(now, addr, codeHash);
 
   if (used.changes === 0) {
+    // F3: bad code. Increment failed_attempts on every active code for this
+    // email (rather than only the exact row, because the attacker is trying
+    // code values they don't know — there's no "matching row" to tick).
+    // Once any active row exceeds the threshold we invalidate everything.
+    db.prepare(
+      `
+      UPDATE auth_codes
+      SET failed_attempts = failed_attempts + 1
+      WHERE email = ?
+        AND used_at IS NULL
+        AND datetime(expires_at) > datetime('now')
+    `,
+    ).run(addr);
+    const maxFails = /** @type {any} */ (
+      db
+        .prepare(
+          `
+      SELECT MAX(failed_attempts) AS m FROM auth_codes
+      WHERE email = ? AND used_at IS NULL AND datetime(expires_at) > datetime('now')
+    `,
+        )
+        .get(addr)
+    ).m;
+    if (maxFails !== null && maxFails >= VERIFY_FAILED_ATTEMPT_LIMIT) {
+      // Lock out: mark every active code used so further verify attempts
+      // can't make progress until the user requests a fresh code via
+      // /auth/login (which itself is rate-limited per email).
+      db.prepare(
+        `
+        UPDATE auth_codes SET used_at = ?
+        WHERE email = ? AND used_at IS NULL
+      `,
+      ).run(now, addr);
+      return res.status(429).json({
+        error: 'too_many_attempts',
+        message: 'Too many incorrect codes for this email. Request a new login code and try again.',
+      });
+    }
     return res.status(401).json({ error: 'invalid_code', message: 'Invalid or expired code.' });
   }
 

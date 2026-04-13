@@ -10,12 +10,25 @@
 // Each must be a 32-byte (64-hex) random value. Generate with:
 //   openssl rand -hex 32
 //
-// If no key is configured, `seal()` is a no-op (returns plaintext).
-// That is ONLY appropriate for local dev — in production the key MUST
-// be set, otherwise the claim endpoint will leak raw api_keys from
-// any DB dump.
+// If no key is configured, behaviour depends on NODE_ENV:
+//
+//   production → seal() throws. Silent plaintext fallback in prod is how
+//                claim payloads (raw api keys + webhook secrets) ended up
+//                stored plaintext in the 2026-04-13 adversarial audit
+//                (finding F5). The claim endpoint's entire purpose is to
+//                keep raw keys out of the DB and the chat transcript; if
+//                the key is missing in prod, we refuse to seal at all so
+//                the error surfaces at mint time rather than at restore.
+//
+//   test / dev → seal() returns plaintext (with a one-time warning). Local
+//                workflows and the test suite don't set the key and
+//                shouldn't need to.
 
 const crypto = require('crypto');
+
+function isProduction() {
+  return process.env.NODE_ENV === 'production';
+}
 
 function getKey() {
   const hex = process.env.CARDS402_SECRET_BOX_KEY || process.env.VCC_TOKEN_KEY;
@@ -23,16 +36,34 @@ function getKey() {
   return Buffer.from(hex, 'hex');
 }
 
+let warnedAboutMissingKey = false;
+
 /**
  * Seal a plaintext secret. Returns the stored form; idempotent for
- * already-sealed values.
+ * already-sealed values. Throws in production when no key is configured
+ * so callers cannot accidentally persist plaintext credentials.
  * @param {string} plaintext
  */
 function seal(plaintext) {
   if (typeof plaintext !== 'string') throw new Error('seal: plaintext must be a string');
   if (plaintext.startsWith('enc:')) return plaintext; // already sealed
   const key = getKey();
-  if (!key) return plaintext;
+  if (!key) {
+    if (isProduction()) {
+      throw new Error(
+        'secret-box: CARDS402_SECRET_BOX_KEY is required in production. ' +
+          'Generate one with `openssl rand -hex 32` and set it in the environment ' +
+          'before restarting the backend.',
+      );
+    }
+    if (!warnedAboutMissingKey) {
+      console.warn(
+        '[secret-box] CARDS402_SECRET_BOX_KEY not set — sealing as plaintext (dev/test only)',
+      );
+      warnedAboutMissingKey = true;
+    }
+    return plaintext;
+  }
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
   const ct = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);

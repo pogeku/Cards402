@@ -73,6 +73,28 @@ const EnvSchema = z
       .string()
       .regex(/^[0-9a-fA-F]{64}$/, 'ADMIN_SESSION_KEY must be 64 hex characters (32 bytes)')
       .optional(),
+
+    // Secret-box key — AES-256-GCM key used to seal short-lived secrets
+    // stored in the DB (agent claim payloads, etc). Required in production
+    // so the claim endpoint never persists raw api keys as plaintext.
+    // Adversarial audit finding F5.
+    CARDS402_SECRET_BOX_KEY: z
+      .string()
+      .regex(/^[0-9a-fA-F]{64}$/, 'CARDS402_SECRET_BOX_KEY must be 64 hex characters (32 bytes)')
+      .optional(),
+  })
+  .superRefine((val, ctx) => {
+    // Production must have a secret-box key set. Dev/test can skip it and
+    // fall back to plaintext-with-warning so local workflows don't break.
+    if (val.NODE_ENV === 'production' && !val.CARDS402_SECRET_BOX_KEY) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'CARDS402_SECRET_BOX_KEY is required in production. Generate one with ' +
+          '`openssl rand -hex 32` and set it in the environment before restarting.',
+        path: ['CARDS402_SECRET_BOX_KEY'],
+      });
+    }
   })
   .superRefine((val, ctx) => {
     // SMTP is all-or-nothing. If any SMTP_* var is set, they all must be set
