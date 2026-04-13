@@ -91,9 +91,17 @@ function resetDb() {
   db.prepare(`DELETE FROM sessions`).run();
   db.prepare(`DELETE FROM users`).run();
   db.prepare(`DELETE FROM auth_codes`).run();
+  // Phase 3 tables — audit, alerts, webhook deliveries. Tests that write
+  // to these need them cleared between cases so state doesn't leak.
+  db.prepare(`DELETE FROM audit_log`).run();
+  db.prepare(`DELETE FROM alert_rules`).run();
+  db.prepare(`DELETE FROM alert_firings`).run();
+  db.prepare(`DELETE FROM webhook_deliveries`).run();
   db.prepare(`UPDATE system_state SET value = '0' WHERE key = 'frozen'`).run();
   db.prepare(`UPDATE system_state SET value = '0' WHERE key = 'consecutive_failures'`).run();
   db.prepare(`DELETE FROM system_state WHERE key = 'vcc_token'`).run();
+  db.prepare(`DELETE FROM system_state WHERE key = 'ctx_refresh_token'`).run();
+  db.prepare(`DELETE FROM system_state WHERE key = 'ctx_access_token'`).run();
 }
 
 module.exports = { request, db, createTestKey, createTestSession, seedOrder, resetDb };

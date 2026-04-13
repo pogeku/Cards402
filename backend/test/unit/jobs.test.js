@@ -108,7 +108,11 @@ describe('recoverStuckOrders', () => {
     await recoverStuckOrders();
     const order = db.prepare(`SELECT status, error FROM orders WHERE id = ?`).get(id);
     assert.equal(order.status, 'failed');
-    assert.equal(order.error, 'ctx_unavailable');
+    // The error string is sanitised before hitting orders.error — raw
+    // internal codes ('ctx_unavailable') map to the generic public
+    // message so agents don't see implementation details.
+    const { publicMessage } = require('../../src/lib/sanitize-error');
+    assert.equal(order.error, publicMessage('ctx_unavailable'));
   });
 
   it('updates order to delivered when VCC reports delivered with card', async () => {

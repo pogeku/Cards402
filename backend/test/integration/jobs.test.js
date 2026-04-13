@@ -31,7 +31,10 @@ describe('recoverStuckOrders', () => {
 
     const order = db.prepare(`SELECT * FROM orders WHERE id = ?`).get(orderId);
     assert.equal(order.status, 'failed');
-    assert.equal(order.error, 'ctx_unavailable');
+    // Raw 'ctx_unavailable' is sanitised to a public-facing message
+    // before being stored in orders.error.
+    const { publicMessage } = require('../../src/lib/sanitize-error');
+    assert.equal(order.error, publicMessage('ctx_unavailable'));
   });
 
   it('ignores orders updated recently (<10 min)', async () => {

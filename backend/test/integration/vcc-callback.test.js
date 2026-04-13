@@ -226,14 +226,18 @@ describe('POST /vcc-callback — failed', () => {
       ['failed', 'refund_pending', 'refunded'].includes(order.status),
       `expected terminal-fail status, got ${order.status}`,
     );
-    assert.equal(order.error, 'ctx_unavailable');
+    const { publicMessage } = require('../../src/lib/sanitize-error');
+    // Raw 'ctx_unavailable' is sanitised before storage so agents never
+    // see internal error codes.
+    assert.equal(order.error, publicMessage('ctx_unavailable'));
   });
 
-  it('uses "fulfillment_failed" as default error when no error field provided', async () => {
+  it('uses a sanitised default error when no error field provided', async () => {
     const id = seedOrder();
     await postCallback({ order_id: id, status: 'failed' });
     const order = db.prepare(`SELECT error FROM orders WHERE id = ?`).get(id);
-    assert.equal(order.error, 'fulfillment_failed');
+    const { publicMessage } = require('../../src/lib/sanitize-error');
+    assert.equal(order.error, publicMessage('fulfillment_failed'));
   });
 
   it('is idempotent — second callback on failed order returns ok with note', async () => {

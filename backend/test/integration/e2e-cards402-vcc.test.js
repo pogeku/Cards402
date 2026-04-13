@@ -348,7 +348,9 @@ describe('e2e cards402 ↔ vcc: vcc reports failure', () => {
       ['failed', 'refund_pending', 'refunded'].includes(row.status),
       `expected terminal-fail status, got ${row.status}`,
     );
-    assert.equal(row.error, 'ctx_order_rejected');
+    const { publicMessage } = require('../../src/lib/sanitize-error');
+    const sanitized = publicMessage('ctx_order_rejected');
+    assert.equal(row.error, sanitized);
     if (row.status === 'refunded') {
       assert.equal(row.refund_stellar_txid, 'fake-refund-usdc-txhash');
     }
@@ -360,7 +362,7 @@ describe('e2e cards402 ↔ vcc: vcc reports failure', () => {
       ['failed', 'refunded'].includes(pollRes.body.phase),
       `expected terminal phase, got ${pollRes.body.phase}`,
     );
-    assert.equal(pollRes.body.error, 'ctx_order_rejected');
+    assert.equal(pollRes.body.error, sanitized);
   });
 });
 
