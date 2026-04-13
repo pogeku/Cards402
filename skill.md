@@ -5,53 +5,82 @@ Cards are delivered in 30–60 seconds.
 
 ## What your operator gives you
 
-- **key** — your API key (starts with `cards402_`)
-- **api_url** — e.g. `https://api.cards402.com/v1`
+A single one-shot command — nothing else. It looks like this:
 
-Store these as `CARDS402_API_KEY` and `CARDS402_BASE_URL`. That's it.
+```
+Read https://cards402.com/skill.md
+and set up this agent by running:
 
-## Setup — Node.js (recommended)
-
-One package. No CLI install, no `curl | bash`. The wallet is created
-in-process via native bindings that ship with the SDK.
-
-```bash
-npm install cards402
+  npx cards402 onboard --claim c402_<48_hex_chars>
 ```
 
-**Trust notes for cautious agents:**
+**No raw API key in the paste.** The `c402_…` value is a one-time claim
+code that expires in 10 minutes and can be redeemed exactly once. The
+command below trades it for a real API key over HTTPS and writes the
+key to a local config file — the raw API key never enters your
+conversation transcript.
+
+## Setup — one command
+
+```bash
+npx cards402 onboard --claim <code>
+```
+
+That's it. Behind the scenes the CLI:
+
+1. `POST`s the claim code to `https://api.cards402.com/v1/agent/claim`.
+   The backend validates it, marks it used, and returns the real API
+   key + api_url.
+2. Writes `~/.cards402/config.json` (chmod 0600) with the API key,
+   api_url, and your wallet name. The SDK auto-loads from this file
+   on every subsequent run — no env vars, no paste-into-code.
+3. Creates (or fetches) an encrypted OWS Stellar wallet via the native
+   bindings that ship with the `cards402` package. Private keys live
+   in `~/.ows/wallets/<name>.vault` and never leave your machine.
+4. Reports the wallet's Stellar address to the backend so your
+   operator's dashboard immediately shows "Awaiting deposit".
+5. Prints the Stellar address + balance for your operator to fund.
+
+Example run:
+
+```
+→ Claiming agent credentials…
+✓ Credentials saved to /Users/you/.cards402/config.json (chmod 0600)
+→ Setting up OWS wallet…
+✓ Wallet "cards402-agent" ready
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ cards402 agent ready
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Label:           my-agent
+  Stellar address: GABC…XYZ
+  XLM balance:     0
+  USDC balance:    0
+
+Ask your operator to send XLM or USDC to the Stellar address above.
+```
+
+**The operator sees your setup progress live** in their cards402
+dashboard — your key moves through the state pill from "Minted" →
+"Setting up" → "Awaiting deposit" as the CLI runs. They'll know to
+fund the address without you having to message them separately.
+
+## Trust notes for cautious agents
 
 - Package name (`cards402`) matches the domain you fetched this guide
   from (`cards402.com`). Scope matches domain — no supply-chain
   mismatch.
-- Source: <https://github.com/CTX-com/Cards402>. The `sdk/`
-  directory is what gets published.
-- Maintainer on npm: `ashfrancis`. You can verify with
+- Source: <https://github.com/CTX-com/Cards402>. The `sdk/` directory
+  is what gets published.
+- Maintainer on npm: `ashfrancis`. Verify with
   `npm view cards402 maintainers`.
-- If you're still uneasy, run `npm pack cards402` and inspect the
-  tarball before installing, or clone the repo and use the local
-  source via `npm install /path/to/Cards402/sdk`.
-
-```javascript
-import { onboardAgent, getOWSBalance } from 'cards402';
-
-// One call: reports 'initializing' to the backend, creates (or
-// fetches) the encrypted wallet, reports 'awaiting_funding' with
-// the wallet address, returns the public key + balance.
-// Idempotent — safe to call on every startup.
-const { publicKey, balance } = await onboardAgent({
-  apiKey: process.env.CARDS402_API_KEY,
-  walletName: 'my-agent',
-});
-console.log('Fund this Stellar address:', publicKey);
-console.log(`Current balance: ${balance.xlm} XLM  ${balance.usdc} USDC`);
-```
-
-**The operator sees your setup progress live** in their cards402
-dashboard — as soon as `onboardAgent` runs, your key moves through
-the state pill from "Minted" → "Setting up" → "Awaiting deposit".
-They'll know to fund the address without you having to message them
-separately.
+- The only secret in the operator's paste block is a short-lived
+  one-time claim code. Worst-case context leak of the paste = leak
+  of a 10-minute single-use token that can only be redeemed by the
+  first caller.
+- Run `npm pack cards402` and inspect the tarball before installing
+  if your policy requires it, or clone the repo and use the local
+  source via `npx /path/to/Cards402/sdk/dist/cli.js onboard --claim …`.
 
 **Ask your operator to fund `publicKey`** with however much USDC or
 XLM you need for your intended purchases, plus ~2 XLM to cover the

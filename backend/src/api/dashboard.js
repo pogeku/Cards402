@@ -340,6 +340,32 @@ router.post('/api-keys', async (req, res) => {
     dashboard_id: req.dashboard.id,
   });
 
+  // Mint a one-time claim code for the agent-facing onboarding flow.
+  // The agent runs `npx cards402 onboard --claim <code>` and the CLI
+  // trades the code for the real api_key via POST /v1/agent/claim —
+  // so the raw api_key never has to live in a pasted snippet (or the
+  // agent's conversation transcript).
+  const claimId = uuidv4();
+  const claimCode = `c402_${crypto.randomBytes(24).toString('hex')}`;
+  const claimTtlMs = 10 * 60 * 1000; // 10 min — long enough to paste + run, short enough to matter
+  const claimExpiresAt = new Date(Date.now() + claimTtlMs).toISOString();
+  const secretBox = require('../lib/secret-box');
+  const sealedPayload = secretBox.seal(
+    JSON.stringify({ api_key: rawKey, webhook_secret: webhookSecret }),
+  );
+  db.prepare(
+    `
+    INSERT INTO agent_claims (id, code, api_key_id, sealed_payload, expires_at)
+    VALUES (@id, @code, @api_key_id, @sealed_payload, @expires_at)
+  `,
+  ).run({
+    id: claimId,
+    code: claimCode,
+    api_key_id: id,
+    sealed_payload: sealedPayload,
+    expires_at: claimExpiresAt,
+  });
+
   bizEvent('dashboard.key_created', {
     dashboard_id: req.dashboard.id,
     api_key_id: id,
@@ -352,6 +378,11 @@ router.post('/api-keys', async (req, res) => {
     webhook_secret: webhookSecret,
     label: label || null,
     wallet_public_key: wallet_public_key || null,
+    claim: {
+      code: claimCode,
+      expires_at: claimExpiresAt,
+      ttl_ms: claimTtlMs,
+    },
     warning: 'Store the key and webhook_secret securely — they will not be shown again.',
   });
 });

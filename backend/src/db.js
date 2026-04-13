@@ -481,6 +481,45 @@ applyMigration(14, () => {
   }
 });
 
+// Migration 15: one-time claim codes for agent onboarding.
+//
+// An operator mints a new api_key in the dashboard. Instead of pasting
+// the raw api_key into the agent's conversation context (where it
+// lives forever in the transcript / LLM logs / model memory), the
+// dashboard mints a one-time claim code and only shows that in the
+// "Send this to your new agent" snippet.
+//
+// The agent runs `npx cards402 onboard --claim <code>`. The CLI hits
+// POST /v1/agent/claim, the backend validates the code (exists, not
+// used, not expired), atomically marks it used, and returns the raw
+// api_key to the agent over HTTPS. The agent writes it to a local
+// config file (~/.cards402/config.json) and the SDK loads from there.
+//
+// Net effect: the raw api_key never enters the conversation transcript.
+// Worst-case leak of the snippet = leak of a one-time 10-minute claim
+// code, which is dead the moment the agent uses it. Revoke-from-dashboard
+// remains the recovery path if the agent's machine itself is compromised.
+applyMigration(15, () => {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agent_claims (
+      id                TEXT PRIMARY KEY,
+      code              TEXT NOT NULL UNIQUE,
+      api_key_id        TEXT NOT NULL,
+      -- Sealed via lib/secret-box (AES-256-GCM with CARDS402_SECRET_BOX_KEY).
+      -- Contains the raw 'cards402_...' api key so the claim endpoint can
+      -- return it exactly once. DB dump alone doesn't leak the key, because
+      -- the sealing key lives in the env.
+      sealed_payload    TEXT NOT NULL,
+      created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+      expires_at        TEXT NOT NULL,
+      used_at           TEXT,
+      claimed_ip        TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_claims_code ON agent_claims(code);
+    CREATE INDEX IF NOT EXISTS idx_agent_claims_api_key ON agent_claims(api_key_id);
+  `);
+});
+
 // Audit A-5: post-migration sanity check. If a newer release has rolled
 // through here and bumped the on-disk schema beyond what this binary
 // knows about, fail hard instead of running against a schema we don't
@@ -491,7 +530,7 @@ applyMigration(14, () => {
 //
 // EXPECTED_SCHEMA_VERSION must match the last `applyMigration(N)` call
 // above. Bump it in lock-step with any new migration.
-const EXPECTED_SCHEMA_VERSION = 14;
+const EXPECTED_SCHEMA_VERSION = 15;
 const actualVersion = getSchemaVersion();
 if (actualVersion > EXPECTED_SCHEMA_VERSION) {
   console.error(

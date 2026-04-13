@@ -596,16 +596,36 @@ function NewKeyResult({
   data,
   onClose,
 }: {
-  data: { key: string; webhook_secret: string; label: string | null };
+  data: {
+    key: string;
+    webhook_secret: string;
+    label: string | null;
+    claim?: { code: string; expires_at: string; ttl_ms: number };
+  };
   onClose: () => void;
 }) {
   const [copied, setCopied] = useState(false);
-  const snippet = [
-    'Read https://cards402.com/skill.md',
-    'and set up this agent with:',
-    `  key: ${data.key}`,
-    '  api_url: https://api.cards402.com/v1',
-  ].join('\n');
+  // Prefer the claim-based snippet if the backend returned one (new flow).
+  // The raw api key stays behind a reveal for power users who want to
+  // use the SDK without going through `cards402 onboard`.
+  const snippet = data.claim
+    ? [
+        'Read https://cards402.com/skill.md',
+        'and set up this agent by running:',
+        '',
+        `  npx cards402 onboard --claim ${data.claim.code}`,
+        '',
+        'That one command trades the code for a fresh api key, stores',
+        'it locally, creates a Stellar wallet, and registers with the',
+        'cards402 dashboard. The code is one-shot and expires in 10',
+        'minutes — mint a new one if it runs out.',
+      ].join('\n')
+    : [
+        'Read https://cards402.com/skill.md',
+        'and set up this agent with:',
+        `  key: ${data.key}`,
+        '  api_url: https://api.cards402.com/v1',
+      ].join('\n');
 
   async function copy() {
     await navigator.clipboard.writeText(snippet);
@@ -656,8 +676,9 @@ function NewKeyResult({
             lineHeight: 1.55,
           }}
         >
-          The key is shown once. Copy the whole block below and paste it to your agent — it tells
-          them how to set themselves up from scratch.
+          {data.claim
+            ? 'Copy the whole block below and paste it to your agent. The one-time code expires in 10 minutes — the raw api key never leaves your dashboard.'
+            : 'The key is shown once. Copy the whole block below and paste it to your agent — it tells them how to set themselves up from scratch.'}
         </p>
         <div style={{ position: 'relative' }}>
           <pre

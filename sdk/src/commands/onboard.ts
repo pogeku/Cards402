@@ -1,0 +1,174 @@
+// `cards402 onboard --claim <code>` — one-shot agent setup.
+//
+// 1. Trade the one-time claim code for the real api key via
+//    POST /v1/agent/claim. The raw api key is returned over HTTPS, not
+//    pasted into the agent's conversation transcript.
+// 2. Persist the api key + api_url in ~/.cards402/config.json (0600)
+//    so the SDK can load it automatically on future runs.
+// 3. Create (or fetch) the OWS wallet under a default name. Private
+//    keys never leave the local OWS vault.
+// 4. Report the wallet address to the backend so the operator sees
+//    "Awaiting deposit" in their dashboard immediately.
+// 5. Print the Stellar address + next steps.
+
+import { saveCards402Config } from '../config';
+import { createOWSWallet, getOWSBalance } from '../ows';
+import { Cards402Client } from '../client';
+
+interface OnboardArgs {
+  claim?: string;
+  walletName?: string;
+  apiBase?: string;
+  help?: boolean;
+}
+
+function parseArgs(argv: string[]): OnboardArgs {
+  const out: OnboardArgs = {};
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === undefined) continue;
+    if (arg === '--help' || arg === '-h') out.help = true;
+    else if (arg === '--claim') out.claim = argv[++i];
+    else if (arg.startsWith('--claim=')) out.claim = arg.slice('--claim='.length);
+    else if (arg === '--wallet-name') out.walletName = argv[++i];
+    else if (arg.startsWith('--wallet-name=')) out.walletName = arg.slice('--wallet-name='.length);
+    else if (arg === '--api-base') out.apiBase = argv[++i];
+    else if (arg.startsWith('--api-base=')) out.apiBase = arg.slice('--api-base='.length);
+  }
+  return out;
+}
+
+function usage(): void {
+  process.stderr
+    .write(`Usage: cards402 onboard --claim <code> [--wallet-name <name>] [--api-base <url>]
+
+Exchanges a one-time claim code (from the cards402 dashboard) for an
+api key, creates an OWS Stellar wallet, and registers its address with
+the backend so your operator sees live setup progress.
+
+The raw api key is stored at ~/.cards402/config.json (chmod 0600) and
+is auto-loaded by the SDK on subsequent runs. You do NOT need to paste
+the api key into any env var yourself.
+
+Options:
+  --claim <code>         One-time claim code from the dashboard. Required.
+  --wallet-name <name>   Name for the OWS wallet. Default: cards402-agent
+  --api-base <url>       Override the default https://api.cards402.com/v1
+  -h, --help             Show this message
+`);
+}
+
+export async function onboardCommand(argv: string[]): Promise<number> {
+  const args = parseArgs(argv);
+  if (args.help) {
+    usage();
+    return 0;
+  }
+  if (!args.claim) {
+    process.stderr.write('error: --claim <code> is required\n\n');
+    usage();
+    return 2;
+  }
+
+  const apiBase = args.apiBase || process.env.CARDS402_BASE_URL || 'https://api.cards402.com/v1';
+  const walletName = args.walletName || 'cards402-agent';
+
+  // Step 1 — trade claim code for api key.
+  process.stdout.write('→ Claiming agent credentials…\n');
+  let claimResponse: {
+    api_key: string;
+    webhook_secret: string | null;
+    api_key_id: string;
+    label: string | null;
+    api_url: string;
+  };
+  try {
+    const res = await fetch(`${apiBase}/agent/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: args.claim }),
+    });
+    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!res.ok) {
+      process.stderr.write(
+        `error: claim failed (HTTP ${res.status}): ${
+          (data.message as string) || (data.error as string) || 'unknown'
+        }\n`,
+      );
+      process.stderr.write(
+        'If the code is expired, ask your operator to mint a new one in the cards402 dashboard.\n',
+      );
+      return 1;
+    }
+    claimResponse = data as unknown as typeof claimResponse;
+  } catch (err) {
+    process.stderr.write(`error: network failure during claim: ${String(err)}\n`);
+    return 1;
+  }
+
+  // Step 2 — persist config so the SDK finds it on next run.
+  const { path: configPath } = saveCards402Config({
+    api_key: claimResponse.api_key,
+    api_url: claimResponse.api_url || apiBase,
+    webhook_secret: claimResponse.webhook_secret,
+    wallet_name: walletName,
+    created_at: new Date().toISOString(),
+  });
+  process.stdout.write(`✓ Credentials saved to ${configPath} (chmod 0600)\n`);
+
+  // Step 3 — create or fetch the OWS wallet.
+  process.stdout.write('→ Setting up OWS wallet…\n');
+  const client = new Cards402Client({
+    apiKey: claimResponse.api_key,
+    baseUrl: claimResponse.api_url || apiBase,
+  });
+  await client.reportStatus('initializing', { detail: 'creating wallet' }).catch(() => {});
+
+  let publicKey: string;
+  try {
+    const created = createOWSWallet(walletName);
+    publicKey = created.publicKey;
+  } catch (err) {
+    process.stderr.write(
+      `error: wallet creation failed: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    return 1;
+  }
+  process.stdout.write(`✓ Wallet "${walletName}" ready\n`);
+
+  // Step 4 — check balance (may 404 on an unactivated account; that's fine).
+  let balance = { xlm: '0', usdc: '0' };
+  try {
+    balance = await getOWSBalance(walletName);
+  } catch {
+    /* account not yet activated on-chain — normal on first run */
+  }
+
+  // Step 5 — report wallet address so the dashboard pill flips to "Awaiting deposit".
+  await client
+    .reportStatus('awaiting_funding', {
+      wallet_public_key: publicKey,
+      detail: `xlm=${balance.xlm} usdc=${balance.usdc}`,
+    })
+    .catch(() => {});
+
+  // Step 6 — print the funding instructions.
+  process.stdout.write('\n');
+  process.stdout.write('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+  process.stdout.write(' cards402 agent ready\n');
+  process.stdout.write('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+  process.stdout.write(`  Label:          ${claimResponse.label ?? '(none)'}\n`);
+  process.stdout.write(`  Stellar address: ${publicKey}\n`);
+  process.stdout.write(`  XLM balance:    ${balance.xlm}\n`);
+  process.stdout.write(`  USDC balance:   ${balance.usdc}\n`);
+  process.stdout.write('\n');
+  process.stdout.write('Ask your operator to send XLM or USDC to the Stellar address above.\n');
+  process.stdout.write(
+    'Once the wallet has funds, call purchaseCardOWS({ walletName }) to buy a card.\n',
+  );
+  process.stdout.write(
+    'The operator will see your setup state update live in the cards402 dashboard.\n',
+  );
+  process.stdout.write('\n');
+  return 0;
+}

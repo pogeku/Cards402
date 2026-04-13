@@ -116,6 +116,102 @@ app.get('/api/version', versionLimiter, (_req, res) => {
   });
 });
 
+// POST /v1/agent/claim — unauthenticated one-shot claim endpoint.
+// The agent posts a code minted by the dashboard; we return the real
+// api_key once, then mark the code used so it can never be redeemed
+// again. Heavily rate-limited by IP because this is the one endpoint
+// on /v1 that doesn't require an api key.
+const claimLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 10,
+  keyGenerator: (/** @type {any} */ req) => ipKeyGenerator(req),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  handler: (_, res) =>
+    res.status(429).json({
+      error: 'too_many_requests',
+      message: 'Too many claim attempts. Wait a minute and try again.',
+    }),
+});
+app.post('/v1/agent/claim', claimLimiter, (req, res) => {
+  const { event: bizEvent } = require('./lib/logger');
+  const secretBox = require('./lib/secret-box');
+  const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
+  if (!code) {
+    return res.status(400).json({ error: 'missing_code', message: 'code is required' });
+  }
+
+  // Atomic claim: UPDATE … WHERE used_at IS NULL returns 1 iff the row
+  // moved from unused → used. Second concurrent request gets 0 rows and
+  // falls through to the "invalid/expired/already used" branch. Same
+  // generic error for all three so probing can't reveal which bucket a
+  // stolen code is in.
+  const now = new Date().toISOString();
+  const ip =
+    /** @type {any} */ (req).ip || /** @type {any} */ (req).connection?.remoteAddress || null;
+  const update = db
+    .prepare(
+      `
+    UPDATE agent_claims
+    SET used_at = @now, claimed_ip = @ip
+    WHERE code = @code
+      AND used_at IS NULL
+      AND datetime(expires_at) > datetime('now')
+  `,
+    )
+    .run({ code, now, ip });
+
+  if (update.changes === 0) {
+    return res.status(401).json({
+      error: 'invalid_claim',
+      message: 'Claim code is invalid, expired, or already used.',
+    });
+  }
+
+  // Pull the sealed payload that belongs to the now-consumed claim,
+  // decrypt it, and also wipe the sealed payload from the row so the
+  // api_key can never be re-extracted even if the DB is dumped later.
+  const row = /** @type {any} */ (
+    db.prepare(`SELECT api_key_id, sealed_payload FROM agent_claims WHERE code = ?`).get(code)
+  );
+  if (!row) {
+    // Shouldn't happen — we just successfully updated that row.
+    return res.status(500).json({ error: 'claim_inconsistent' });
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(secretBox.open(row.sealed_payload));
+  } catch (err) {
+    return res.status(500).json({
+      error: 'claim_decrypt_failed',
+      message:
+        err instanceof Error && err.message.includes('CARDS402_SECRET_BOX_KEY')
+          ? 'Server misconfigured: CARDS402_SECRET_BOX_KEY not set.'
+          : 'Failed to decrypt claim payload.',
+    });
+  }
+  db.prepare(`UPDATE agent_claims SET sealed_payload = '' WHERE code = ?`).run(code);
+
+  const key = /** @type {any} */ (
+    db.prepare(`SELECT id, label FROM api_keys WHERE id = ?`).get(row.api_key_id)
+  );
+
+  bizEvent('agent.claimed', {
+    api_key_id: row.api_key_id,
+    label: key?.label ?? null,
+    ip,
+  });
+
+  res.json({
+    api_key: payload.api_key,
+    webhook_secret: payload.webhook_secret ?? null,
+    api_key_id: row.api_key_id,
+    label: key?.label ?? null,
+    api_url: process.env.PUBLIC_API_BASE_URL || 'https://api.cards402.com/v1',
+  });
+});
+
 app.get('/status', (req, res) => {
   const frozen =
     /** @type {any} */ (db.prepare(`SELECT value FROM system_state WHERE key = 'frozen'`).get())

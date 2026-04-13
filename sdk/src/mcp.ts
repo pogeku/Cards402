@@ -1,4 +1,7 @@
-#!/usr/bin/env node
+// MCP server entry. Exposed via `cards402` or `cards402 mcp` and
+// dispatched through ./cli. Not intended to be imported as a module
+// from anywhere else — the top-level Server setup registers handlers
+// eagerly so any import runs the full initialisation path.
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -541,12 +544,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   };
 });
 
-async function main() {
+export async function startMcpServer(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
-
-main().catch((err) => {
-  process.stderr.write(`Fatal error: ${err}\n`);
-  process.exit(1);
-});

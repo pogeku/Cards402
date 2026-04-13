@@ -120,17 +120,47 @@ export class Cards402Client {
   private retry: Required<RetryOptions>;
 
   constructor({
-    baseUrl = 'https://api.cards402.com/v1',
+    baseUrl,
     apiKey,
     retry = {},
   }: {
     baseUrl?: string;
-    apiKey: string;
+    apiKey?: string;
     retry?: RetryOptions;
-  }) {
-    if (!apiKey.trim()) throw new AuthErrorCtor();
-    this.baseUrl = baseUrl.replace(/\/$/, '');
-    this.apiKey = apiKey;
+  } = {}) {
+    // Resolve api key + base URL in priority order:
+    //   1. Explicit constructor args
+    //   2. CARDS402_API_KEY / CARDS402_BASE_URL env vars
+    //   3. ~/.cards402/config.json (written by `cards402 onboard`)
+    // This lets agents that went through the claim-code onboarding
+    // flow just do `new Cards402Client()` without passing anything.
+    //
+    // Use a synchronous require of ./config so the auto-load path
+    // doesn't force callers into an async constructor.
+    let resolvedKey = apiKey;
+    let resolvedBase = baseUrl;
+    if (!resolvedKey || !resolvedBase) {
+      try {
+        // Synchronous require avoids forcing the constructor to be async.
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const config = require('./config');
+        const resolved = (
+          config as {
+            resolveCredentials: (opts: { apiKey?: string; baseUrl?: string }) => {
+              apiKey: string | undefined;
+              baseUrl: string | undefined;
+            };
+          }
+        ).resolveCredentials({ apiKey: resolvedKey, baseUrl: resolvedBase });
+        if (!resolvedKey) resolvedKey = resolved.apiKey;
+        if (!resolvedBase) resolvedBase = resolved.baseUrl;
+      } catch {
+        /* config helper unavailable (e.g. in a browser bundle) — fall through */
+      }
+    }
+    if (!resolvedKey || !resolvedKey.trim()) throw new AuthErrorCtor();
+    this.baseUrl = (resolvedBase || 'https://api.cards402.com/v1').replace(/\/$/, '');
+    this.apiKey = resolvedKey;
     // Audit A-23: default to retry on transient errors so every agent doesn't
     // reimplement its own backoff loop. 2 retries with 500ms base + 5s cap
     // covers brief network blips without punishing a persistent outage.
