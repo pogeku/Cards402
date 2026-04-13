@@ -53,6 +53,7 @@ export {
   AuthError,
   OrderFailedError,
   WaitTimeoutError,
+  ResumableError,
 } from './errors';
 
 export { loadCards402Config, saveCards402Config, resolveCredentials } from './config';

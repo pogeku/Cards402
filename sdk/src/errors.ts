@@ -116,6 +116,42 @@ export class OrderFailedError extends Cards402Error {
   }
 }
 
+/**
+ * Thrown by purchaseCardOWS when the order was created (and possibly paid)
+ * but the flow couldn't finish — e.g. Soroban RPC finalization timed out,
+ * or waitForCard hit its deadline. Always carries the orderId so the caller
+ * can resume via `cards402 purchase --resume <order-id>` without minting a
+ * new order (which would strand the original one until it expires).
+ *
+ * `txHash` is present when the payment was submitted onto the ledger (even
+ * if finalization wasn't confirmed client-side) — the backend watcher can
+ * still credit the order after the fact.
+ *
+ * `phase: 'paid'` means payViaContractOWS returned successfully, so resume
+ * should skip straight to waitForCard. `phase: 'unpaid'` means the payment
+ * never went out and resume may need to retry the Soroban submit.
+ */
+export class ResumableError extends Cards402Error {
+  constructor(
+    public readonly orderId: string,
+    reason: string,
+    public readonly phase: 'unpaid' | 'paid',
+    public readonly txHash?: string,
+    public readonly cause?: unknown,
+  ) {
+    const hashNote = txHash ? ` (tx: ${txHash})` : '';
+    super(
+      `Purchase could not finish for order ${orderId}: ${reason}${hashNote}. ` +
+        `Resume with: cards402 purchase --resume ${orderId}`,
+      'resumable',
+      0,
+      { orderId, reason, phase, txHash },
+    );
+    this.name = 'ResumableError';
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 /** Waiting for a card timed out — order may still be processing. */
 export class WaitTimeoutError extends Cards402Error {
   constructor(

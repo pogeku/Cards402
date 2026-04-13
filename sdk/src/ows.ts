@@ -30,6 +30,7 @@ import {
 } from '@stellar/stellar-sdk';
 
 import type { CardDetails, PaymentInstructions } from './client';
+import { ResumableError, OrderFailedError, Cards402Error } from './errors';
 import {
   buildContractPaymentTx,
   submitSorobanTx,
@@ -351,17 +352,26 @@ export interface PurchaseCardOwsOpts {
   vaultPath?: string;
   baseUrl?: string;
   networkPassphrase?: string;
-  /** Resume an existing order instead of creating a new one (idempotent retry — S-9). */
-  resume?: { orderId: string; payment: PaymentInstructions };
+  /**
+   * Resume an existing order instead of creating a new one. Accepts either
+   * a bare order id string (wait for the backend to finish an in-flight
+   * payment) or an object with a fresh PaymentInstructions (resubmit).
+   */
+  resume?: string | { orderId: string; payment?: PaymentInstructions };
   /** Tune the card-ready poll. Default: { timeoutMs: 300_000, intervalMs: 3_000 }. */
   waitForCardOpts?: { timeoutMs?: number; intervalMs?: number };
 }
 
 /**
- * Full purchase flow using an OWS wallet: create order → pay VCC on Stellar → wait for card.
+ * Full purchase flow using an OWS wallet: create order → pay the receiver
+ * contract on Stellar → wait for card. Any failure after the order exists
+ * is wrapped as a ResumableError so the caller can retry via `--resume`
+ * without minting a new order.
  *
- * S-9 idempotency: pass `resume: { orderId, payment }` to skip re-creation on retry.
- * Payment is only sent if the order phase is still 'awaiting_payment'.
+ * Soroban RPC backpressure is tolerated: if submitSorobanTx throws with a
+ * txHash attached (deadline reached but tx may still land), we proceed to
+ * waitForCard — the cards402 backend watcher is the source of truth and
+ * will credit the order when the tx finalizes.
  */
 export async function purchaseCardOWS(
   opts: PurchaseCardOwsOpts,
@@ -371,16 +381,38 @@ export async function purchaseCardOWS(
   const paymentAsset = opts.paymentAsset ?? 'usdc';
 
   let orderId: string;
-  let payment: PaymentInstructions;
+  let payment: PaymentInstructions | undefined;
+  let skipPayment = false;
 
   if (opts.resume) {
-    orderId = opts.resume.orderId;
-    payment = opts.resume.payment;
-    // Skip payment if already received (idempotency — S-9)
+    if (typeof opts.resume === 'string') {
+      orderId = opts.resume;
+    } else {
+      orderId = opts.resume.orderId;
+      payment = opts.resume.payment;
+    }
+    // Check where the order is — if the payment already landed (or is
+    // landing), we can skip straight to waitForCard.
     const status = await client.getOrder(orderId);
-    if (status.phase !== 'awaiting_payment') {
-      const card = await client.waitForCard(orderId, opts.waitForCardOpts);
-      return { ...card, order_id: orderId };
+    if (status.phase === 'ready' && status.card) {
+      return { ...status.card, order_id: orderId };
+    }
+    if (
+      status.phase === 'failed' ||
+      status.phase === 'refunded' ||
+      status.phase === 'rejected' ||
+      status.phase === 'expired'
+    ) {
+      throw new OrderFailedError(orderId, status.error ?? status.phase, status.refund);
+    }
+    // awaiting_payment — a previous submit may still be in flight. If the
+    //   caller didn't hand us a fresh PaymentInstructions, just wait; the
+    //   backend will pick the tx up when it finalizes, or the order will
+    //   expire cleanly. Resubmitting without the original payment object
+    //   risks double-paying if the original lands after all.
+    // processing / awaiting_approval — backend is working, just wait.
+    if (status.phase !== 'awaiting_payment' || !payment) {
+      skipPayment = true;
     }
   } else {
     const order = await client.createOrder({ amount_usdc: opts.amountUsdc });
@@ -388,52 +420,99 @@ export async function purchaseCardOWS(
     payment = order.payment;
   }
 
-  // USDC payments need a trustline on the wallet's Stellar account. If the
-  // agent is paying in USDC and never added one, add it now so the
-  // purchase doesn't silently fail on the payment step.
-  if (paymentAsset === 'usdc') {
-    try {
-      const bal = await getOWSBalance(opts.walletName, opts.vaultPath);
-      // getOWSBalance returns '0' when no USDC trustline exists, so we
-      // also need to check the raw Horizon payload — any USDC entry
-      // (even 0 balance) means the trustline is already present.
-      if (bal.usdc === '0') {
-        const publicKey = getOWSPublicKey(opts.walletName, opts.vaultPath);
-        const server = new Horizon.Server(HORIZON_URL);
-        const account = await withTimeout(server.loadAccount(publicKey));
-        const hasTrustline = account.balances.some(
-          (b) =>
-            b.asset_type === 'credit_alphanum4' &&
-            b.asset_code === 'USDC' &&
-            b.asset_issuer === USDC_ISSUER,
-        );
-        if (!hasTrustline) {
-          await addUsdcTrustlineOWS({
-            walletName: opts.walletName,
-            passphrase: opts.passphrase,
-            vaultPath: opts.vaultPath,
-            networkPassphrase: opts.networkPassphrase,
-          });
-        }
-      }
-    } catch (err) {
-      throw new Error(
-        `Failed to ensure USDC trustline for wallet "${opts.walletName}": ${
-          err instanceof Error ? err.message : String(err)
-        }. The wallet needs at least 2 XLM (1 for the account reserve, 1 for the trustline). Fund it with 'addUsdcTrustlineOWS' manually or retry once the wallet has enough XLM.`,
+  if (!skipPayment) {
+    if (!payment) {
+      // Unreachable: the resume branch sets skipPayment when payment is
+      // missing, and the create branch always sets payment.
+      throw new ResumableError(
+        orderId,
+        'internal: payment instructions missing for an unpaid order',
+        'unpaid',
       );
+    }
+
+    // USDC payments need a trustline on the wallet's Stellar account. If the
+    // agent is paying in USDC and never added one, add it now so the
+    // purchase doesn't silently fail on the payment step.
+    if (paymentAsset === 'usdc') {
+      try {
+        const bal = await getOWSBalance(opts.walletName, opts.vaultPath);
+        if (bal.usdc === '0') {
+          const publicKey = getOWSPublicKey(opts.walletName, opts.vaultPath);
+          const server = new Horizon.Server(HORIZON_URL);
+          const account = await withTimeout(server.loadAccount(publicKey));
+          const hasTrustline = account.balances.some(
+            (b) =>
+              b.asset_type === 'credit_alphanum4' &&
+              b.asset_code === 'USDC' &&
+              b.asset_issuer === USDC_ISSUER,
+          );
+          if (!hasTrustline) {
+            await addUsdcTrustlineOWS({
+              walletName: opts.walletName,
+              passphrase: opts.passphrase,
+              vaultPath: opts.vaultPath,
+              networkPassphrase: opts.networkPassphrase,
+            });
+          }
+        }
+      } catch (err) {
+        throw new ResumableError(
+          orderId,
+          `failed to ensure USDC trustline: ${err instanceof Error ? err.message : String(err)}. The wallet needs at least 2 XLM (1 for the account reserve, 1 for the trustline)`,
+          'unpaid',
+          undefined,
+          err,
+        );
+      }
+    }
+
+    try {
+      await payViaContractOWS({
+        walletName: opts.walletName,
+        payment,
+        paymentAsset,
+        passphrase: opts.passphrase,
+        vaultPath: opts.vaultPath,
+        networkPassphrase: opts.networkPassphrase,
+      });
+    } catch (err) {
+      // submitSorobanTx attaches `txHash` to its error when the envelope
+      // has been accepted onto the network but we gave up waiting for
+      // finalization. In that case the cards402 backend watcher can
+      // still credit the order — fall through to waitForCard instead of
+      // failing the purchase.
+      const txHash = (err as Error & { txHash?: string })?.txHash;
+      if (!txHash) {
+        throw new ResumableError(
+          orderId,
+          err instanceof Error ? err.message : String(err),
+          'unpaid',
+          undefined,
+          err,
+        );
+      }
     }
   }
 
-  await payViaContractOWS({
-    walletName: opts.walletName,
-    payment,
-    paymentAsset,
-    passphrase: opts.passphrase,
-    vaultPath: opts.vaultPath,
-    networkPassphrase: opts.networkPassphrase,
-  });
-
-  const card = await client.waitForCard(orderId, opts.waitForCardOpts);
-  return { ...card, order_id: orderId };
+  try {
+    const card = await client.waitForCard(orderId, opts.waitForCardOpts);
+    return { ...card, order_id: orderId };
+  } catch (err) {
+    // OrderFailedError is terminal — propagate unchanged so the CLI
+    // surfaces the real reason instead of a misleading resume hint.
+    if (err instanceof OrderFailedError) throw err;
+    // Auth / budget / validation errors from the client are also terminal.
+    if (err instanceof Cards402Error && err.code !== 'wait_timeout') throw err;
+    // Everything else (network blip, SSE disconnect, wait_timeout) — wrap
+    // as resumable. The order is paid at this point; resuming will just
+    // re-attach to the stream.
+    throw new ResumableError(
+      orderId,
+      err instanceof Error ? err.message : String(err),
+      'paid',
+      undefined,
+      err,
+    );
+  }
 }

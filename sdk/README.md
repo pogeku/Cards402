@@ -12,6 +12,22 @@ npm install cards402
 
 Requires Node.js 18 or newer (the SDK uses native `fetch`, `ReadableStream`, and `WebCrypto`). Supported platforms via the bundled `@ctx.com/stellar-ows-core` native wallet bindings: macOS (arm64 + x64), Linux (arm64 + x64). Windows is not currently supported.
 
+### A note on `npm audit`
+
+You'll see 3 critical advisories on `axios <= 1.14.0` after installing. They come from `@stellar/stellar-sdk`, which hard-pins an older axios version that we can't override from inside this package. The SDK's own HTTP calls only talk to hardcoded Stellar RPC / Horizon endpoints, so neither advisory (NO_PROXY SSRF, header-injection metadata exfil) is reachable through cards402 code — it's noise for our use, but noise you should still silence at your own project root.
+
+Fix in your own `package.json`:
+
+```json
+{
+  "overrides": {
+    "axios": "^1.15.0"
+  }
+}
+```
+
+then `rm -rf node_modules package-lock.json && npm install`. `npm audit` returns clean. Upstream fix tracked at [stellar/js-stellar-sdk#1381](https://github.com/stellar/js-stellar-sdk/pull/1381); this note will be removed as soon as it merges and a new stellar-sdk ships.
+
 ## Quick start
 
 ```typescript

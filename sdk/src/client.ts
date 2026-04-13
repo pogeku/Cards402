@@ -8,6 +8,7 @@ export {
   AuthError,
   OrderFailedError,
   WaitTimeoutError,
+  ResumableError,
 } from './errors';
 import {
   parseApiError,

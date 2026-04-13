@@ -92,17 +92,79 @@ export async function buildContractPaymentTx(
 /**
  * Submit a signed Soroban transaction and poll until it reaches a terminal
  * status. Returns the transaction hash on success.
+ *
+ * Important: a successful return only guarantees the tx has been accepted
+ * onto the ledger. The cards402 backend's contract watcher is the source
+ * of truth for "the order has been credited" — the SDK's purchaseCardOWS
+ * always follows up with waitForCard against the order id, so even if
+ * this function gives up before finalization, the watcher still has a
+ * chance to credit the order if the tx eventually lands.
  */
 export async function submitSorobanTx(tx: Transaction, server: rpc.Server): Promise<string> {
-  const send = await server.sendTransaction(tx);
-  if (send.status === 'ERROR') {
-    throw new Error(`Soroban sendTransaction error: ${JSON.stringify(send.errorResult ?? send)}`);
+  // sendTransaction is idempotent for the same envelope. Three cases we
+  // retry explicitly:
+  //   - TRY_AGAIN_LATER: RPC is congested, re-send after a short wait
+  //   - thrown network error (fetch/DNS/TCP): the request never reached
+  //     the RPC, safe to retry
+  //   - DUPLICATE is treated as "already in flight" — fall through to
+  //     the polling loop below instead of looping forever
+  // Up to 5 total attempts with 1.5s spacing covers typical RPC drops.
+  const MAX_SEND_ATTEMPTS = 5;
+  let send: Awaited<ReturnType<typeof server.sendTransaction>> | undefined;
+  let sendErr: unknown;
+  for (let attempt = 0; attempt < MAX_SEND_ATTEMPTS; attempt++) {
+    try {
+      send = await server.sendTransaction(tx);
+      if (send.status === 'TRY_AGAIN_LATER') {
+        if (attempt < MAX_SEND_ATTEMPTS - 1) {
+          await new Promise((r) => setTimeout(r, 1500));
+          continue;
+        }
+        throw new Error(
+          `Soroban network congested — sendTransaction returned TRY_AGAIN_LATER after ${MAX_SEND_ATTEMPTS} attempts. Retry the purchase in a minute.`,
+        );
+      }
+      if (send.status === 'ERROR') {
+        throw new Error(
+          `Soroban sendTransaction error: ${JSON.stringify(send.errorResult ?? send)}`,
+        );
+      }
+      // PENDING or DUPLICATE — envelope is now known to the network. Break
+      // out of the retry loop and poll for finalization.
+      break;
+    } catch (err) {
+      sendErr = err;
+      // If the thrown error is structured (TRY_AGAIN_LATER, ERROR) let it
+      // propagate directly. Otherwise assume it was a transient network
+      // failure and retry.
+      if (
+        err instanceof Error &&
+        (err.message.startsWith('Soroban network congested') ||
+          err.message.startsWith('Soroban sendTransaction error'))
+      ) {
+        throw err;
+      }
+      if (attempt >= MAX_SEND_ATTEMPTS - 1) {
+        throw new Error(
+          `Soroban sendTransaction failed after ${MAX_SEND_ATTEMPTS} attempts: ${(err as Error)?.message ?? String(err)}`,
+        );
+      }
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  }
+  if (!send) {
+    throw new Error(
+      `Soroban sendTransaction produced no result: ${(sendErr as Error)?.message ?? 'unknown error'}`,
+    );
   }
 
-  // Poll for transaction finalization. Some stellar-sdk versions can't parse
-  // newer Soroban RPC response XDR ("Bad union switch: 4"). When that happens,
-  // fall back to Horizon as the authoritative confirmation source.
-  const deadline = Date.now() + 60_000;
+  // Poll for finalization. 120s deadline (was 60s) so we don't bail on
+  // mainnet RPC under modest backpressure. Each poll is cheap; the cost
+  // of a longer wait is much less than the cost of a stranded order.
+  // Some stellar-sdk versions can't parse newer Soroban RPC response XDR
+  // ("Bad union switch: 4"); when that happens, fall back to Horizon.
+  const POLL_DEADLINE_MS = 120_000;
+  const deadline = Date.now() + POLL_DEADLINE_MS;
   while (Date.now() < deadline) {
     try {
       const status = await server.getTransaction(send.hash);
@@ -140,7 +202,15 @@ export async function submitSorobanTx(tx: Transaction, server: rpc.Server): Prom
     /* ignore */
   }
 
-  throw new Error(`Soroban transaction ${send.hash} did not finalize within 60s`);
+  // Throw with the hash so the caller can recover if the tx eventually
+  // lands. purchaseCardOWS catches this and proceeds to waitForCard,
+  // which subscribes to the cards402 backend SSE and gets credit from
+  // the contract watcher even if Soroban RPC was slow to confirm.
+  const err = new Error(
+    `Soroban transaction ${send.hash} did not finalize within ${POLL_DEADLINE_MS / 1000}s`,
+  );
+  (err as Error & { txHash?: string }).txHash = send.hash;
+  throw err;
 }
 
 /**
