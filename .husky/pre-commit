@@ -1,8 +1,14 @@
 #!/bin/sh
 
 # Block .env files from being committed (belt-and-suspenders: .gitignore alone won't
-# catch a force-add, and accidental credential commits are hard to undo once pushed)
-staged_env=$(git diff --cached --name-only | grep -E '(^|/)\.env(\.|$)')
+# catch a force-add, and accidental credential commits are hard to undo once pushed).
+#
+# Note: grep exits 1 when it finds no matches. Husky invokes this hook with
+# `sh -e`, which propagates non-zero exit codes from command substitutions in
+# POSIX-strict shells (dash, bash in POSIX mode). The `|| true` is load-bearing
+# — without it, a clean commit with no .env files staged would fail the hook
+# silently at the variable assignment before we ever reach the check.
+staged_env=$(git diff --cached --name-only | grep -E '(^|/)\.env(\.|$)' || true)
 if [ -n "$staged_env" ]; then
   echo "ERROR: Refusing to commit .env file(s):"
   echo "$staged_env"
