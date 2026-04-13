@@ -1,6 +1,6 @@
-# cards402
+# Cards402
 
-Virtual cards for AI agents. Pay USDC or XLM on Stellar, get a Visa card number in ~60 seconds. No signup. No KYC. No fees.
+Virtual cards for AI agents. Pay USDC or XLM on Stellar, get a Visa card number in ~60 seconds. No fees.
 
 API: `https://api.cards402.com`  
 Web: `https://cards402.com`
