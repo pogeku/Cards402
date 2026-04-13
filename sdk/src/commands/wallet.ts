@@ -7,16 +7,28 @@ import { loadCards402Config } from '../config';
 import { getOWSPublicKey, getOWSBalance } from '../ows';
 
 function usage(): void {
-  process.stderr.write(`Usage: cards402 wallet <subcommand>
+  process.stderr
+    .write(`Usage: cards402 wallet <subcommand> [--vault-path <path>] [--name <walletname>]
 
 Subcommands:
   address              Print the Stellar address for this agent's wallet
   balance              Print the wallet's XLM and USDC balances from Horizon
   -h, --help           Show this message
 
-Both subcommands read ~/.cards402/config.json for the wallet name, so
-you don't need to pass anything after 'cards402 onboard'.
+Both subcommands read ~/.cards402/config.json for the wallet name and
+vault path so you don't need to pass anything after 'cards402 onboard'.
+Override either with --name=<walletname> / --vault-path=<path>.
 `);
+}
+
+function parseFlag(rest: string[], short: string): string | undefined {
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
+    if (!arg) continue;
+    if (arg === short) return rest[i + 1];
+    if (arg.startsWith(`${short}=`)) return arg.slice(short.length + 1);
+  }
+  return undefined;
 }
 
 export async function walletCommand(argv: string[]): Promise<number> {
@@ -33,12 +45,13 @@ export async function walletCommand(argv: string[]): Promise<number> {
     );
     return 1;
   }
-  const walletName =
-    rest.find((a) => a.startsWith('--name='))?.slice(7) || config.wallet_name || 'cards402-agent';
+  const walletName = parseFlag(rest, '--name') || config.wallet_name || 'cards402-agent';
+  // F12: vault_path comes from config first, CLI flag overrides.
+  const vaultPath = parseFlag(rest, '--vault-path') || config.vault_path;
 
   if (sub === 'address') {
     try {
-      const publicKey = getOWSPublicKey(walletName);
+      const publicKey = getOWSPublicKey(walletName, vaultPath);
       process.stdout.write(`${publicKey}\n`);
       return 0;
     } catch (err) {
@@ -53,8 +66,8 @@ export async function walletCommand(argv: string[]): Promise<number> {
 
   if (sub === 'balance') {
     try {
-      const publicKey = getOWSPublicKey(walletName);
-      const bal = await getOWSBalance(walletName);
+      const publicKey = getOWSPublicKey(walletName, vaultPath);
+      const bal = await getOWSBalance(walletName, vaultPath);
       process.stdout.write(`address: ${publicKey}\n`);
       process.stdout.write(`xlm:     ${bal.xlm}\n`);
       process.stdout.write(`usdc:    ${bal.usdc}\n`);
@@ -64,7 +77,7 @@ export async function walletCommand(argv: string[]): Promise<number> {
       // Horizon 404 on a brand-new unactivated wallet — show zeros.
       if (msg.includes('Not Found') || msg.includes('404')) {
         try {
-          const publicKey = getOWSPublicKey(walletName);
+          const publicKey = getOWSPublicKey(walletName, vaultPath);
           process.stdout.write(`address: ${publicKey}\n`);
           process.stdout.write(`xlm:     0 (unactivated — send >= 1 XLM)\n`);
           process.stdout.write(`usdc:    0\n`);

@@ -22,6 +22,8 @@ interface OnboardArgs {
   claim?: string;
   walletName?: string;
   apiBase?: string;
+  vaultPath?: string;
+  passphraseEnv?: string;
   help?: boolean;
 }
 
@@ -37,13 +39,18 @@ function parseArgs(argv: string[]): OnboardArgs {
     else if (arg.startsWith('--wallet-name=')) out.walletName = arg.slice('--wallet-name='.length);
     else if (arg === '--api-base') out.apiBase = argv[++i];
     else if (arg.startsWith('--api-base=')) out.apiBase = arg.slice('--api-base='.length);
+    else if (arg === '--vault-path') out.vaultPath = argv[++i];
+    else if (arg.startsWith('--vault-path=')) out.vaultPath = arg.slice('--vault-path='.length);
+    else if (arg === '--passphrase-env') out.passphraseEnv = argv[++i];
+    else if (arg.startsWith('--passphrase-env='))
+      out.passphraseEnv = arg.slice('--passphrase-env='.length);
   }
   return out;
 }
 
 function usage(): void {
   process.stderr
-    .write(`Usage: cards402 onboard --claim <code> [--wallet-name <name>] [--api-base <url>]
+    .write(`Usage: cards402 onboard --claim <code> [--wallet-name <name>] [--vault-path <path>] [--passphrase-env <ENVNAME>] [--api-base <url>]
 
 Exchanges a one-time claim code (from the cards402 dashboard) for an
 api key, creates an OWS Stellar wallet, and registers its address with
@@ -54,13 +61,24 @@ is auto-loaded by the SDK on subsequent runs. You do NOT need to paste
 the api key into any env var yourself.
 
 Options:
-  --claim <code>         One-time claim code from the dashboard. Required.
-  --wallet-name <name>   Name for the OWS wallet. If omitted, a unique
-                         name is derived from the agent label + the
-                         claim code so two separate agents on the same
-                         machine can't accidentally share a wallet.
-  --api-base <url>       Override the default https://api.cards402.com/v1
-  -h, --help             Show this message
+  --claim <code>             One-time claim code from the dashboard. Required.
+  --wallet-name <name>       Name for the OWS wallet. If omitted, a unique
+                             name is derived from the agent label + the
+                             claim code so two separate agents on the same
+                             machine can't accidentally share a wallet.
+  --vault-path <path>        Override the default ~/.ows/wallets vault location.
+                             USE THIS if you're running on ephemeral storage
+                             (Lambda, Cloud Run, scratch containers) — point
+                             it at a persistent volume. Lost vault = lost funds.
+                             Persisted to config so subsequent purchase/wallet
+                             commands use the same vault automatically.
+  --passphrase-env <ENVNAME> Name of the environment variable that holds the
+                             OWS passphrase (e.g. CARDS402_OWS_PASSPHRASE). The
+                             passphrase value is read from process.env at call
+                             time; only the variable NAME is persisted to
+                             ~/.cards402/config.json, never the value itself.
+  --api-base <url>           Override the default https://api.cards402.com/v1
+  -h, --help                 Show this message
 `);
 }
 
@@ -149,12 +167,28 @@ export async function onboardCommand(argv: string[]): Promise<number> {
   // default 'cards402-agent' name.
   const walletName = args.walletName || deriveDefaultWalletName(args.claim, claimResponse.label);
 
+  // F12: resolve passphrase from the named env var. Only the var NAME
+  // is persisted to config; the value never touches disk in cards402.
+  let passphrase: string | undefined;
+  if (args.passphraseEnv) {
+    passphrase = process.env[args.passphraseEnv];
+    if (!passphrase) {
+      process.stderr.write(
+        `error: --passphrase-env ${args.passphraseEnv} is set but the env var is empty.\n` +
+          `Set ${args.passphraseEnv} to your chosen passphrase before running onboard.\n`,
+      );
+      return 2;
+    }
+  }
+
   // Step 2 — persist config so the SDK finds it on next run.
   const { path: configPath } = saveCards402Config({
     api_key: claimResponse.api_key,
     api_url: claimResponse.api_url || apiBase,
     webhook_secret: claimResponse.webhook_secret,
     wallet_name: walletName,
+    vault_path: args.vaultPath,
+    passphrase_env: args.passphraseEnv,
     created_at: new Date().toISOString(),
   });
   process.stdout.write(`✓ Credentials saved to ${configPath} (chmod 0600)\n`);
@@ -169,7 +203,7 @@ export async function onboardCommand(argv: string[]): Promise<number> {
 
   let publicKey: string;
   try {
-    const created = createOWSWallet(walletName);
+    const created = createOWSWallet(walletName, passphrase, args.vaultPath);
     publicKey = created.publicKey;
   } catch (err) {
     process.stderr.write(
@@ -178,11 +212,13 @@ export async function onboardCommand(argv: string[]): Promise<number> {
     return 1;
   }
   process.stdout.write(`✓ Wallet "${walletName}" ready\n`);
+  if (args.vaultPath) process.stdout.write(`  vault: ${args.vaultPath}\n`);
+  if (args.passphraseEnv) process.stdout.write(`  passphrase: read from $${args.passphraseEnv}\n`);
 
   // Step 4 — check balance (may 404 on an unactivated account; that's fine).
   let balance = { xlm: '0', usdc: '0' };
   try {
-    balance = await getOWSBalance(walletName);
+    balance = await getOWSBalance(walletName, args.vaultPath);
   } catch {
     /* account not yet activated on-chain — normal on first run */
   }

@@ -17,6 +17,16 @@ export interface Cards402Config {
   webhook_secret?: string | null;
   wallet_name?: string;
   vault_path?: string;
+  /**
+   * Adversarial audit F12: the NAME of the environment variable that
+   * holds the OWS wallet passphrase, NOT the passphrase value itself.
+   * Subsequent CLI commands read this field, look up
+   * `process.env[passphrase_env]` at call time, and pass the value to
+   * the OWS layer. We never persist the passphrase value to disk —
+   * a config dump alone gives an attacker the api key but not the
+   * keys to the wallet vault.
+   */
+  passphrase_env?: string;
   created_at: string;
 }
 

@@ -32,10 +32,15 @@ Idempotency-Key: <uuid>     ← always send this; safe to retry on network error
 
 {
   "amount_usdc": "25.00",
-  "payment_asset": "usdc",      ← "usdc" (default) or "xlm"
   "webhook_url": "https://your-app.com/webhook"   ← optional
 }
 ```
+
+The asset is **not** chosen at order-creation time — every response
+includes both a USDC and an XLM quote, and the agent picks which one to
+pay by invoking either `pay_usdc` or `pay_xlm` on the receiver contract.
+A `payment_asset` field on this request is silently ignored by the
+backend; older drafts of this doc said otherwise (see audit F14).
 
 **Response:**
 
@@ -89,7 +94,7 @@ the `POST /v1/orders` response directly:
 import { Cards402Client, payViaContractOWS } from 'cards402';
 
 const client = new Cards402Client({ apiKey: process.env.CARDS402_API_KEY! });
-const order = await client.createOrder({ amount_usdc: '25.00', payment_asset: 'usdc' });
+const order = await client.createOrder({ amount_usdc: '25.00' });
 
 const txHash = await payViaContractOWS({
   walletName: process.env.OWS_WALLET_NAME!,
@@ -229,7 +234,6 @@ All errors return `{ "error": "error_code", "message": "..." }`.
 | HTTP | error                             | Meaning                                         |
 | ---- | --------------------------------- | ----------------------------------------------- |
 | 400  | `invalid_amount`                  | `amount_usdc` must be a positive number ≤ $1000 |
-| 400  | `invalid_payment_asset`           | `payment_asset` must be `"usdc"` or `"xlm"`     |
 | 400  | `invalid_webhook_url`             | webhook URL failed SSRF validation              |
 | 401  | `missing_api_key`                 | No `X-Api-Key` header                           |
 | 401  | `invalid_api_key`                 | Key not found or disabled                       |
@@ -259,7 +263,7 @@ Cards402 agents use OWS (Open Wallet Standard) — keys are stored encrypted in 
    ```
 3. **Send at least 2 XLM** to the public key — activates the Stellar account and covers network reserves.
 4. **Run `setup_wallet` again** — the USDC trustline is added automatically once the account has XLM. No manual trustline step needed.
-5. **Fund with USDC** (if paying with USDC) — or just top up XLM to pay with native XLM (`payment_asset: "xlm"`).
+5. **Fund with USDC** (if paying with USDC) — or just top up XLM to pay with native XLM. The asset choice happens at payment time (`pay_usdc` vs `pay_xlm` on the receiver contract), not at order creation.
 
 The vault file lives at `~/.ows/vault` by default. Set `OWS_VAULT_PATH` to override.
 
