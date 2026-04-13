@@ -1,4 +1,4 @@
-# @ctx.com/cards402
+# cards402
 
 Virtual Visa cards for AI agents — pay with USDC or XLM on Stellar, get a card number, CVV, and expiry in ~60 seconds.
 
@@ -7,7 +7,7 @@ Virtual Visa cards for AI agents — pay with USDC or XLM on Stellar, get a card
 ## Install
 
 ```bash
-npm install @ctx.com/cards402
+npm install cards402
 ```
 
 Requires Node.js 18 or newer (the SDK uses native `fetch`, `ReadableStream`, and `WebCrypto`). Supported platforms via the bundled `@ctx.com/stellar-ows-core` native wallet bindings: macOS (arm64 + x64), Linux (arm64 + x64). Windows is not currently supported.
@@ -15,7 +15,7 @@ Requires Node.js 18 or newer (the SDK uses native `fetch`, `ReadableStream`, and
 ## Quick start
 
 ```typescript
-import { createOWSWallet, getOWSBalance, purchaseCardOWS } from '@ctx.com/cards402';
+import { createOWSWallet, getOWSBalance, purchaseCardOWS } from 'cards402';
 
 // 1. Create (or fetch existing) encrypted wallet. Idempotent.
 const { publicKey } = createOWSWallet('my-agent');
@@ -55,7 +55,7 @@ Stellar accounts need a minimum balance to be activated on-chain:
 ## Step-by-step API (for more control)
 
 ```typescript
-import { Cards402Client } from '@ctx.com/cards402';
+import { Cards402Client } from 'cards402';
 
 const client = new Cards402Client({
   apiKey: process.env.CARDS402_API_KEY!,
@@ -82,7 +82,7 @@ Add to your client's `mcpServers` config:
   "mcpServers": {
     "cards402": {
       "command": "npx",
-      "args": ["-y", "@ctx.com/cards402"],
+      "args": ["-y", "cards402"],
       "env": { "CARDS402_API_KEY": "cards402_<your key>" }
     }
   }
@@ -105,7 +105,7 @@ import {
   InvalidAmountError,
   OrderFailedError,
   WaitTimeoutError,
-} from '@ctx.com/cards402';
+} from 'cards402';
 
 try {
   const card = await purchaseCardOWS({ ... });

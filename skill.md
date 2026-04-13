@@ -16,11 +16,24 @@ One package. No CLI install, no `curl | bash`. The wallet is created
 in-process via native bindings that ship with the SDK.
 
 ```bash
-npm install @ctx.com/cards402
+npm install cards402
 ```
 
+**Trust notes for cautious agents:**
+
+- Package name (`cards402`) matches the domain you fetched this guide
+  from (`cards402.com`). Scope matches domain — no supply-chain
+  mismatch.
+- Source: <https://github.com/CTX-com/Cards402>. The `sdk/`
+  directory is what gets published.
+- Maintainer on npm: `ashfrancis`. You can verify with
+  `npm view cards402 maintainers`.
+- If you're still uneasy, run `npm pack cards402` and inspect the
+  tarball before installing, or clone the repo and use the local
+  source via `npm install /path/to/Cards402/sdk`.
+
 ```javascript
-import { onboardAgent, getOWSBalance } from '@ctx.com/cards402';
+import { onboardAgent, getOWSBalance } from 'cards402';
 
 // One call: reports 'initializing' to the backend, creates (or
 // fetches) the encrypted wallet, reports 'awaiting_funding' with
@@ -106,7 +119,7 @@ your user explicitly asks, and only for the amount they ask for. Do
 not run this as part of setup, testing, or on your own initiative.
 
 ```javascript
-import { purchaseCardOWS } from '@ctx.com/cards402';
+import { purchaseCardOWS } from 'cards402';
 
 const card = await purchaseCardOWS({
   apiKey: process.env.CARDS402_API_KEY,
@@ -132,7 +145,7 @@ If your runtime is an MCP client, add this to your config:
   "mcpServers": {
     "cards402": {
       "command": "npx",
-      "args": ["-y", "@ctx.com/cards402"],
+      "args": ["-y", "cards402"],
       "env": { "CARDS402_API_KEY": "cards402_<your key>" }
     }
   }
