@@ -60,22 +60,31 @@ router.get('/stream', (req, res) => {
   send('ready', { at: new Date().toISOString() });
 
   const unsubscribe = subscribe((evt) => {
-    // Event filtering — a dashboard only sees events about its own keys.
-    const keyId = evt.api_key_id ?? evt.fields?.api_key_id;
-    if (keyId && !ownedKeys.has(keyId)) {
-      // A new key was just created for this dashboard → refresh the set
-      // so subsequent events for it land. Cheap: one SELECT.
-      if (
-        evt.type === 'biz' &&
-        evt.fields?.name === 'key.created' &&
-        evt.fields?.dashboard_id === dashboardId
-      ) {
-        ownedKeys.add(keyId);
-        send('refresh', { reason: 'key_created' });
-        return;
-      }
+    // First check: a new key was just created for this dashboard. Grow the
+    // ownedKeys set on the fly so subsequent agent_state events for that
+    // key aren't dropped by the filter below. The createAgent handler in
+    // this file emits bizEvent('dashboard.key_created', { dashboard_id,
+    // api_key_id, actor }) which goes through the bus as
+    // { type: 'biz', name: 'dashboard.key_created', fields: { ... } }.
+    //
+    // Without this enrichment, the live setup stepper only updated when
+    // the 60s client-side safety-net poll fired — every typed event for
+    // the newly-minted key got filtered out at the SSE boundary.
+    if (
+      evt.type === 'biz' &&
+      evt.name === 'dashboard.key_created' &&
+      evt.fields?.dashboard_id === dashboardId
+    ) {
+      if (evt.fields.api_key_id) ownedKeys.add(evt.fields.api_key_id);
+      send('refresh', { reason: 'key_created' });
       return;
     }
+
+    // Standard filter — only forward events about keys this dashboard owns.
+    // Events with no api_key_id (system, frozen, etc.) pass through to all
+    // dashboards; that's the broadcast channel for global state changes.
+    const keyId = evt.api_key_id ?? evt.fields?.api_key_id;
+    if (keyId && !ownedKeys.has(keyId)) return;
     send(evt.type, evt);
   });
 

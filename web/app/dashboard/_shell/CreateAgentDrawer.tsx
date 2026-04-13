@@ -35,6 +35,7 @@ export function CreateAgentDrawer({ open, onClose }: Props) {
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<NewKeyData | null>(null);
   const [copied, setCopied] = useState(false);
+  const [addressCopied, setAddressCopied] = useState(false);
 
   // Reset when the drawer closes so re-opening doesn't show stale state.
   useEffect(() => {
@@ -43,6 +44,7 @@ export function CreateAgentDrawer({ open, onClose }: Props) {
       setCreated(null);
       setBusy(false);
       setCopied(false);
+      setAddressCopied(false);
     }
   }, [open]);
 
@@ -110,6 +112,14 @@ export function CreateAgentDrawer({ open, onClose }: Props) {
     await navigator.clipboard.writeText(snippet);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
+  }
+
+  const walletAddress = liveAgent?.wallet_public_key ?? liveAgent?.agent?.wallet_public_key ?? null;
+  async function copyAddress() {
+    if (!walletAddress) return;
+    await navigator.clipboard.writeText(walletAddress);
+    setAddressCopied(true);
+    setTimeout(() => setAddressCopied(false), 1500);
   }
 
   return (
@@ -257,21 +267,11 @@ export function CreateAgentDrawer({ open, onClose }: Props) {
               title="Claim redeemed"
               detail="Agent traded the claim for an api key."
             />
-            <StepRow
-              state={stepState(step, 'wallet')}
-              title="OWS wallet created"
-              detail={
-                liveAgent?.wallet_public_key
-                  ? liveAgent.wallet_public_key.slice(0, 12) +
-                    '…' +
-                    liveAgent.wallet_public_key.slice(-6)
-                  : undefined
-              }
-            />
+            <StepRow state={stepState(step, 'wallet')} title="OWS wallet created" />
             <StepRow
               state={stepState(step, 'awaiting_deposit')}
               title="Awaiting deposit"
-              detail="Send at least 1 XLM or any USDC to the wallet above."
+              detail="Send at least 1 XLM or any USDC to the wallet address below."
             />
             <StepRow
               state={stepState(step, 'funded')}
@@ -284,6 +284,82 @@ export function CreateAgentDrawer({ open, onClose }: Props) {
             />
             <StepRow state={stepState(step, 'active')} title="Active" />
           </div>
+
+          {walletAddress && (
+            <div
+              style={{
+                background: 'var(--surface-2)',
+                border: '1px solid var(--border)',
+                borderRadius: 8,
+                padding: '0.85rem 1rem',
+              }}
+            >
+              <div
+                style={{
+                  fontSize: '0.64rem',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.08em',
+                  color: 'var(--fg-dim)',
+                  marginBottom: '0.5rem',
+                }}
+              >
+                Wallet address
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  background: 'var(--surface)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  padding: '0.55rem 0.7rem',
+                }}
+              >
+                <code
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    fontSize: '0.7rem',
+                    fontFamily: 'var(--font-mono)',
+                    color: 'var(--fg)',
+                    wordBreak: 'break-all',
+                    lineHeight: 1.4,
+                  }}
+                >
+                  {walletAddress}
+                </code>
+                <button
+                  onClick={copyAddress}
+                  style={{
+                    flexShrink: 0,
+                    background: addressCopied ? 'var(--green-muted)' : 'var(--surface-2)',
+                    color: addressCopied ? 'var(--green)' : 'var(--fg)',
+                    border: `1px solid ${addressCopied ? 'var(--green-border)' : 'var(--border)'}`,
+                    borderRadius: 5,
+                    padding: '0.3rem 0.6rem',
+                    fontSize: '0.65rem',
+                    fontFamily: 'var(--font-mono)',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {addressCopied ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+              <div
+                style={{
+                  fontSize: '0.66rem',
+                  color: 'var(--fg-dim)',
+                  marginTop: '0.45rem',
+                  lineHeight: 1.45,
+                }}
+              >
+                Send at least 1 XLM (for the Stellar account reserve) or any USDC. The stepper will
+                flip to <strong>Funded</strong> automatically once Horizon sees the deposit.
+              </div>
+            </div>
+          )}
 
           <Button variant="secondary" onClick={onClose} style={{ justifyContent: 'center' }}>
             Close — agent will keep setting up in the background
