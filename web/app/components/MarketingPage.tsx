@@ -142,10 +142,24 @@ export function PageSection({
   );
 }
 
+// Stable slug from a heading. Used for anchor ids + TOC links so
+// deep-linking into any legal section works from the sitemap, email,
+// or Google SERP. Kept inline rather than extracted to a shared lib
+// because every call site that needs it already lives in this file.
+function legalSlug(heading: string): string {
+  return heading
+    .toLowerCase()
+    .replace(/^[\d.]+\s*/, '') // drop leading "1.", "2." numbering
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
 // Tight measure for legal / privacy / terms body copy. Renders a
-// single column with the serif h2s and proportional body. The second
-// arg is a list of `{heading, body}` so individual legal pages don't
-// have to repeat the markup structure.
+// two-column layout on desktop: sticky section ToC on the left,
+// content on the right. Collapses to a single column on < 900px
+// with the ToC inlined above the body. The second arg is a list
+// of `{heading, body}` so individual legal pages don't have to
+// repeat the markup structure.
 export function LegalBody({
   intro,
   sections,
@@ -155,61 +169,122 @@ export function LegalBody({
 }) {
   return (
     <div
+      className="legal-shell"
       style={{
-        maxWidth: 760,
+        maxWidth: 1100,
         margin: '0 auto',
         padding: '2rem 1.35rem 6rem',
+        display: 'grid',
+        gridTemplateColumns: 'minmax(200px, 220px) minmax(0, 1fr)',
+        gap: '3rem',
+        alignItems: 'start',
       }}
     >
-      {intro && (
-        <p
-          className="type-body"
+      {/* Sticky ToC */}
+      <aside className="legal-toc">
+        <div
+          className="type-eyebrow"
           style={{
-            fontSize: '0.98rem',
-            color: 'var(--fg-muted)',
-            marginBottom: '2.5rem',
-            lineHeight: 1.72,
+            color: 'var(--fg-dim)',
+            marginBottom: '1rem',
+            fontSize: '0.58rem',
           }}
         >
-          {intro}
-        </p>
-      )}
-      {sections.map((s, i) => (
-        <section
-          key={s.heading}
+          On this page
+        </div>
+        <nav
           style={{
-            marginTop: i === 0 ? 0 : '2.5rem',
-            paddingTop: i === 0 ? 0 : '2.5rem',
-            borderTop: i === 0 ? 'none' : '1px solid var(--border)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.15rem',
+            borderLeft: '1px solid var(--border)',
+            paddingLeft: '0.85rem',
           }}
         >
-          <h2
+          {sections.map((s) => (
+            <a
+              key={s.heading}
+              href={`#${legalSlug(s.heading)}`}
+              className="legal-toc-link"
+              style={{
+                fontFamily: 'var(--font-body)',
+                fontSize: '0.8rem',
+                color: 'var(--fg-muted)',
+                textDecoration: 'none',
+                padding: '0.35rem 0',
+                lineHeight: 1.45,
+                transition: 'color 0.3s var(--ease-out)',
+                position: 'relative',
+              }}
+            >
+              {s.heading}
+            </a>
+          ))}
+        </nav>
+      </aside>
+
+      <div className="legal-body-column">
+        {intro && (
+          <p
+            className="type-body"
             style={{
-              fontFamily: 'var(--font-display)',
-              fontSize: '1.5rem',
-              fontWeight: 500,
-              letterSpacing: '-0.02em',
-              color: 'var(--fg)',
-              margin: '0 0 0.9rem',
-            }}
-          >
-            {s.heading}
-          </h2>
-          <div
-            className="legal-body-copy"
-            style={{
-              fontFamily: 'var(--font-body)',
-              fontSize: '0.95rem',
-              lineHeight: 1.72,
+              fontSize: '0.98rem',
               color: 'var(--fg-muted)',
+              marginBottom: '2.5rem',
+              lineHeight: 1.72,
             }}
           >
-            {s.body}
-          </div>
-        </section>
-      ))}
+            {intro}
+          </p>
+        )}
+        {sections.map((s, i) => (
+          <section
+            key={s.heading}
+            id={legalSlug(s.heading)}
+            style={{
+              marginTop: i === 0 ? 0 : '2.5rem',
+              paddingTop: i === 0 ? 0 : '2.5rem',
+              borderTop: i === 0 ? 'none' : '1px solid var(--border)',
+              scrollMarginTop: 96,
+            }}
+          >
+            <h2
+              style={{
+                fontFamily: 'var(--font-display)',
+                fontSize: '1.5rem',
+                fontWeight: 500,
+                letterSpacing: '-0.02em',
+                color: 'var(--fg)',
+                margin: '0 0 0.9rem',
+              }}
+            >
+              {s.heading}
+            </h2>
+            <div
+              className="legal-body-copy"
+              style={{
+                fontFamily: 'var(--font-body)',
+                fontSize: '0.95rem',
+                lineHeight: 1.72,
+                color: 'var(--fg-muted)',
+              }}
+            >
+              {s.body}
+            </div>
+          </section>
+        ))}
+      </div>
 
       <style>{`
+        .legal-toc {
+          position: sticky;
+          top: 96px;
+          max-height: calc(100vh - 120px);
+          overflow-y: auto;
+        }
+        .legal-toc-link:hover {
+          color: var(--fg);
+        }
         .legal-body-copy p { margin: 0 0 1rem; }
         .legal-body-copy p:last-child { margin-bottom: 0; }
         .legal-body-copy ul, .legal-body-copy ol {
@@ -221,6 +296,25 @@ export function LegalBody({
           color: var(--fg);
           text-decoration: none;
           border-bottom: 1px solid var(--green-border);
+        }
+
+        @media (max-width: 900px) {
+          .legal-shell {
+            grid-template-columns: minmax(0, 1fr) !important;
+            gap: 2rem !important;
+          }
+          .legal-toc {
+            position: static;
+            max-height: none;
+            order: -1;
+            padding: 1rem 1.15rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+          }
+          .legal-toc nav {
+            flex-direction: column !important;
+          }
         }
       `}</style>
     </div>
