@@ -46,26 +46,49 @@ router.post('/', (req, res) => {
     timestamp_expired: 'timestamp_expired',
     bad_signature: 'invalid_signature',
   };
-  // Audit C-3: if the callback includes a nonce header (v3), look up the
-  // stored nonce on the order so the verifier can include it in the HMAC
-  // payload. If the order doesn't exist yet (race), skip nonce verification
-  // and let the v2/v1 fallback paths handle it.
+  // Audit C-3 + F2: combined order-row read. We need both the per-order
+  // callback_secret (F2 — replaces the global env secret as the verification
+  // material) and the stored nonce (C-3) before we can verify the signature,
+  // so a single SELECT does both jobs.
   let storedNonce = null;
-  if (headerNonce && headerOrderId) {
+  let perOrderSecret = null;
+  if (headerOrderId) {
     const row = /** @type {any} */ (
-      db.prepare(`SELECT callback_nonce FROM orders WHERE id = ?`).get(headerOrderId)
+      db
+        .prepare(`SELECT callback_nonce, callback_secret FROM orders WHERE id = ?`)
+        .get(headerOrderId)
     );
-    const effectiveNonce = row?.callback_nonce || null;
-    const effectiveHeader = headerNonce || null;
-    storedNonce = effectiveNonce;
-    if (effectiveNonce && effectiveHeader && effectiveNonce !== effectiveHeader) {
+    if (row?.callback_nonce) storedNonce = row.callback_nonce;
+    if (row?.callback_secret) {
+      try {
+        const { open } = require('../lib/secret-box');
+        perOrderSecret = open(row.callback_secret);
+      } catch (err) {
+        // Secret-box failure (e.g. wrong key after rotation) — fall back to
+        // the env secret rather than refusing the callback outright. Logged
+        // for ops so a key rotation incident is visible.
+        console.warn(
+          `[vcc-callback] failed to open per-order callback_secret for ${headerOrderId}: ${err.message}`,
+        );
+      }
+    }
+    // Nonce mismatch is a hard reject — if vcc claims a nonce that doesn't
+    // match what we stored at invoice time, somebody is replaying.
+    if (headerNonce && storedNonce && headerNonce !== storedNonce) {
       bizEvent('callback.rejected', { reason: 'nonce_mismatch', order_id: headerOrderId });
       return res.status(401).json({ error: 'invalid_signature' });
     }
   }
 
   const rawBody = req.rawBody;
-  const verdict = verifyVccSignature(rawBody, signature, timestamp, headerOrderId, storedNonce);
+  const verdict = verifyVccSignature(
+    rawBody,
+    signature,
+    timestamp,
+    headerOrderId,
+    storedNonce,
+    perOrderSecret,
+  );
   if (!verdict.ok) {
     bizEvent('callback.rejected', {
       reason: verdict.reason,

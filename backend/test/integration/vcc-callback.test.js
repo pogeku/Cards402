@@ -13,19 +13,37 @@ const VCC_CALLBACK_SECRET = process.env.VCC_CALLBACK_SECRET; // set in helpers/e
 
 // ── Signing helper ────────────────────────────────────────────────────────────
 
+// v2 signing: payload is `${timestamp}.${orderId}.${bodyStr}`. The audit-F6
+// fix removed v1 acceptance from the verifier, so tests must bind order_id
+// into both the signing payload and the X-VCC-Order-Id header.
 function sign(body, secret = VCC_CALLBACK_SECRET, timestampOverride = null) {
   const timestamp = timestampOverride ?? Date.now().toString();
   const bodyStr = typeof body === 'string' ? body : JSON.stringify(body);
-  const sig = crypto.createHmac('sha256', secret).update(`${timestamp}.${bodyStr}`).digest('hex');
-  return { timestamp, signature: `sha256=${sig}`, bodyStr };
+  const parsed = typeof body === 'string' ? safeJsonParse(body) : body;
+  const orderId = parsed?.order_id || '';
+  const sig = crypto
+    .createHmac('sha256', secret)
+    .update(`${timestamp}.${orderId}.${bodyStr}`)
+    .digest('hex');
+  return { timestamp, signature: `sha256=${sig}`, bodyStr, orderId };
 }
 
-function makeHeaders(timestamp, signature) {
-  return {
+function safeJsonParse(s) {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+
+function makeHeaders(timestamp, signature, orderId) {
+  const h = {
     'Content-Type': 'application/json',
     'X-VCC-Timestamp': timestamp,
     'X-VCC-Signature': signature,
   };
+  if (orderId) h['X-VCC-Order-Id'] = orderId;
+  return h;
 }
 
 // ── DB helpers ────────────────────────────────────────────────────────────────
@@ -81,10 +99,10 @@ describe('POST /vcc-callback — auth', () => {
     // outside the window regardless of minor skew.
     const staleTs = (Date.now() - 15 * 60 * 1000).toString();
     const payload = { order_id: 'x', status: 'fulfilled' };
-    const { signature, bodyStr } = sign(payload, VCC_CALLBACK_SECRET, staleTs);
+    const { signature, bodyStr, orderId } = sign(payload, VCC_CALLBACK_SECRET, staleTs);
     const res = await request
       .post('/vcc-callback')
-      .set(makeHeaders(staleTs, signature))
+      .set(makeHeaders(staleTs, signature, orderId))
       .send(bodyStr);
     assert.equal(res.status, 401);
     assert.equal(res.body.error, 'timestamp_expired');
@@ -92,10 +110,10 @@ describe('POST /vcc-callback — auth', () => {
 
   it('returns 401 when HMAC signature is wrong', async () => {
     const payload = { order_id: 'x', status: 'fulfilled' };
-    const { timestamp, bodyStr } = sign(payload);
+    const { timestamp, bodyStr, orderId } = sign(payload);
     const res = await request
       .post('/vcc-callback')
-      .set(makeHeaders(timestamp, 'sha256=badhash'))
+      .set(makeHeaders(timestamp, 'sha256=badhash', orderId))
       .send(bodyStr);
     assert.equal(res.status, 401);
     assert.equal(res.body.error, 'invalid_signature');
@@ -103,10 +121,10 @@ describe('POST /vcc-callback — auth', () => {
 
   it('returns 401 when signed with wrong secret', async () => {
     const payload = { order_id: 'x', status: 'fulfilled' };
-    const { timestamp, signature, bodyStr } = sign(payload, 'wrong-secret');
+    const { timestamp, signature, bodyStr, orderId } = sign(payload, 'wrong-secret');
     const res = await request
       .post('/vcc-callback')
-      .set(makeHeaders(timestamp, signature))
+      .set(makeHeaders(timestamp, signature, orderId))
       .send(bodyStr);
     assert.equal(res.status, 401);
     assert.equal(res.body.error, 'invalid_signature');
@@ -116,8 +134,11 @@ describe('POST /vcc-callback — auth', () => {
 // ── Validated request helpers ─────────────────────────────────────────────────
 
 async function postCallback(payload) {
-  const { timestamp, signature, bodyStr } = sign(payload);
-  return request.post('/vcc-callback').set(makeHeaders(timestamp, signature)).send(bodyStr);
+  const { timestamp, signature, bodyStr, orderId } = sign(payload);
+  return request
+    .post('/vcc-callback')
+    .set(makeHeaders(timestamp, signature, orderId))
+    .send(bodyStr);
 }
 
 // ── Field validation ──────────────────────────────────────────────────────────
@@ -125,10 +146,14 @@ async function postCallback(payload) {
 describe('POST /vcc-callback — field validation', () => {
   beforeEach(() => resetDb());
 
-  it('returns 400 when order_id is missing', async () => {
+  it('returns 401 when order_id is missing — fails HMAC v2/v3 binding', async () => {
+    // Audit F6: the verifier requires X-VCC-Order-Id in addition to the
+    // body field for v2/v3 signing. A callback with no order_id can no
+    // longer reach the body-validation layer because there's nothing to
+    // sign against — it gets rejected at HMAC time first.
     const res = await postCallback({ status: 'fulfilled' });
-    assert.equal(res.status, 400);
-    assert.equal(res.body.error, 'missing_fields');
+    assert.equal(res.status, 401);
+    assert.equal(res.body.error, 'invalid_signature');
   });
 
   it('returns 400 when status is missing', async () => {

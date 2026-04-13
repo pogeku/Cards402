@@ -655,6 +655,24 @@ applyMigration(21, () => {
   }
 });
 
+// Migration 22: per-order vcc callback secret. Adversarial audit F2:
+// previously every vcc job shared process.env.VCC_CALLBACK_SECRET, so a
+// single secret leak could forge callbacks for every past and future
+// order. Now getInvoice generates a fresh random secret per order, seals
+// it via secret-box, stores it here, and ships it to vcc as the per-job
+// callback_secret. The vcc-callback handler reads this column for the
+// matching order before verifying signatures, so a leaked env secret no
+// longer compromises any order that has its own secret.
+applyMigration(22, () => {
+  for (const sql of [`ALTER TABLE orders ADD COLUMN callback_secret TEXT`]) {
+    try {
+      db.prepare(sql).run();
+    } catch (_) {
+      /* column already exists */
+    }
+  }
+});
+
 // Audit A-5: post-migration sanity check. If a newer release has rolled
 // through here and bumped the on-disk schema beyond what this binary
 // knows about, fail hard instead of running against a schema we don't
@@ -665,7 +683,7 @@ applyMigration(21, () => {
 //
 // EXPECTED_SCHEMA_VERSION must match the last `applyMigration(N)` call
 // above. Bump it in lock-step with any new migration.
-const EXPECTED_SCHEMA_VERSION = 21;
+const EXPECTED_SCHEMA_VERSION = 22;
 const actualVersion = getSchemaVersion();
 if (actualVersion > EXPECTED_SCHEMA_VERSION) {
   console.error(

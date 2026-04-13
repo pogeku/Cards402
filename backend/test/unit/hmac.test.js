@@ -226,12 +226,16 @@ describe('verifyCallback — v2', () => {
   });
 });
 
-describe('verifyCallback — v1 backward compat', () => {
+describe('verifyCallback — v1 rejection (audit F6)', () => {
+  // F6 removed v1 acceptance. v1 was `${timestamp}.${rawBody}` with no
+  // order_id binding — a leaked secret could be used to forge a callback
+  // for any order. Both services have shipped v3 since the C-3 nonce work,
+  // so the legacy fallback was a forgery surface with no remaining users.
   function v1Sign(ts, body) {
     return crypto.createHmac('sha256', SECRET).update(`${ts}.${body}`).digest('hex');
   }
 
-  it('accepts a v1 signature when no X-VCC-Order-Id is supplied', () => {
+  it('rejects a v1 signature even when no X-VCC-Order-Id is supplied', () => {
     const ts = String(Date.now());
     const sig = v1Sign(ts, BODY);
     const v = verifyCallback({
@@ -241,11 +245,11 @@ describe('verifyCallback — v1 backward compat', () => {
       orderId: undefined,
       rawBody: BODY,
     });
-    assert.deepEqual(v, { ok: true, version: 1 });
+    assert.equal(v.ok, false);
+    assert.equal(v.reason, 'bad_signature');
   });
 
-  it('still accepts v1 when a stray order_id header is present', () => {
-    // Transitional: sender is still on v1; receiver tolerates a spurious header.
+  it('rejects a v1 signature when an X-VCC-Order-Id header is present', () => {
     const ts = String(Date.now());
     const sig = v1Sign(ts, BODY);
     const v = verifyCallback({
@@ -255,8 +259,8 @@ describe('verifyCallback — v1 backward compat', () => {
       orderId: ORDER_ID,
       rawBody: BODY,
     });
-    assert.equal(v.ok, true);
-    assert.equal(v.version, 1);
+    assert.equal(v.ok, false);
+    assert.equal(v.reason, 'bad_signature');
   });
 });
 

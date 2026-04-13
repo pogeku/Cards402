@@ -15,12 +15,16 @@
 // Receiver MUST compare the signed order_id against the request URL / body
 // to guarantee the caller's intent matches the signed payload.
 //
-// Backward compat: verifyCallback() also accepts v1 signatures — the old
-// format `${timestamp}.${rawBody}` without order_id — during the rollout.
-// Once both services have shipped v2, the v1 branch can be deleted.
+// v3 is the only accepted protocol. The v1 fallback (`${timestamp}.${rawBody}`
+// with no order_id binding) was removed in the 2026-04-13 adversarial audit
+// (finding F6) — both services have shipped v3 since the C-3 nonce work, and
+// keeping legacy acceptance widened the forgery surface for callers who knew
+// only the shared secret. v2 (`${ts}.${orderId}.${body}`, no nonce) is still
+// accepted as a transitional fallback because it still binds the order_id.
 //
 // Audit findings addressed: A-11 (extract to shared lib), C-4 (sign
-// order_id), C-5 (configurable skew), C-13 (caller-enforced secret length).
+// order_id), C-5 (configurable skew), C-13 (caller-enforced secret length),
+// F6 (drop v1 acceptance).
 
 const crypto = require('crypto');
 
@@ -65,12 +69,14 @@ function signCallback({ secret, timestamp, orderId, rawBody, nonce }) {
  * Tries protocol versions in descending order:
  *   v3 (nonce):    `${ts}.${orderId}.${nonce}.${body}` — strongest, per-job scoped
  *   v2 (no nonce): `${ts}.${orderId}.${body}`          — order-id-bound
- *   v1 (legacy):   `${ts}.${body}`                     — timestamp-only
+ *
+ * v1 (`${ts}.${body}` with no order_id binding) was removed in F6 — both
+ * services have shipped v3 since the C-3 nonce work, and the v1 branch
+ * was a forgery surface for any caller who knew only the shared secret.
  *
  * Returns one of:
  *   { ok: true, version: 3 }        — v3 with nonce validated
  *   { ok: true, version: 2 }        — v2 signature validated
- *   { ok: true, version: 1 }        — legacy v1 signature validated
  *   { ok: false, reason: 'missing_fields' }
  *   { ok: false, reason: 'timestamp_expired' }
  *   { ok: false, reason: 'bad_signature' }
@@ -79,7 +85,7 @@ function signCallback({ secret, timestamp, orderId, rawBody, nonce }) {
  * @param {string} args.secret
  * @param {string} args.timestamp      From X-VCC-Timestamp header.
  * @param {string} args.signatureHeader Value of X-VCC-Signature header ('sha256=<hex>').
- * @param {string} [args.orderId]      From X-VCC-Order-Id header (v2+).
+ * @param {string} [args.orderId]      From X-VCC-Order-Id header.
  * @param {string} [args.nonce]        Per-job nonce from X-VCC-Nonce header (v3).
  * @param {string} args.rawBody        Raw request body captured by express verify.
  * @param {number} [args.maxSkewMs]    Replay window.
@@ -119,7 +125,8 @@ function verifyCallback({
     if (safeEqHex(provided, expectedV3)) return { ok: true, version: 3 };
   }
 
-  // v2: order_id in the signing payload, no nonce.
+  // v2: order_id in the signing payload, no nonce. Transitional fallback —
+  // still order-id-bound so it can't be replayed across orders.
   if (orderId) {
     const expectedV2 = signCallback({
       secret,
@@ -129,13 +136,6 @@ function verifyCallback({
     });
     if (safeEqHex(provided, expectedV2)) return { ok: true, version: 2 };
   }
-
-  // v1 legacy fallback — no order_id, signs ${timestamp}.${rawBody}.
-  const expectedV1 = crypto
-    .createHmac('sha256', secret)
-    .update(`${timestamp}.${rawBody}`)
-    .digest('hex');
-  if (safeEqHex(provided, expectedV1)) return { ok: true, version: 1 };
 
   return { ok: false, reason: 'bad_signature' };
 }

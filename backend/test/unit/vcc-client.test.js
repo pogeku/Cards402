@@ -66,10 +66,10 @@ function makeSignature(body, secret = VCC_CALLBACK_SECRET, ts = Date.now().toStr
 
 // ── verifyVccSignature ────────────────────────────────────────────────────────
 //
-// verifyVccSignature now returns a rich verdict object `{ ok, version, reason }`
-// instead of a bare boolean. Legacy v1 callbacks (no order_id in payload) are
-// still accepted during the rollout; v2 callbacks bind the order_id into the
-// HMAC payload. See backend/src/lib/hmac.js.
+// verifyVccSignature returns `{ ok, version, reason }`. v3 (order_id +
+// nonce) and v2 (order_id) are accepted; v1 (no order_id binding) was
+// removed in audit F6 because it gave anyone with the shared secret
+// cross-order forgery capability. See backend/src/lib/hmac.js.
 
 function makeV1Signature(body, secret = VCC_CALLBACK_SECRET, ts = Date.now().toString()) {
   const sig = crypto.createHmac('sha256', secret).update(`${ts}.${body}`).digest('hex');
@@ -100,24 +100,22 @@ describe('verifyVccSignature (v2)', () => {
     assert.equal(v.reason, 'bad_signature');
   });
 
-  it('accepts a valid legacy v1 signature when X-VCC-Order-Id is absent', () => {
+  it('rejects a v1 legacy signature even with no X-VCC-Order-Id header (audit F6)', () => {
     const body = '{"order_id":"abc","status":"fulfilled"}';
     const ts = Date.now().toString();
     const { signature } = makeV1Signature(body, VCC_CALLBACK_SECRET, ts);
     const v = verifyVccSignature(body, signature, ts, undefined);
-    assert.equal(v.ok, true);
-    assert.equal(v.version, 1);
+    assert.equal(v.ok, false);
+    assert.equal(v.reason, 'bad_signature');
   });
 
-  it('falls back to v1 verification when v2 fails and header is present', () => {
-    // If the sender is still on v1 but the client passed a spurious order-id
-    // header, v2 verify fails and v1 still succeeds.
+  it('rejects a v1 signature when an order-id header is present (audit F6)', () => {
     const body = '{"order_id":"abc"}';
     const ts = Date.now().toString();
     const { signature } = makeV1Signature(body, VCC_CALLBACK_SECRET, ts);
     const v = verifyVccSignature(body, signature, ts, 'abc');
-    assert.equal(v.ok, true);
-    assert.equal(v.version, 1);
+    assert.equal(v.ok, false);
+    assert.equal(v.reason, 'bad_signature');
   });
 
   it('returns bad_signature for wrong secret', () => {
