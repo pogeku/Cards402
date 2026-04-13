@@ -65,9 +65,12 @@ function getStellarAddress(wallet: WalletInfo): string {
  * twice with the same name is safe and returns the same keys, so skill.md
  * flows and agent retries don't duplicate state.
  *
- * Wallets are stored encrypted at `~/.ows/vault/<name>.vault` by default.
- * Pass a custom `vaultPath` if you need the wallet somewhere else
- * (e.g. a mounted volume that survives container restarts).
+ * Wallets are stored encrypted at `~/.ows/wallets/<name>.vault` by
+ * default. If the vault file is lost, the funds it controls become
+ * unreachable — cards402 never sees private keys and can't recover
+ * them. Agents running on ephemeral filesystems (Lambda, Cloud Run,
+ * scratch containers) should pass a `vaultPath` pointing at a
+ * persistent volume, or set the `OWS_VAULT_PATH` environment variable.
  */
 export function createOWSWallet(
   name: string,

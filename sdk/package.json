@@ -1,6 +1,6 @@
 {
   "name": "@ctx.com/cards402",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Virtual Visa cards for AI agents — pay USDC or XLM on Stellar, get a card in ~60s",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

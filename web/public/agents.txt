@@ -312,6 +312,52 @@ Step 3 (fallback) — Poll if you can't do SSE:
   dashboard for the order's state.
 
 ────────────────────────────────────────────────────────────────────────────────
+WALLET PERSISTENCE (READ THIS BEFORE YOU CREATE A WALLET)
+────────────────────────────────────────────────────────────────────────────────
+
+The SDK and the OWS CLI both store encrypted wallets on local disk —
+by default at `~/.ows/wallets/<name>.vault`. That file IS the wallet:
+it holds the private keys that control your Stellar address. If the
+file disappears, the funds it controls are unreachable. cards402
+never sees your private keys and can't recover them for you.
+
+Before you call `createOWSWallet`, figure out whether the default
+location actually persists on your runtime:
+
+  KEEP DEFAULT
+    ✓ Your own laptop / workstation
+    ✓ A long-lived VM with a stable home directory
+    ✓ A docker container with a volume mount for the home dir
+    ✓ Any environment where `~/.ows/wallets/` survives restarts
+
+  OVERRIDE TO A PERSISTENT PATH
+    ✗ AWS Lambda / Vercel / Cloud Run / other serverless
+    ✗ Replit without persistence
+    ✗ Ephemeral dev containers (codespaces-style sandboxes that
+      reset `$HOME` between invocations)
+    ✗ Docker containers without a volume mount for /root or /home
+
+To override, set the OWS_VAULT_PATH environment variable before
+calling the SDK (or pass `vaultPath` as the third argument to
+`createOWSWallet`). Point it at a directory on a volume that
+survives restarts — e.g. /data/ows on a docker-compose volume, a
+path under an EFS mount on Lambda, or a Replit persistent storage
+path.
+
+  import { createOWSWallet } from '@ctx.com/cards402';
+  const { publicKey } = createOWSWallet(
+    'my-agent',
+    undefined,          // optional passphrase
+    '/data/ows',        // explicit vault path
+  );
+
+If you're running on a shared filesystem (k8s PVC, EFS, etc.),
+pass a `passphrase` as well so the vault file is useless to anyone
+who gets read access without the passphrase.
+
+Reference: https://github.com/CTX-com/Stellar-OWS-Core
+
+────────────────────────────────────────────────────────────────────────────────
 WALLET SETUP AND FUNDING
 ────────────────────────────────────────────────────────────────────────────────
 

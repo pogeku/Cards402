@@ -637,34 +637,6 @@ function NewKeyResult({
             {copied ? 'Copied' : 'Copy'}
           </button>
         </div>
-        <details style={{ marginTop: '1.25rem' }}>
-          <summary
-            style={{
-              color: 'var(--muted)',
-              fontSize: '0.75rem',
-              fontFamily: 'var(--font-mono)',
-              cursor: 'pointer',
-              userSelect: 'none',
-            }}
-          >
-            Webhook secret (only if the agent wants push notifications)
-          </summary>
-          <pre
-            style={{
-              background: 'var(--surface)',
-              border: '1px solid var(--border)',
-              borderRadius: 6,
-              padding: '0.625rem 0.75rem',
-              fontSize: '0.75rem',
-              wordBreak: 'break-all',
-              margin: '0.625rem 0 0',
-              fontFamily: 'var(--font-mono)',
-              color: 'var(--muted)',
-            }}
-          >
-            {data.webhook_secret}
-          </pre>
-        </details>
         <div style={{ marginTop: '1.5rem', display: 'flex', justifyContent: 'flex-end' }}>
           <button style={btnStyle('primary')} onClick={onClose}>
             Done

@@ -22,9 +22,9 @@ npm install @ctx.com/cards402
 ```javascript
 import { createOWSWallet, getOWSBalance } from '@ctx.com/cards402';
 
-// Creates a new encrypted Stellar wallet in the default OWS vault
-// (~/.ows/vault/<name>.vault). Idempotent — returns the existing
-// wallet if one with this name already exists.
+// Creates a new encrypted Stellar wallet, or returns the existing one
+// if a wallet with this name is already in the vault. Idempotent — safe
+// to call on every startup.
 const { publicKey } = createOWSWallet('my-agent');
 console.log('Fund this Stellar address:', publicKey);
 
@@ -37,6 +37,50 @@ console.log(`XLM: ${balance.xlm}  USDC: ${balance.usdc}`);
 XLM you need for your intended purchases, plus ~2 XLM to cover the
 Stellar account reserve and fees. There is no minimum top-up beyond
 that — send what you actually need.
+
+### ⚠ Persisting your wallet
+
+This is the part that will bite you if you ignore it.
+
+OWS stores the encrypted wallet file on disk — by default at
+`~/.ows/wallets/<name>.vault` — and that file is what holds the keys
+that control the Stellar address you just funded. **If the vault file
+disappears, the funds in that address are unreachable.** There is no
+server-side recovery; cards402 never sees your private keys.
+
+Before you run `createOWSWallet` for the first time, check where
+`~/.ows/wallets/` actually lives on your runtime and whether that
+location survives a restart:
+
+- **Long-lived VM, your own laptop, persistent container:** `~` is
+  your real home directory. Default vault location is fine. No action
+  needed.
+- **Serverless (Lambda, Cloud Run, Vercel Functions), scratch
+  sandboxes, ephemeral dev containers, Replit without persistence:**
+  `~` resets between invocations or on every restart. You **must**
+  point OWS at a persistent volume or you'll lose every wallet you
+  create. Set the `OWS_VAULT_PATH` environment variable (or pass
+  `vaultPath` as the third argument to `createOWSWallet`) to a path
+  on a mounted volume that survives restarts — e.g. `/data/ows` on
+  a docker-compose volume, or a path under an EFS mount on Lambda.
+- **Not sure?** Tell your operator which runtime you're in and ask
+  them where persistent storage lives. Better to pause here than to
+  lose funds later.
+
+```javascript
+// Example: explicit persistent vault path
+const { publicKey } = createOWSWallet('my-agent', undefined, '/data/ows');
+```
+
+The wallet is encrypted at rest. If you also pass a `passphrase` to
+`createOWSWallet`, an attacker who gets hold of the vault file still
+can't spend without the passphrase. Recommended when the vault path
+is on shared storage.
+
+**Reference material your operator may want to read:**
+
+- OWS vault format and CLI: <https://github.com/CTX-com/Stellar-OWS-Core>
+- Stellar account activation minimums: <https://developers.stellar.org/docs/learn/fundamentals/lumens#minimum-balance>
 
 ## Purchasing a card
 
