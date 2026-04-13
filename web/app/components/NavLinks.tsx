@@ -2,28 +2,61 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import type { MouseEvent } from 'react';
 
 export function NavLinks() {
   const pathname = usePathname();
 
-  const linkStyle = (href: string) => ({
+  const isActive = (href: string) => pathname === href || pathname.startsWith(href + '/');
+
+  const linkStyle = (href: string): React.CSSProperties => ({
     textDecoration: 'none',
-    color: pathname === href ? 'var(--fg)' : 'var(--muted)',
-    fontSize: '0.875rem',
-    padding: '0.375rem 0.75rem',
+    color: isActive(href) ? 'var(--fg)' : 'var(--fg-muted)',
+    fontSize: '0.84rem',
+    fontFamily: 'var(--font-body)',
+    fontWeight: 500,
+    padding: '0.45rem 0.7rem',
     borderRadius: 6,
-    background: pathname === href ? 'rgba(255,255,255,0.06)' : 'transparent',
-    transition: 'color 0.15s, background 0.15s',
-    fontWeight: pathname === href ? 500 : 400,
+    transition: 'color 0.3s var(--ease-out)',
+    position: 'relative',
   });
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '0.1rem' }}>
       <Link href="/docs" style={linkStyle('/docs')}>
         Docs
       </Link>
       <Link href="/dashboard" style={linkStyle('/dashboard')}>
         Dashboard
+      </Link>
+      <Link
+        href="/dashboard"
+        style={{
+          marginLeft: '0.6rem',
+          textDecoration: 'none',
+          fontSize: '0.78rem',
+          fontFamily: 'var(--font-body)',
+          fontWeight: 600,
+          padding: '0.52rem 0.95rem',
+          borderRadius: 999,
+          background: 'var(--fg)',
+          color: 'var(--bg)',
+          transition: 'transform 0.3s var(--ease-out), box-shadow 0.3s var(--ease-out)',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '0.4rem',
+        }}
+        onMouseEnter={(e: MouseEvent<HTMLAnchorElement>) => {
+          e.currentTarget.style.transform = 'translateY(-1px)';
+          e.currentTarget.style.boxShadow = '0 8px 24px -8px var(--green-glow)';
+        }}
+        onMouseLeave={(e: MouseEvent<HTMLAnchorElement>) => {
+          e.currentTarget.style.transform = 'translateY(0)';
+          e.currentTarget.style.boxShadow = 'none';
+        }}
+      >
+        Get started
+        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 400, opacity: 0.6 }}>↗</span>
       </Link>
     </div>
   );

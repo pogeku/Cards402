@@ -10,6 +10,7 @@ import type { ReactNode } from 'react';
 import { useDashboard } from '../_lib/DashboardProvider';
 import { usePermissions } from '../_lib/usePermissions';
 import type { Permission } from '../_lib/permissions';
+import { Wordmark } from '@/app/components/Wordmark';
 
 interface Item {
   href: string;
@@ -170,31 +171,23 @@ export function Sidebar() {
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: '0.5rem',
+          gap: '0.6rem',
           padding: '0.55rem 0.75rem',
           textDecoration: 'none',
+          color: 'var(--fg)',
         }}
       >
+        <Wordmark height={18} />
         <span
           style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: '0.95rem',
-            fontWeight: 700,
-            color: 'var(--fg)',
-            letterSpacing: '-0.02em',
-          }}
-        >
-          cards<span style={{ color: 'var(--green)' }}>402</span>
-        </span>
-        <span
-          style={{
-            fontSize: '0.58rem',
+            fontSize: '0.54rem',
             color: 'var(--fg-dim)',
-            padding: '0.1rem 0.35rem',
+            padding: '0.12rem 0.38rem',
             border: '1px solid var(--border)',
             borderRadius: 3,
             textTransform: 'uppercase',
-            letterSpacing: '0.06em',
+            letterSpacing: '0.08em',
+            fontFamily: 'var(--font-mono)',
           }}
         >
           Beta

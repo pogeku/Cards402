@@ -1,53 +1,96 @@
 @import 'tailwindcss';
 
-/* Dark theme — default. Light theme is an opt-in override via
+/* Cards402 design system
+   ----------------------------------------------------------------------
+   Dark theme — default. Light theme is an opt-in override via
    <html data-theme="light">. System theme is resolved in JS at mount
    time (see app/dashboard/_lib/theme.ts) so we can honour OS preference
    without a flash of wrong colors. */
+
 :root {
-  --bg: #0a0a0a;
-  --bg-elev: #111111;
-  --bg-elev-2: #161616;
-  --fg: #f0f0f0;
-  --fg-muted: rgba(255, 255, 255, 0.62);
-  --fg-dim: rgba(255, 255, 255, 0.45);
-  --green: #00ff88;
-  --green-dim: #00cc6a;
-  --green-muted: rgba(0, 255, 136, 0.12);
-  --green-border: rgba(0, 255, 136, 0.25);
-  --red: #f87171;
-  --red-muted: rgba(248, 113, 113, 0.12);
-  --red-border: rgba(248, 113, 113, 0.25);
-  --yellow: #facc15;
-  --yellow-muted: rgba(250, 204, 21, 0.12);
-  --yellow-border: rgba(250, 204, 21, 0.25);
-  --blue: #60a5fa;
-  --blue-muted: rgba(96, 165, 250, 0.12);
-  --blue-border: rgba(96, 165, 250, 0.25);
-  --purple: #a78bfa;
-  --purple-muted: rgba(167, 139, 250, 0.12);
-  --purple-border: rgba(167, 139, 250, 0.25);
-  --surface: #111111;
-  --surface-2: #161616;
+  /* ── Canvas + ink ─────────────────────────────────────────────────── */
+  --bg: #050505;
+  --bg-elev: #0c0c0c;
+  --bg-elev-2: #111111;
+  --fg: #f4f4f4;
+  --fg-muted: rgba(255, 255, 255, 0.66);
+  --fg-dim: rgba(255, 255, 255, 0.44);
+  --muted: rgba(255, 255, 255, 0.44);
+
+  /* ── Surfaces ─────────────────────────────────────────────────────── */
+  --surface: #0c0c0c;
+  --surface-2: #141414;
+  --surface-3: #1a1a1a;
   --surface-hover: rgba(255, 255, 255, 0.04);
   --border: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.14);
-  --muted: rgba(255, 255, 255, 0.45);
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.02);
-  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --border-hairline: rgba(255, 255, 255, 0.05);
+
+  /* ── Accents ──────────────────────────────────────────────────────── */
+  /* Single live/success green. Slightly muted from the old neon so it
+     reads as engineering-grade rather than cyberpunk. */
+  --green: #7cffb2;
+  --green-dim: #4fd894;
+  --green-muted: rgba(124, 255, 178, 0.1);
+  --green-border: rgba(124, 255, 178, 0.26);
+  --green-glow: rgba(124, 255, 178, 0.35);
+
+  --red: #ff7a7a;
+  --red-muted: rgba(255, 122, 122, 0.12);
+  --red-border: rgba(255, 122, 122, 0.26);
+  --yellow: #ffd166;
+  --yellow-muted: rgba(255, 209, 102, 0.12);
+  --yellow-border: rgba(255, 209, 102, 0.26);
+  --blue: #8ab4ff;
+  --blue-muted: rgba(138, 180, 255, 0.12);
+  --blue-border: rgba(138, 180, 255, 0.26);
+  --purple: #c8a8ff;
+  --purple-muted: rgba(200, 168, 255, 0.12);
+  --purple-border: rgba(200, 168, 255, 0.26);
+
+  /* ── Shadow + glow ────────────────────────────────────────────────── */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.03);
+  --shadow-hero: 0 40px 120px -40px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --shadow-float: 0 20px 48px -24px rgba(0, 0, 0, 0.85);
+
+  /* ── Typography tokens ────────────────────────────────────────────── */
+  /* next/font sets --font-display, --font-body, --font-mono-next on
+     <html>. We alias the old --font-mono here so the dashboard keeps
+     working without touching component code. */
+  --font-display: 'Fraunces', 'IBM Plex Serif', Georgia, 'Times New Roman', serif;
+  --font-body:
+    'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: var(--font-mono-next, 'IBM Plex Mono'), 'JetBrains Mono', ui-monospace, monospace;
+
+  /* ── Motion ───────────────────────────────────────────────────────── */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.18, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 html[data-theme='light'] {
-  --bg: #fafafa;
+  --bg: #fafaf7;
   --bg-elev: #ffffff;
-  --bg-elev-2: #f4f4f5;
+  --bg-elev-2: #f2f1ec;
   --fg: #0a0a0a;
-  --fg-muted: rgba(0, 0, 0, 0.68);
-  --fg-dim: rgba(0, 0, 0, 0.48);
+  --fg-muted: rgba(10, 10, 10, 0.68);
+  --fg-dim: rgba(10, 10, 10, 0.46);
+  --muted: rgba(10, 10, 10, 0.5);
+
+  --surface: #ffffff;
+  --surface-2: #f4f3ef;
+  --surface-3: #eceae3;
+  --surface-hover: rgba(10, 10, 10, 0.03);
+  --border: rgba(10, 10, 10, 0.09);
+  --border-strong: rgba(10, 10, 10, 0.16);
+  --border-hairline: rgba(10, 10, 10, 0.05);
+
   --green: #059669;
   --green-dim: #047857;
   --green-muted: rgba(5, 150, 105, 0.1);
-  --green-border: rgba(5, 150, 105, 0.25);
+  --green-border: rgba(5, 150, 105, 0.26);
+  --green-glow: rgba(5, 150, 105, 0.18);
+
   --red: #dc2626;
   --red-muted: rgba(220, 38, 38, 0.08);
   --red-border: rgba(220, 38, 38, 0.22);
@@ -60,13 +103,10 @@ html[data-theme='light'] {
   --purple: #7c3aed;
   --purple-muted: rgba(124, 58, 237, 0.08);
   --purple-border: rgba(124, 58, 237, 0.22);
-  --surface: #ffffff;
-  --surface-2: #f4f4f5;
-  --surface-hover: rgba(0, 0, 0, 0.03);
-  --border: rgba(0, 0, 0, 0.09);
-  --border-strong: rgba(0, 0, 0, 0.14);
-  --muted: rgba(0, 0, 0, 0.5);
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.06), 0 0 0 1px rgba(0, 0, 0, 0.02);
+
+  --shadow-card: 0 1px 2px rgba(10, 10, 10, 0.06), 0 0 0 1px rgba(10, 10, 10, 0.03);
+  --shadow-hero: 0 40px 120px -40px rgba(10, 10, 10, 0.22), 0 0 0 1px rgba(10, 10, 10, 0.06);
+  --shadow-float: 0 20px 48px -24px rgba(10, 10, 10, 0.2);
 }
 
 @theme inline {
@@ -81,61 +121,171 @@ html[data-theme='light'] {
 html {
   background: var(--bg);
   color: var(--fg);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  /* Keep tap-highlights out of mobile nav interactions — dated look. */
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
   background: var(--bg);
   color: var(--fg);
   min-height: 100vh;
+  font-feature-settings:
+    'ss01' on,
+    'cv11' on;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+/* ── Typography primitives ─────────────────────────────────────────── */
+
+.type-display {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.025em;
+  line-height: 0.96;
+  font-variation-settings:
+    'opsz' 144,
+    'SOFT' 50;
 }
 
-/* Code blocks */
-pre,
-code {
+.type-display-tight {
+  font-family: var(--font-display);
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 0.92;
+  font-variation-settings:
+    'opsz' 144,
+    'SOFT' 20;
+}
+
+.type-eyebrow {
   font-family: var(--font-mono);
-  font-size: 0.875rem;
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
 }
 
-pre {
-  background: #0d0d0d;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 1.25rem 1.5rem;
-  overflow-x: auto;
+.type-body {
+  font-family: var(--font-body);
+  font-size: 0.95rem;
   line-height: 1.65;
+  color: var(--fg-muted);
+  font-weight: 400;
 }
 
-/* Green glow effect */
-.glow-green {
-  text-shadow: 0 0 20px rgba(0, 255, 136, 0.5);
+.type-mono-small {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: -0.01em;
 }
 
-/* Dot grid background */
+/* ── Texture + surface primitives ──────────────────────────────────── */
+
+/* Fine grain overlay. SVG noise encoded as a data URI so no extra HTTP.
+   Element = a sticky full-viewport overlay with mix-blend-mode: overlay
+   to avoid tinting. Apply to a <div class="grain"> placed just inside
+   <body> on the marketing surface. */
+.grain::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.06;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/><feColorMatrix type='matrix' values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.7 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+}
+
+html[data-theme='light'] .grain::before {
+  opacity: 0.05;
+  mix-blend-mode: multiply;
+}
+
+/* Subtle dot grid — used behind heroes and section headers */
 .dot-grid {
   background-image: radial-gradient(circle, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
   background-size: 28px 28px;
 }
 
-/* Fade animations */
+html[data-theme='light'] .dot-grid {
+  background-image: radial-gradient(circle, rgba(10, 10, 10, 0.07) 1px, transparent 1px);
+}
+
+/* Radial glow primitive — soft green glow behind a focal element. */
+.glow-green {
+  text-shadow: 0 0 20px var(--green-glow);
+}
+
+.radial-green-glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse 50% 40% at 50% 40%, var(--green-glow), transparent 70%);
+  opacity: 0.35;
+  filter: blur(60px);
+}
+
+.radial-ink-glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 60% 50% at 50% 35%,
+    rgba(255, 255, 255, 0.04),
+    transparent 70%
+  );
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+html[data-theme='light'] ::-webkit-scrollbar-thumb {
+  background: rgba(10, 10, 10, 0.12);
+}
+
+/* ── Code blocks ───────────────────────────────────────────────────── */
+
+pre,
+code {
+  font-family: var(--font-mono);
+  font-size: 0.86rem;
+}
+
+pre {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.1rem 1.35rem;
+  overflow-x: auto;
+  line-height: 1.68;
+}
+
+/* ── Selection ─────────────────────────────────────────────────────── */
+
+::selection {
+  background: var(--green);
+  color: #000;
+}
+
+/* ── Animations ────────────────────────────────────────────────────── */
+
 @keyframes fadeInUp {
   from {
     opacity: 0;
@@ -175,80 +325,131 @@ pre {
   }
 }
 
+@keyframes reveal-up {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+@keyframes draw-stroke {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes float-card {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-3deg);
+  }
+  50% {
+    transform: translateY(-10px) rotate(-2.6deg);
+  }
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.85;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.02);
+  }
+}
+
 .animate-fade-in-up {
-  animation: fadeInUp 0.5s ease forwards;
+  animation: fadeInUp 0.5s var(--ease-out) forwards;
 }
 
 .animate-fade-in {
-  animation: fadeIn 0.4s ease forwards;
+  animation: fadeIn 0.4s var(--ease-out) forwards;
+}
+
+.animate-reveal {
+  opacity: 0;
+  animation: reveal-up 0.85s var(--ease-out) forwards;
 }
 
 .pulse-green {
   animation: pulse-green 2s ease-in-out infinite;
 }
 
-/* Status badge colors */
-.status-pending_payment {
-  color: #facc15;
-  background: rgba(250, 204, 21, 0.1);
-  border-color: rgba(250, 204, 21, 0.25);
-}
-.status-payment_confirmed {
-  color: #60a5fa;
-  background: rgba(96, 165, 250, 0.1);
-  border-color: rgba(96, 165, 250, 0.25);
-}
-.status-ordering {
-  color: #a78bfa;
-  background: rgba(167, 139, 250, 0.1);
-  border-color: rgba(167, 139, 250, 0.25);
-}
-.status-claim_received {
-  color: #c084fc;
-  background: rgba(192, 132, 252, 0.1);
-  border-color: rgba(192, 132, 252, 0.25);
-}
-.status-stage1_done {
-  color: #f0abfc;
-  background: rgba(240, 171, 252, 0.1);
-  border-color: rgba(240, 171, 252, 0.25);
-}
-.status-delivered {
-  color: #00ff88;
-  background: rgba(0, 255, 136, 0.1);
-  border-color: rgba(0, 255, 136, 0.25);
-}
-.status-failed {
-  color: #f87171;
-  background: rgba(248, 113, 113, 0.1);
-  border-color: rgba(248, 113, 113, 0.25);
-}
-.status-refund_pending {
-  color: #fb923c;
-  background: rgba(251, 146, 60, 0.1);
-  border-color: rgba(251, 146, 60, 0.25);
+/* Respect reduced motion — all fancy reveals collapse to plain opacity */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
-/* Docs sidebar — hide on small screens */
+/* ── Status badge colors (dashboard legacy — keep) ────────────────── */
+
+.status-pending_payment {
+  color: var(--yellow);
+  background: var(--yellow-muted);
+  border-color: var(--yellow-border);
+}
+.status-payment_confirmed {
+  color: var(--blue);
+  background: var(--blue-muted);
+  border-color: var(--blue-border);
+}
+.status-ordering {
+  color: var(--purple);
+  background: var(--purple-muted);
+  border-color: var(--purple-border);
+}
+.status-claim_received {
+  color: var(--purple);
+  background: var(--purple-muted);
+  border-color: var(--purple-border);
+}
+.status-stage1_done {
+  color: var(--purple);
+  background: var(--purple-muted);
+  border-color: var(--purple-border);
+}
+.status-delivered {
+  color: var(--green);
+  background: var(--green-muted);
+  border-color: var(--green-border);
+}
+.status-failed {
+  color: var(--red);
+  background: var(--red-muted);
+  border-color: var(--red-border);
+}
+.status-refund_pending {
+  color: var(--yellow);
+  background: var(--yellow-muted);
+  border-color: var(--yellow-border);
+}
+
+/* ── Dashboard responsive (unchanged from before) ─────────────────── */
+
 @media (max-width: 640px) {
   .docs-sidebar {
     display: none;
   }
 }
 
-/* Dashboard mobile pass — we don't ship a full hamburger for Phase 3,
-   but below ~900px the dashboard reflows so the main content stays
-   usable. Desktop-first defaults live in component styles; these
-   overrides only kick in on narrow viewports. */
 @media (max-width: 900px) {
-  /* Hide the sidebar. Phase 4 will replace this with a slide-in
-     drawer + hamburger trigger; for now the header's global search +
-     ⌘K palette cover navigation on mobile. */
   .dashboard-sidebar {
     display: none !important;
   }
-  /* Agent detail right pane stacks below the main area instead of
-     running alongside it. */
   .dashboard-agent-detail-grid {
     grid-template-columns: minmax(0, 1fr) !important;
   }
@@ -259,8 +460,7 @@ pre {
     border-left: none !important;
     border-top: 1px solid var(--border) !important;
   }
-  /* Tables scroll horizontally with a visible hint instead of
-     crunching columns. Wrapper is applied by Card's inner div. */
+  /* Tables become horizontally scrollable instead of crunching columns. */
   table {
     min-width: 580px;
   }
@@ -270,9 +470,21 @@ pre {
   .dashboard-page-container {
     padding: 1rem 0.85rem !important;
   }
+  /* Tighter type ramp on small screens — display fonts shouldn't
+     wrap into three lines on an iPhone SE. */
+  .type-display {
+    letter-spacing: -0.02em;
+  }
 }
 
-/* Table styles */
+/* Prevent horizontal scroll from any rogue overflowing element */
+html,
+body {
+  overflow-x: hidden;
+}
+
+/* ── Table primitives (dashboard) ──────────────────────────────────── */
+
 table {
   border-collapse: collapse;
   width: 100%;
@@ -292,7 +504,7 @@ th {
 td {
   padding: 0.75rem 0.875rem;
   font-size: 0.8125rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid var(--border-hairline);
   vertical-align: middle;
 }
 
@@ -301,7 +513,7 @@ tr:last-child td {
 }
 
 tr:hover td {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--surface-hover);
 }
 
 @keyframes pulse {
@@ -318,4 +530,40 @@ tr:hover td {
   to {
     transform: rotate(360deg);
   }
+}
+
+/* ── Marketing link styles ─────────────────────────────────────────── */
+
+.link-subtle {
+  color: var(--fg);
+  text-decoration: none;
+  background-image: linear-gradient(to right, currentColor, currentColor);
+  background-size: 100% 1px;
+  background-position: 0 100%;
+  background-repeat: no-repeat;
+  padding-bottom: 1px;
+  transition: background-size 0.5s var(--ease-out);
+}
+.link-subtle:hover {
+  background-size: 0 1px;
+}
+
+.link-arrow {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--fg);
+  text-decoration: none;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.link-arrow::after {
+  content: '→';
+  transition: transform 0.5s var(--ease-out);
+}
+.link-arrow:hover::after {
+  transform: translateX(4px);
 }

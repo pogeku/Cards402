@@ -1,41 +1,16 @@
-// Wraps the marketing nav + footer. Returns null on /dashboard routes
-// so the dashboard can own its own chrome. Lets the root layout stay
-// a server component.
+// Marketing chrome — sticky nav with the Cards402 wordmark, plus a
+// footer with the same wordmark at a smaller size. Returns null on
+// /dashboard routes so the dashboard can own its own chrome. The root
+// layout stays a server component; this client component is only
+// responsible for the pathname check + the interactive bits.
 
 'use client';
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { NavLinks } from './NavLinks';
-import type { ReactNode } from 'react';
-
-function StellarIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-label="Stellar">
-      <path
-        d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function USDCIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-label="USDC">
-      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
-      <path
-        d="M12 7v1.5M12 15.5V17M9 12h6"
-        stroke="currentColor"
-        strokeWidth="1.75"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
+import { Wordmark } from './Wordmark';
+import type { MouseEvent, ReactNode } from 'react';
 
 export function MarketingChrome({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -47,12 +22,13 @@ export function MarketingChrome({ children }: { children: ReactNode }) {
 
   return (
     <>
+      <div className="grain" aria-hidden />
       <nav
         style={{
           borderBottom: '1px solid var(--border)',
-          background: 'rgba(10,10,10,0.97)',
-          backdropFilter: 'blur(12px)',
-          WebkitBackdropFilter: 'blur(12px)',
+          background: 'rgba(5,5,5,0.72)',
+          backdropFilter: 'blur(16px) saturate(140%)',
+          WebkitBackdropFilter: 'blur(16px) saturate(140%)',
           position: 'sticky',
           top: 0,
           zIndex: 50,
@@ -60,10 +36,10 @@ export function MarketingChrome({ children }: { children: ReactNode }) {
       >
         <div
           style={{
-            maxWidth: 1100,
+            maxWidth: 1180,
             margin: '0 auto',
-            padding: '0 1.5rem',
-            height: 56,
+            padding: '0 1.35rem',
+            height: 64,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -75,88 +51,170 @@ export function MarketingChrome({ children }: { children: ReactNode }) {
               textDecoration: 'none',
               display: 'flex',
               alignItems: 'center',
-              gap: '0.5rem',
+              gap: '0.6rem',
+              color: 'var(--fg)',
+              // Transition the logo color on hover as a subtle cue.
+              transition: 'color 0.4s var(--ease-out)',
             }}
+            onMouseEnter={(e: MouseEvent<HTMLAnchorElement>) =>
+              (e.currentTarget.style.color = 'var(--green)')
+            }
+            onMouseLeave={(e: MouseEvent<HTMLAnchorElement>) =>
+              (e.currentTarget.style.color = 'var(--fg)')
+            }
           >
-            <span
-              style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: '1rem',
-                fontWeight: 700,
-                color: 'var(--fg)',
-                letterSpacing: '-0.02em',
-              }}
-            >
-              cards<span style={{ color: 'var(--green)' }}>402</span>
-            </span>
+            <Wordmark height={22} />
           </Link>
           <NavLinks />
         </div>
       </nav>
 
-      <main style={{ flex: 1 }}>{children}</main>
+      <main style={{ flex: 1, position: 'relative', zIndex: 2 }}>{children}</main>
 
-      <footer style={{ borderTop: '1px solid var(--border)', padding: '1.5rem' }}>
+      <footer
+        style={{
+          borderTop: '1px solid var(--border)',
+          padding: '3.5rem 1.35rem 2.25rem',
+          marginTop: '6rem',
+          position: 'relative',
+          zIndex: 2,
+        }}
+      >
         <div
           style={{
-            maxWidth: 1100,
+            maxWidth: 1180,
             margin: '0 auto',
             display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            flexWrap: 'wrap',
-            gap: '1rem',
+            flexDirection: 'column',
+            gap: '2.5rem',
           }}
         >
-          <span
+          <div
             style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.8125rem',
-              color: 'var(--muted)',
-              fontWeight: 600,
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gap: '2rem',
+              alignItems: 'start',
             }}
           >
-            cards<span style={{ color: 'var(--green)' }}>402</span>.com
-          </span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
-            <span
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.375rem',
-                color: 'var(--muted)',
-                fontSize: '0.8125rem',
-              }}
-            >
-              <StellarIcon />
-              Stellar
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+              <Wordmark height={20} />
+              <p
+                style={{
+                  fontSize: '0.78rem',
+                  color: 'var(--fg-dim)',
+                  lineHeight: 1.6,
+                  maxWidth: 260,
+                  margin: 0,
+                }}
+              >
+                Virtual Visa cards for AI agents. One Stellar transaction in, one real card out.
+              </p>
+            </div>
+
+            <FooterCol title="Product">
+              <FooterLink href="/docs">Docs</FooterLink>
+              <FooterLink href="/dashboard">Dashboard</FooterLink>
+              <FooterLink href="/agents.txt">agents.txt</FooterLink>
+              <FooterLink href="/skill.md">skill.md</FooterLink>
+            </FooterCol>
+
+            <FooterCol title="Network">
+              <FooterLink href="https://stellar.expert/" external>
+                Stellar
+              </FooterLink>
+              <FooterLink href="https://www.npmjs.com/package/cards402" external>
+                npm · cards402
+              </FooterLink>
+              <FooterLink href="https://github.com/CTX-com/Cards402" external>
+                GitHub
+              </FooterLink>
+            </FooterCol>
+
+            <FooterCol title="Legal">
+              <FooterLink href="/terms">Terms</FooterLink>
+              <FooterLink href="/privacy">Privacy</FooterLink>
+            </FooterCol>
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              paddingTop: '1.5rem',
+              borderTop: '1px solid var(--border)',
+              fontSize: '0.72rem',
+              color: 'var(--fg-dim)',
+              fontFamily: 'var(--font-mono)',
+              flexWrap: 'wrap',
+              gap: '0.75rem',
+            }}
+          >
+            <span>© {new Date().getFullYear()} Cards402</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span
+                className="pulse-green"
+                style={{
+                  display: 'inline-block',
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: 'var(--green)',
+                  boxShadow: '0 0 10px var(--green-glow)',
+                }}
+              />
+              Live on Stellar mainnet
             </span>
-            <span
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.375rem',
-                color: 'var(--muted)',
-                fontSize: '0.8125rem',
-              }}
-            >
-              <USDCIcon />
-              USDC
-            </span>
-            <Link
-              href="/agents.txt"
-              style={{
-                color: 'var(--muted)',
-                fontSize: '0.8125rem',
-                textDecoration: 'none',
-                fontFamily: 'var(--font-mono)',
-              }}
-            >
-              agents.txt
-            </Link>
           </div>
         </div>
       </footer>
     </>
+  );
+}
+
+function FooterCol({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.7rem' }}>
+      <div className="type-eyebrow" style={{ fontSize: '0.64rem', color: 'var(--fg-dim)' }}>
+        {title}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>{children}</div>
+    </div>
+  );
+}
+
+function FooterLink({
+  href,
+  children,
+  external,
+}: {
+  href: string;
+  children: ReactNode;
+  external?: boolean;
+}) {
+  return (
+    <Link
+      href={href}
+      target={external ? '_blank' : undefined}
+      rel={external ? 'noreferrer' : undefined}
+      style={{
+        color: 'var(--fg-muted)',
+        textDecoration: 'none',
+        fontSize: '0.82rem',
+        fontFamily: 'var(--font-body)',
+        transition: 'color 0.3s var(--ease-out)',
+        display: 'inline-block',
+        width: 'fit-content',
+      }}
+      onMouseEnter={(e: MouseEvent<HTMLAnchorElement>) =>
+        (e.currentTarget.style.color = 'var(--fg)')
+      }
+      onMouseLeave={(e: MouseEvent<HTMLAnchorElement>) =>
+        (e.currentTarget.style.color = 'var(--fg-muted)')
+      }
+    >
+      {children}
+    </Link>
   );
 }

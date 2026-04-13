@@ -1,648 +1,697 @@
+// Cards402 landing page.
+//
+// Editorial refined minimalism: Fraunces display, IBM Plex Sans body,
+// Plex Mono for data. Hero is a drawn-constellation + floating card
+// silhouette. Every section aims for two information moments per view
+// maximum — restraint, not density.
+
 import Link from 'next/link';
+import { HeroConstellation } from '@/app/components/HeroConstellation';
 
-const createOrderRequest = `POST https://api.cards402.com/v1/orders
-X-Api-Key: cards402_your_key_here
-Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000
-Content-Type: application/json
+const agentOneLiner = `Read https://cards402.com/skill.md and set up
+this agent by running:
 
-{
-  "amount_usdc": "25.00",
-  "payment_asset": "usdc"
-}`;
+  npx cards402 onboard --claim c402_<code>`;
 
-const createOrderResponse = `HTTP/1.1 201 Created
+const purchaseSnippet = `import { purchaseCardOWS } from 'cards402';
 
-{
-  "order_id": "a3f7c2d1-4e8b-4f0a-9c2d",
-  "status": "pending_payment",
-  "payment": {
-    "type": "soroban_contract",
-    "contract_id": "C...cards402_receiver...",
-    "order_id": "a3f7c2d1-4e8b-4f0a-9c2d",
-    "usdc": { "amount": "25.00", "asset": "USDC:GA5Z..." },
-    "xlm":  { "amount": "178.57" }
-  },
-  "poll_url": "/v1/orders/a3f7c2d1-4e8b-4f0a-9c2d"
-}`;
+const card = await purchaseCardOWS({
+  apiKey: process.env.CARDS402_API_KEY,
+  walletName: 'my-agent',
+  amountUsdc: '25.00',
+});
 
-const pollDelivered = `GET https://api.cards402.com/v1/orders/a3f7c2d1-...
-X-Api-Key: cards402_your_key_here
+// { number, cvv, expiry, brand, order_id }`;
 
-HTTP/1.1 200 OK
+const METRICS = [
+  { label: 'Time to card', value: '≈60s', sub: 'pay → PAN' },
+  { label: 'Network', value: 'Stellar', sub: 'mainnet' },
+  { label: 'Custody', value: 'None', sub: 'agent pays direct' },
+  { label: 'Pricing', value: 'Face value', sub: 'no fees' },
+];
 
-{
-  "order_id": "a3f7c2d1-4e8b-4f0a-9c2d",
-  "phase": "ready",
-  "amount_usdc": "25.00",
-  "card": {
-    "number": "4111 1111 1111 1111",
-    "cvv": "847",
-    "expiry": "12/27",
-    "brand": "Visa"
-  }
-}`;
-
-const steps = [
+const FLOW = [
   {
     num: '01',
     title: 'Create order',
-    body: 'POST /v1/orders with your card value in USDC. Get back a Soroban receiver-contract ID and the order_id to pass to it.',
+    body: 'POST /v1/orders with a USD amount. Backend returns a Soroban receiver-contract ID and a one-time order_id.',
   },
   {
     num: '02',
-    title: 'Call the contract',
-    body: 'Invoke pay_usdc (or pay_xlm) on the receiver contract with your wallet. The SDK builds, signs, and submits the Soroban transaction for you.',
+    title: 'Sign one transaction',
+    body: 'Agent invokes pay_usdc (or pay_xlm) on the receiver contract. USDC-first, with a DEX-routed path payment to settle the quote.',
   },
   {
     num: '03',
-    title: 'Get card details',
-    body: 'Poll GET /v1/orders/:id or receive a webhook. When phase is "ready", the response includes PAN, CVV, and expiry.',
+    title: 'Watcher + fulfillment',
+    body: 'The Soroban watcher picks up the payment event, validates the amount against the quote, and kicks fulfillment. Mismatches go to an unmatched-payments queue.',
+  },
+  {
+    num: '04',
+    title: 'Real Visa card',
+    body: 'PAN / CVV / expiry stream back over the original HTTP connection. One SSE stream, no webhooks to host, no polling required.',
   },
 ];
 
-const specs = [
-  { label: 'Network', value: 'Stellar (Horizon)' },
-  { label: 'Payment assets', value: 'USDC (Circle) · XLM' },
-  { label: 'Card network', value: 'Visa prepaid virtual' },
-  { label: 'Rate', value: '1 USDC = $1.00 card value' },
-  { label: 'Fulfillment time', value: '~60 seconds typical' },
-  { label: 'Auth', value: 'X-Api-Key header' },
-  { label: 'KYC required', value: 'None' },
-  { label: 'Fees', value: 'None' },
+const FEATURES = [
+  {
+    eyebrow: 'Stellar-native',
+    title: 'One transaction in, one card out',
+    body: 'Every purchase is a single `PathPaymentStrictReceive`. USDC or XLM. No redirect, no hosted checkout, no user session.',
+  },
+  {
+    eyebrow: 'Zero custody',
+    title: 'Agents pay the contract directly',
+    body: 'Cards402 never holds customer funds. The agent signs with its own OWS wallet; the backend only observes on-chain events and brokers fulfillment.',
+  },
+  {
+    eyebrow: 'Made for autonomy',
+    title: 'One-shot claim codes, not shared keys',
+    body: 'Operators mint a single-use claim instead of pasting raw API keys into agent context. Credentials never hit the conversation transcript.',
+  },
+  {
+    eyebrow: 'Engineering surface',
+    title: 'MCP, HTTP, SSE — pick your integration',
+    body: 'Drop the cards402 MCP server into Claude Desktop, hit the REST API from any runtime, or subscribe to the SSE phase stream for live updates.',
+  },
 ];
 
 export default function Home() {
   return (
-    <div style={{ background: 'var(--bg)', color: 'var(--fg)' }}>
-      {/* ── Hero ─────────────────────────────────────────── */}
+    <>
+      {/* ── Hero ─────────────────────────────────────────────────── */}
       <section
-        className="dot-grid"
         style={{
-          minHeight: 'min(88vh, 680px)',
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'center',
-          alignItems: 'center',
-          textAlign: 'center',
-          padding: '6rem 1.5rem 4rem',
           position: 'relative',
+          paddingTop: '6.5rem',
+          paddingBottom: '7rem',
+          paddingLeft: '1.35rem',
+          paddingRight: '1.35rem',
           overflow: 'hidden',
         }}
       >
-        {/* Radial green glow */}
-        <div
-          aria-hidden
-          style={{
-            position: 'absolute',
-            top: '35%',
-            left: '50%',
-            transform: 'translate(-50%, -50%)',
-            width: 700,
-            height: 350,
-            background:
-              'radial-gradient(ellipse at center, rgba(0,255,136,0.07) 0%, transparent 68%)',
-            pointerEvents: 'none',
-          }}
-        />
-
-        {/* Badge */}
-        <div
-          className="animate-fade-in"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            border: '1px solid var(--green-border)',
-            background: 'var(--green-muted)',
-            borderRadius: 999,
-            padding: '0.3125rem 1rem',
-            fontSize: '0.7rem',
-            fontFamily: 'var(--font-mono)',
-            color: 'var(--green)',
-            fontWeight: 600,
-            letterSpacing: '0.06em',
-            marginBottom: '2rem',
-            textTransform: 'uppercase',
-          }}
-        >
-          <span
-            className="pulse-green"
-            style={{
-              width: 6,
-              height: 6,
-              borderRadius: '50%',
-              background: 'var(--green)',
-              display: 'inline-block',
-              flexShrink: 0,
-            }}
-          />
-          Stellar · USDC · XLM · Visa
-        </div>
-
-        {/* Headline */}
-        <h1
-          className="animate-fade-in"
-          style={{
-            fontSize: 'clamp(2.25rem, 6vw, 4rem)',
-            fontWeight: 800,
-            lineHeight: 1.08,
-            letterSpacing: '-0.03em',
-            maxWidth: 700,
-            marginBottom: '1.25rem',
-            animationDelay: '0.05s',
-            animationFillMode: 'both',
-          }}
-        >
-          Virtual cards for
-          <br />
-          <span style={{ color: 'var(--green)' }} className="glow-green">
-            AI agents
-          </span>
-          , instantly.
-        </h1>
-
-        {/* Sub-headline */}
-        <p
-          className="animate-fade-in"
-          style={{
-            fontSize: 'clamp(1rem, 2.5vw, 1.1875rem)',
-            color: 'var(--muted)',
-            maxWidth: 480,
-            lineHeight: 1.65,
-            marginBottom: '2.5rem',
-            animationDelay: '0.1s',
-            animationFillMode: 'both',
-          }}
-        >
-          Pay USDC or XLM on Stellar.
-          <br />
-          Get a Visa card number in ~60 seconds.
-        </p>
-
-        {/* Pill badges */}
-        <div
-          className="animate-fade-in"
-          style={{
-            display: 'flex',
-            gap: '0.5rem',
-            flexWrap: 'wrap',
-            justifyContent: 'center',
-            marginBottom: '2.75rem',
-            animationDelay: '0.15s',
-            animationFillMode: 'both',
-          }}
-        >
-          {['No signup', 'No KYC', 'No fees', '1:1 card value'].map((pill) => (
-            <span
-              key={pill}
-              style={{
-                border: '1px solid var(--border)',
-                background: 'var(--surface)',
-                borderRadius: 999,
-                padding: '0.3rem 0.875rem',
-                fontSize: '0.8125rem',
-                color: 'var(--muted)',
-              }}
-            >
-              {pill}
-            </span>
-          ))}
-        </div>
-
-        {/* CTA buttons */}
-        <div
-          className="animate-fade-in"
-          style={{
-            display: 'flex',
-            gap: '0.75rem',
-            flexWrap: 'wrap',
-            justifyContent: 'center',
-            animationDelay: '0.2s',
-            animationFillMode: 'both',
-          }}
-        >
-          <Link
-            href="/docs"
-            style={{
-              background: 'var(--green)',
-              color: '#000',
-              padding: '0.6875rem 1.5rem',
-              borderRadius: 8,
-              fontWeight: 700,
-              fontSize: '0.9375rem',
-              textDecoration: 'none',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '0.375rem',
-            }}
-          >
-            Read the docs
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
-              <path
-                d="M3 8h10M9 4l4 4-4 4"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </Link>
-          <Link
-            href="/dashboard"
-            style={{
-              background: 'transparent',
-              color: 'var(--fg)',
-              padding: '0.6875rem 1.5rem',
-              borderRadius: 8,
-              fontWeight: 600,
-              fontSize: '0.9375rem',
-              textDecoration: 'none',
-              border: '1px solid var(--border)',
-            }}
-          >
-            Sign in
-          </Link>
-        </div>
-      </section>
-
-      {/* ── How it works ─────────────────────────────────── */}
-      <section style={{ maxWidth: 1100, margin: '0 auto', padding: '5rem 1.5rem' }}>
-        <div style={{ marginBottom: '2.75rem' }}>
-          <p
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.7rem',
-              color: 'var(--green)',
-              letterSpacing: '0.1em',
-              textTransform: 'uppercase',
-              marginBottom: '0.625rem',
-              fontWeight: 600,
-            }}
-          >
-            How it works
-          </p>
-          <h2
-            style={{
-              fontSize: 'clamp(1.5rem, 3vw, 2rem)',
-              fontWeight: 700,
-              letterSpacing: '-0.02em',
-            }}
-          >
-            Three steps from wallet to card
-          </h2>
-        </div>
-
+        <div className="radial-ink-glow" aria-hidden />
         <div
           style={{
+            maxWidth: 1180,
+            margin: '0 auto',
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-            gap: '1rem',
+            gridTemplateColumns: 'minmax(0, 1.05fr) minmax(0, 1fr)',
+            gap: '3rem',
+            alignItems: 'center',
+            position: 'relative',
           }}
+          className="hero-grid"
         >
-          {steps.map((step) => (
+          <div>
             <div
-              key={step.num}
+              className="type-eyebrow animate-reveal"
               style={{
-                background: 'var(--surface)',
-                border: '1px solid var(--border)',
-                borderRadius: 12,
-                padding: '1.75rem',
-                position: 'relative',
-                overflow: 'hidden',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.55rem',
+                animationDelay: '0.05s',
               }}
             >
               <span
-                aria-hidden
+                className="pulse-green"
                 style={{
-                  position: 'absolute',
-                  top: '-0.5rem',
-                  right: '1rem',
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: '5rem',
-                  fontWeight: 900,
-                  color: 'rgba(255,255,255,0.03)',
-                  lineHeight: 1,
-                  userSelect: 'none',
-                  pointerEvents: 'none',
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: 'var(--green)',
+                  boxShadow: '0 0 12px var(--green-glow)',
+                }}
+              />
+              Live on Stellar mainnet
+            </div>
+
+            <h1
+              className="type-display animate-reveal"
+              style={{
+                marginTop: '1.5rem',
+                marginBottom: '1.6rem',
+                fontSize: 'clamp(2.6rem, 6vw + 0.5rem, 5.2rem)',
+                color: 'var(--fg)',
+                animationDelay: '0.15s',
+              }}
+            >
+              Virtual Visa cards,
+              <br />
+              issued to{' '}
+              <span
+                style={{
+                  fontStyle: 'italic',
+                  fontVariationSettings: '"opsz" 144, "SOFT" 80',
+                  color: 'var(--green)',
                 }}
               >
-                {step.num}
+                agents
               </span>
+              .
+            </h1>
+
+            <p
+              className="type-body animate-reveal"
+              style={{
+                maxWidth: 560,
+                fontSize: '1.05rem',
+                color: 'var(--fg-muted)',
+                marginBottom: '2rem',
+                animationDelay: '0.3s',
+              }}
+            >
+              One Stellar transaction in, one real card number out. Agents pay in USDC or XLM and
+              get a usable PAN in about sixty seconds — no signup, no KYC, no custody, no human in
+              the loop.
+            </p>
+
+            <div
+              className="animate-reveal"
+              style={{
+                display: 'flex',
+                gap: '0.75rem',
+                flexWrap: 'wrap',
+                animationDelay: '0.45s',
+              }}
+            >
+              <Link
+                href="/docs"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.55rem',
+                  padding: '0.85rem 1.35rem',
+                  borderRadius: 999,
+                  background: 'var(--fg)',
+                  color: 'var(--bg)',
+                  textDecoration: 'none',
+                  fontFamily: 'var(--font-body)',
+                  fontSize: '0.88rem',
+                  fontWeight: 600,
+                  letterSpacing: '-0.005em',
+                  transition: 'transform 0.4s var(--ease-out), box-shadow 0.4s var(--ease-out)',
+                }}
+                className="cta-primary"
+              >
+                Read the docs
+                <span style={{ fontFamily: 'var(--font-mono)', opacity: 0.6 }}>↗</span>
+              </Link>
+              <Link
+                href="/dashboard"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.55rem',
+                  padding: '0.85rem 1.35rem',
+                  borderRadius: 999,
+                  background: 'transparent',
+                  color: 'var(--fg)',
+                  border: '1px solid var(--border-strong)',
+                  textDecoration: 'none',
+                  fontFamily: 'var(--font-body)',
+                  fontSize: '0.88rem',
+                  fontWeight: 500,
+                  transition: 'background 0.4s var(--ease-out), border-color 0.4s var(--ease-out)',
+                }}
+                className="cta-secondary"
+              >
+                Open dashboard
+              </Link>
+            </div>
+          </div>
+
+          <div
+            style={{
+              position: 'relative',
+              aspectRatio: '600 / 440',
+              color: 'var(--fg)',
+            }}
+            className="hero-art"
+          >
+            <HeroConstellation />
+          </div>
+        </div>
+      </section>
+
+      {/* ── Metric row ───────────────────────────────────────────── */}
+      <section
+        style={{
+          borderTop: '1px solid var(--border)',
+          borderBottom: '1px solid var(--border)',
+          background: 'var(--surface)',
+          padding: '2rem 1.35rem',
+        }}
+      >
+        <div
+          style={{
+            maxWidth: 1180,
+            margin: '0 auto',
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gap: '2rem',
+          }}
+        >
+          {METRICS.map((m) => (
+            <div key={m.label}>
+              <div className="type-eyebrow" style={{ fontSize: '0.62rem', marginBottom: '0.7rem' }}>
+                {m.label}
+              </div>
+              <div
+                style={{
+                  fontFamily: 'var(--font-display)',
+                  fontSize: 'clamp(1.75rem, 3vw + 0.4rem, 2.4rem)',
+                  fontWeight: 400,
+                  letterSpacing: '-0.025em',
+                  lineHeight: 1,
+                  color: 'var(--fg)',
+                  marginBottom: '0.35rem',
+                }}
+              >
+                {m.value}
+              </div>
               <div
                 style={{
                   fontFamily: 'var(--font-mono)',
-                  fontSize: '0.68rem',
-                  color: 'var(--green)',
-                  letterSpacing: '0.1em',
+                  fontSize: '0.7rem',
+                  color: 'var(--fg-dim)',
                   textTransform: 'uppercase',
-                  fontWeight: 600,
-                  marginBottom: '0.75rem',
+                  letterSpacing: '0.08em',
                 }}
               >
-                Step {step.num}
+                {m.sub}
               </div>
-              <h3
-                style={{
-                  fontSize: '1.0625rem',
-                  fontWeight: 700,
-                  marginBottom: '0.625rem',
-                  letterSpacing: '-0.01em',
-                }}
-              >
-                {step.title}
-              </h3>
-              <p
-                style={{ color: 'var(--muted)', fontSize: '0.875rem', lineHeight: 1.65, margin: 0 }}
-              >
-                {step.body}
-              </p>
             </div>
           ))}
         </div>
       </section>
 
-      {/* ── API code examples ─────────────────────────────── */}
+      {/* ── Flow ─────────────────────────────────────────────────── */}
       <section
         style={{
-          background: 'var(--surface)',
-          borderTop: '1px solid var(--border)',
-          borderBottom: '1px solid var(--border)',
+          padding: '7rem 1.35rem 5rem',
+          position: 'relative',
         }}
       >
-        <div style={{ maxWidth: 1100, margin: '0 auto', padding: '5rem 1.5rem' }}>
-          <div style={{ marginBottom: '2.75rem' }}>
-            <p
-              style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: '0.7rem',
-                color: 'var(--green)',
-                letterSpacing: '0.1em',
-                textTransform: 'uppercase',
-                marginBottom: '0.625rem',
-                fontWeight: 600,
-              }}
-            >
-              API
-            </p>
-            <h2
-              style={{
-                fontSize: 'clamp(1.5rem, 3vw, 2rem)',
-                fontWeight: 700,
-                letterSpacing: '-0.02em',
-                marginBottom: '0.625rem',
-              }}
-            >
-              Designed for agents
-            </h2>
-            <p style={{ color: 'var(--muted)', fontSize: '0.9375rem', lineHeight: 1.6, margin: 0 }}>
-              Two endpoints. POST to create, GET to poll. Webhook optional.
-            </p>
+        <div
+          style={{
+            maxWidth: 1180,
+            margin: '0 auto',
+          }}
+        >
+          <div className="type-eyebrow" style={{ marginBottom: '1.5rem', color: 'var(--green)' }}>
+            The flow
           </div>
+          <h2
+            className="type-display-tight"
+            style={{
+              maxWidth: 820,
+              fontSize: 'clamp(2rem, 4vw + 0.5rem, 3.5rem)',
+              marginBottom: '4rem',
+              color: 'var(--fg)',
+            }}
+          >
+            Four steps, zero human touchpoints. Fast enough that agents don&apos;t need to batch.
+          </h2>
 
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-              gap: '1rem',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+              gap: '1.25rem',
             }}
           >
-            {[
-              { label: 'POST /v1/orders — request', code: createOrderRequest },
-              { label: 'POST /v1/orders — response', code: createOrderResponse },
-              { label: 'GET /v1/orders/:id — delivered', code: pollDelivered },
-            ].map(({ label, code }) => (
-              <div key={label}>
+            {FLOW.map((step, i) => (
+              <article
+                key={step.num}
+                style={{
+                  position: 'relative',
+                  padding: '1.75rem',
+                  background: 'var(--surface)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 14,
+                  transition:
+                    'transform 0.5s var(--ease-out), border-color 0.5s var(--ease-out), box-shadow 0.5s var(--ease-out)',
+                }}
+                className="flow-step"
+              >
                 <div
                   style={{
                     fontFamily: 'var(--font-mono)',
                     fontSize: '0.68rem',
-                    color: 'var(--muted)',
-                    letterSpacing: '0.06em',
-                    textTransform: 'uppercase',
-                    marginBottom: '0.5rem',
-                    fontWeight: 600,
+                    color: 'var(--green)',
+                    letterSpacing: '0.12em',
+                    marginBottom: '1.35rem',
                   }}
                 >
-                  {label}
+                  {step.num}
                 </div>
-                <pre style={{ fontSize: '0.775rem', lineHeight: 1.7, margin: 0 }}>
-                  <code>{code}</code>
-                </pre>
-              </div>
+                <h3
+                  style={{
+                    fontFamily: 'var(--font-display)',
+                    fontSize: '1.35rem',
+                    fontWeight: 500,
+                    letterSpacing: '-0.02em',
+                    color: 'var(--fg)',
+                    marginTop: 0,
+                    marginBottom: '0.8rem',
+                    lineHeight: 1.1,
+                  }}
+                >
+                  {step.title}
+                </h3>
+                <p
+                  style={{
+                    fontFamily: 'var(--font-body)',
+                    fontSize: '0.85rem',
+                    color: 'var(--fg-muted)',
+                    lineHeight: 1.6,
+                    margin: 0,
+                  }}
+                >
+                  {step.body}
+                </p>
+                {i < FLOW.length - 1 && (
+                  <div
+                    aria-hidden
+                    style={{
+                      position: 'absolute',
+                      right: -1,
+                      top: '50%',
+                      width: 18,
+                      height: 1,
+                      background: 'var(--border-strong)',
+                      display: 'none',
+                    }}
+                  />
+                )}
+              </article>
             ))}
           </div>
+        </div>
+      </section>
 
-          <div style={{ marginTop: '2.25rem' }}>
-            <Link
-              href="/docs"
+      {/* ── Code showcase ────────────────────────────────────────── */}
+      <section
+        style={{
+          padding: '5rem 1.35rem 6rem',
+          position: 'relative',
+        }}
+      >
+        <div
+          style={{
+            maxWidth: 1180,
+            margin: '0 auto',
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0, 0.9fr) minmax(0, 1.1fr)',
+            gap: '3rem',
+            alignItems: 'center',
+          }}
+          className="code-grid"
+        >
+          <div>
+            <div className="type-eyebrow" style={{ marginBottom: '1.2rem', color: 'var(--green)' }}>
+              Integration
+            </div>
+            <h2
+              className="type-display-tight"
               style={{
-                color: 'var(--green)',
-                fontSize: '0.9375rem',
-                fontWeight: 600,
-                textDecoration: 'none',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '0.375rem',
+                fontSize: 'clamp(2rem, 3.5vw + 0.5rem, 3rem)',
+                marginBottom: '1.35rem',
+                color: 'var(--fg)',
               }}
             >
-              Full API reference
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
-                <path
-                  d="M3 8h10M9 4l4 4-4 4"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
+              Three lines of TypeScript.
+            </h2>
+            <p
+              className="type-body"
+              style={{
+                fontSize: '1rem',
+                maxWidth: 500,
+                marginBottom: '2rem',
+              }}
+            >
+              The Cards402 SDK wraps the order → Soroban payment → card-ready cycle behind a single
+              call. One SSE stream, no polling, no webhook endpoint to host, resume-safe if the
+              agent crashes mid-flight.
+            </p>
+            <Link href="/docs" className="link-arrow">
+              See the full reference
+            </Link>
+          </div>
+
+          <pre
+            style={{
+              margin: 0,
+              fontSize: '0.78rem',
+              lineHeight: 1.7,
+              fontFamily: 'var(--font-mono)',
+              boxShadow: 'var(--shadow-float)',
+              position: 'relative',
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              aria-hidden
+              style={{
+                position: 'absolute',
+                top: 12,
+                left: 14,
+                display: 'flex',
+                gap: 6,
+                opacity: 0.5,
+              }}
+            >
+              <span
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: '50%',
+                  background: 'rgba(255,255,255,0.12)',
+                }}
+              />
+              <span
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: '50%',
+                  background: 'rgba(255,255,255,0.12)',
+                }}
+              />
+              <span
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: '50%',
+                  background: 'rgba(255,255,255,0.12)',
+                }}
+              />
+            </div>
+            <code style={{ display: 'block', marginTop: '1.2rem' }}>{purchaseSnippet}</code>
+          </pre>
+        </div>
+      </section>
+
+      {/* ── Feature grid ─────────────────────────────────────────── */}
+      <section style={{ padding: '4rem 1.35rem 6rem' }}>
+        <div
+          style={{
+            maxWidth: 1180,
+            margin: '0 auto',
+          }}
+        >
+          <div className="type-eyebrow" style={{ marginBottom: '1.2rem', color: 'var(--green)' }}>
+            Principles
+          </div>
+          <h2
+            className="type-display-tight"
+            style={{
+              maxWidth: 820,
+              fontSize: 'clamp(2rem, 4vw + 0.5rem, 3.25rem)',
+              marginBottom: '4rem',
+              color: 'var(--fg)',
+            }}
+          >
+            Built like a payment rail. Read like an SDK.
+          </h2>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+              gap: '0',
+              borderTop: '1px solid var(--border)',
+              borderLeft: '1px solid var(--border)',
+            }}
+          >
+            {FEATURES.map((f) => (
+              <article
+                key={f.title}
+                style={{
+                  padding: '2rem 1.85rem 2.5rem',
+                  borderRight: '1px solid var(--border)',
+                  borderBottom: '1px solid var(--border)',
+                  position: 'relative',
+                  transition: 'background 0.5s var(--ease-out)',
+                }}
+                className="feature-tile"
+              >
+                <div
+                  className="type-eyebrow"
+                  style={{
+                    fontSize: '0.6rem',
+                    marginBottom: '1.2rem',
+                    color: 'var(--fg-dim)',
+                  }}
+                >
+                  {f.eyebrow}
+                </div>
+                <h3
+                  style={{
+                    fontFamily: 'var(--font-display)',
+                    fontSize: '1.3rem',
+                    fontWeight: 500,
+                    letterSpacing: '-0.02em',
+                    color: 'var(--fg)',
+                    marginTop: 0,
+                    marginBottom: '0.85rem',
+                    lineHeight: 1.12,
+                  }}
+                >
+                  {f.title}
+                </h3>
+                <p
+                  style={{
+                    fontFamily: 'var(--font-body)',
+                    fontSize: '0.85rem',
+                    color: 'var(--fg-muted)',
+                    lineHeight: 1.6,
+                    margin: 0,
+                  }}
+                >
+                  {f.body}
+                </p>
+              </article>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Agent onboarding CTA ─────────────────────────────────── */}
+      <section style={{ padding: '3rem 1.35rem 6rem' }}>
+        <div
+          style={{
+            maxWidth: 920,
+            margin: '0 auto',
+            padding: '3rem 2.5rem',
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: 16,
+            position: 'relative',
+            overflow: 'hidden',
+          }}
+          className="final-cta"
+        >
+          <div className="radial-green-glow" aria-hidden />
+          <div style={{ position: 'relative' }}>
+            <div
+              className="type-eyebrow"
+              style={{
+                color: 'var(--green)',
+                marginBottom: '0.9rem',
+              }}
+            >
+              What the operator hands their agent
+            </div>
+            <h2
+              className="type-display-tight"
+              style={{
+                fontSize: 'clamp(1.6rem, 3vw + 0.5rem, 2.4rem)',
+                color: 'var(--fg)',
+                marginTop: 0,
+                marginBottom: '1.5rem',
+                maxWidth: 720,
+              }}
+            >
+              One paste. No raw keys. No transcript leaks.
+            </h2>
+            <pre
+              style={{
+                background: 'var(--bg)',
+                fontSize: '0.76rem',
+                lineHeight: 1.7,
+                marginBottom: '1.8rem',
+              }}
+            >
+              <code>{agentOneLiner}</code>
+            </pre>
+            <Link href="/docs" className="link-arrow">
+              Full onboarding flow
             </Link>
           </div>
         </div>
       </section>
 
-      {/* ── Specs ─────────────────────────────────────────── */}
-      <section style={{ maxWidth: 1100, margin: '0 auto', padding: '5rem 1.5rem' }}>
-        <div style={{ marginBottom: '2.75rem' }}>
-          <p
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.7rem',
-              color: 'var(--green)',
-              letterSpacing: '0.1em',
-              textTransform: 'uppercase',
-              marginBottom: '0.625rem',
-              fontWeight: 600,
-            }}
-          >
-            Specifications
-          </p>
-          <h2
-            style={{
-              fontSize: 'clamp(1.5rem, 3vw, 2rem)',
-              fontWeight: 700,
-              letterSpacing: '-0.02em',
-            }}
-          >
-            The details
-          </h2>
-        </div>
+      {/* ── Local styles ─────────────────────────────────────────── */}
+      <style>{`
+        .cta-primary:hover {
+          transform: translateY(-1px);
+          box-shadow: 0 12px 36px -12px var(--green-glow);
+        }
+        .cta-secondary:hover {
+          background: var(--surface-hover);
+          border-color: var(--fg-muted);
+        }
+        .flow-step:hover {
+          transform: translateY(-2px);
+          border-color: var(--border-strong);
+          box-shadow: var(--shadow-float);
+        }
+        .feature-tile:hover {
+          background: var(--surface);
+        }
+        .feature-tile::before {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 0;
+          height: 2px;
+          background: var(--green);
+          transition: width 0.6s var(--ease-out);
+        }
+        .feature-tile:hover::before {
+          width: 32px;
+        }
+        .final-cta {
+          transition: border-color 0.5s var(--ease-out);
+        }
+        .final-cta:hover {
+          border-color: var(--green-border);
+        }
 
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
-            gap: '0.625rem',
-          }}
-        >
-          {specs.map((spec) => (
-            <div
-              key={spec.label}
-              style={{
-                background: 'var(--surface)',
-                border: '1px solid var(--border)',
-                borderRadius: 8,
-                padding: '1rem 1.25rem',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.25rem',
-              }}
-            >
-              <span
-                style={{
-                  fontSize: '0.68rem',
-                  fontFamily: 'var(--font-mono)',
-                  color: 'var(--muted)',
-                  letterSpacing: '0.06em',
-                  textTransform: 'uppercase',
-                  fontWeight: 600,
-                }}
-              >
-                {spec.label}
-              </span>
-              <span style={{ fontSize: '0.9375rem', fontWeight: 500 }}>{spec.value}</span>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* ── Final CTA ─────────────────────────────────────── */}
-      <section
-        style={{
-          borderTop: '1px solid var(--border)',
-          padding: '5rem 1.5rem',
-          textAlign: 'center',
-          position: 'relative',
-          overflow: 'hidden',
-        }}
-      >
-        <div
-          aria-hidden
-          style={{
-            position: 'absolute',
-            bottom: 0,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            width: 600,
-            height: 250,
-            background:
-              'radial-gradient(ellipse at bottom, rgba(0,255,136,0.06) 0%, transparent 70%)',
-            pointerEvents: 'none',
-          }}
-        />
-        <p
-          style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: '0.7rem',
-            color: 'var(--green)',
-            letterSpacing: '0.1em',
-            textTransform: 'uppercase',
-            marginBottom: '1rem',
-            fontWeight: 600,
-          }}
-        >
-          Get started
-        </p>
-        <h2
-          style={{
-            fontSize: 'clamp(1.75rem, 4vw, 2.5rem)',
-            fontWeight: 800,
-            letterSpacing: '-0.03em',
-            marginBottom: '1.125rem',
-          }}
-        >
-          Ready to integrate?
-        </h2>
-        <p
-          style={{
-            color: 'var(--muted)',
-            maxWidth: 420,
-            margin: '0 auto 2.5rem',
-            lineHeight: 1.65,
-            fontSize: '0.9375rem',
-          }}
-        >
-          Sign up, create an API key, and your agent can be buying cards in minutes.
-        </p>
-        <div
-          style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap' }}
-        >
-          <Link
-            href="/dashboard"
-            style={{
-              background: 'var(--green)',
-              color: '#000',
-              padding: '0.75rem 2rem',
-              borderRadius: 8,
-              fontWeight: 700,
-              fontSize: '0.9375rem',
-              textDecoration: 'none',
-            }}
-          >
-            Get started
-          </Link>
-          <Link
-            href="/docs"
-            style={{
-              background: 'transparent',
-              color: 'var(--fg)',
-              padding: '0.75rem 2rem',
-              borderRadius: 8,
-              fontWeight: 600,
-              fontSize: '0.9375rem',
-              textDecoration: 'none',
-              border: '1px solid var(--border)',
-            }}
-          >
-            Read the docs
-          </Link>
-        </div>
-        <div
-          style={{ marginTop: '2rem', display: 'flex', gap: '1.25rem', justifyContent: 'center' }}
-        >
-          <Link
-            href="/agents.txt"
-            style={{
-              color: 'var(--muted)',
-              fontSize: '0.8125rem',
-              textDecoration: 'none',
-              fontFamily: 'var(--font-mono)',
-            }}
-          >
-            /agents.txt
-          </Link>
-          <a
-            href="mailto:api@cards402.com"
-            style={{
-              color: 'var(--muted)',
-              fontSize: '0.8125rem',
-              textDecoration: 'none',
-              fontFamily: 'var(--font-mono)',
-            }}
-          >
-            api@cards402.com
-          </a>
-        </div>
-      </section>
-    </div>
+        @media (max-width: 860px) {
+          .hero-grid {
+            grid-template-columns: minmax(0, 1fr) !important;
+            gap: 2rem !important;
+          }
+          .hero-art {
+            max-width: 480px;
+            margin: 0 auto;
+          }
+          .code-grid {
+            grid-template-columns: minmax(0, 1fr) !important;
+          }
+        }
+        @media (max-width: 480px) {
+          .final-cta {
+            padding: 2rem 1.5rem !important;
+          }
+          .hero-art {
+            display: none;
+          }
+        }
+      `}</style>
+    </>
   );
 }

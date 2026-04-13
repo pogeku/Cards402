@@ -8,6 +8,7 @@
 import { useState } from 'react';
 import { Button } from '../_ui/Button';
 import { Input } from '../_ui/Input';
+import { Wordmark } from '@/app/components/Wordmark';
 
 export function AuthGate() {
   const [email, setEmail] = useState('');
@@ -76,13 +77,11 @@ export function AuthGate() {
       >
         <div
           style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: '1.15rem',
-            fontWeight: 700,
-            marginBottom: '0.25rem',
+            marginBottom: '0.5rem',
+            color: 'var(--fg)',
           }}
         >
-          cards<span style={{ color: 'var(--green)' }}>402</span>
+          <Wordmark height={22} />
         </div>
         <div
           style={{
