@@ -6,7 +6,16 @@ export const metadata: Metadata = {
   title: 'Changelog',
   description:
     'Everything shipped to Cards402. API changes, dashboard polish, security fixes, and upstream-issuer updates — chronologically.',
-  alternates: { canonical: 'https://cards402.com/changelog' },
+  alternates: {
+    canonical: 'https://cards402.com/changelog',
+    // Feed reader auto-discovery: this inserts
+    // <link rel="alternate" type="application/rss+xml" href=".../feed.xml">
+    // on the changelog head. NetNewsWire, Feedbin, Reeder et al.
+    // pick this up when you paste /changelog into "add feed".
+    types: {
+      'application/rss+xml': 'https://cards402.com/changelog/feed.xml',
+    },
+  },
   openGraph: ogForPage({
     title: 'Changelog — Cards402',
     description: 'Everything shipped to Cards402, chronologically.',

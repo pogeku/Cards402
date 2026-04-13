@@ -126,6 +126,7 @@ export function MarketingChrome({ children }: { children: ReactNode }) {
               <FooterLink href="/press">Press</FooterLink>
               <FooterLink href="/affiliate">Affiliate</FooterLink>
               <FooterLink href="/security">Security</FooterLink>
+              <FooterLink href="/status">Status</FooterLink>
             </FooterCol>
 
             <FooterCol title="Network">
