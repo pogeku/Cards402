@@ -80,7 +80,11 @@ const FONT_SANS =
 const FONT_SERIF = "Georgia,'Times New Roman',Times,serif";
 const FONT_MONO = "ui-monospace,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace";
 
-const LOGO_URL = 'https://cards402.com/logo.svg';
+// Email clients render the SVG raw (no CSS mask), so we serve a pre-tinted
+// light variant. The web app uses /logo.svg as a mask-image (colour from
+// currentColor), so we can't re-use it here — on a dark email background
+// it comes out invisible black.
+const LOGO_URL = 'https://cards402.com/logo-light.svg';
 // Public URL for the dashboard CTAs. All transactional emails deep-link
 // into the authenticated dashboard since operators need a session
 // regardless of email content.
