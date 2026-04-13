@@ -72,7 +72,7 @@ const FEATURES = [
   {
     eyebrow: 'Engineering surface',
     title: 'MCP, HTTP, SSE — pick your integration',
-    body: 'Drop the cards402 MCP server into Claude Desktop, hit the REST API from any runtime, or subscribe to the SSE phase stream for live updates.',
+    body: 'Drop the Cards402 MCP server into Claude Desktop, hit the REST API from any runtime, or subscribe to the SSE phase stream for live updates.',
   },
 ];
 
@@ -198,7 +198,22 @@ export default function Home() {
                 className="cta-primary"
               >
                 Read the docs
-                <span style={{ fontFamily: 'var(--font-mono)', opacity: 0.6 }}>↗</span>
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 14 14"
+                  fill="none"
+                  aria-hidden
+                  style={{ opacity: 0.7, display: 'block' }}
+                >
+                  <path
+                    d="M2 7h10m-3.5-3.5L12 7l-3.5 3.5"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
               </Link>
               <Link
                 href="/dashboard"

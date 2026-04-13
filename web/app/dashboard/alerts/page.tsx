@@ -47,7 +47,7 @@ const KIND_META: Record<AlertKind, { title: string; blurb: string; scope: 'syste
   },
   circuit_breaker_frozen: {
     title: 'Fulfillment frozen',
-    blurb: 'Fires when the cards402 tenant circuit breaker trips after repeated failures.',
+    blurb: 'Fires when the Cards402 tenant circuit breaker trips after repeated failures.',
     scope: 'system',
   },
   failure_rate_high: {

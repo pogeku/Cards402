@@ -21,6 +21,9 @@ build/
 # Debug artifacts
 /tmp/stage2-debug-*.png
 *.png
+# ...but keep web app icons (Next.js file conventions)
+!web/app/icon.png
+!web/app/apple-icon.png
 
 # Test coverage
 sdk/coverage/

@@ -52,9 +52,6 @@ export const metadata: Metadata = {
     title: 'Cards402 — Virtual Visa cards for AI agents',
     description: 'One Stellar transaction in, one real Visa card out. ~60 seconds from pay to PAN.',
   },
-  icons: {
-    icon: '/logo.svg',
-  },
 };
 
 export default function RootLayout({

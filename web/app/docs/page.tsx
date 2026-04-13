@@ -2,50 +2,64 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 
 export const metadata: Metadata = {
-  title: 'API Reference — cards402',
-  description: 'Full API reference for cards402: create orders, poll status, handle webhooks.',
+  title: 'API Reference — Cards402',
+  description:
+    'Full API reference for Cards402: create orders, stream status, verify webhooks, and handle errors.',
 };
 
+// ── Inline primitives ─────────────────────────────────────────────
+// The docs page keeps to the same pattern as the landing page: inline
+// styles for layout + a trailing <style> block for hover/responsive
+// rules the platform doesn't offer inline.
+
 function Code({ children }: { children: string }) {
-  return (
-    <code
-      style={{
-        fontFamily: 'var(--font-mono)',
-        fontSize: '0.8125em',
-        background: 'rgba(255,255,255,0.08)',
-        border: '1px solid var(--border)',
-        borderRadius: 4,
-        padding: '0.15em 0.4em',
-        color: 'var(--green)',
-      }}
-    >
-      {children}
-    </code>
-  );
+  return <code className="docs-inline-code">{children}</code>;
 }
 
-function Section({ id, children }: { id: string; children: React.ReactNode }) {
+function Section({
+  id,
+  eyebrow,
+  title,
+  children,
+}: {
+  id: string;
+  eyebrow: string;
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
-    <section id={id} style={{ scrollMarginTop: 80, marginBottom: '4rem' }}>
+    <section
+      id={id}
+      style={{
+        scrollMarginTop: 96,
+        paddingTop: '4.25rem',
+        marginTop: '0.25rem',
+        borderTop: '1px solid var(--border)',
+      }}
+    >
+      <div
+        className="type-eyebrow"
+        style={{
+          color: 'var(--green)',
+          marginBottom: '1rem',
+        }}
+      >
+        {eyebrow}
+      </div>
+      <h2
+        className="type-display-tight"
+        style={{
+          fontFamily: 'var(--font-display)',
+          fontSize: 'clamp(1.75rem, 2.4vw + 0.6rem, 2.35rem)',
+          color: 'var(--fg)',
+          margin: '0 0 2rem',
+          maxWidth: 640,
+        }}
+      >
+        {title}
+      </h2>
       {children}
     </section>
-  );
-}
-
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return (
-    <h2
-      style={{
-        fontSize: '1.25rem',
-        fontWeight: 700,
-        letterSpacing: '-0.02em',
-        marginBottom: '1.25rem',
-        paddingBottom: '0.75rem',
-        borderBottom: '1px solid var(--border)',
-      }}
-    >
-      {children}
-    </h2>
   );
 }
 
@@ -53,12 +67,13 @@ function SubTitle({ children }: { children: React.ReactNode }) {
   return (
     <h3
       style={{
-        fontSize: '0.9375rem',
+        fontFamily: 'var(--font-body)',
+        fontSize: '0.78rem',
         fontWeight: 600,
-        letterSpacing: '-0.01em',
-        marginBottom: '0.75rem',
-        marginTop: '1.75rem',
-        color: 'var(--fg)',
+        letterSpacing: '0.12em',
+        textTransform: 'uppercase',
+        color: 'var(--fg-dim)',
+        margin: '2.25rem 0 0.9rem',
       }}
     >
       {children}
@@ -70,11 +85,12 @@ function Para({ children, style }: { children: React.ReactNode; style?: React.CS
   return (
     <p
       style={{
-        color: 'var(--muted)',
-        fontSize: '0.9rem',
-        lineHeight: 1.7,
-        marginBottom: '1rem',
-        margin: '0 0 1rem',
+        fontFamily: 'var(--font-body)',
+        color: 'var(--fg-muted)',
+        fontSize: '0.95rem',
+        lineHeight: 1.72,
+        margin: '0 0 1.1rem',
+        maxWidth: 640,
         ...style,
       }}
     >
@@ -85,38 +101,100 @@ function Para({ children, style }: { children: React.ReactNode; style?: React.CS
 
 function CodeBlock({ label, children }: { label?: string; children: string }) {
   return (
-    <div style={{ marginBottom: '1.25rem' }}>
+    <div style={{ margin: '0 0 1.5rem' }}>
       {label && (
         <div
+          className="type-eyebrow"
           style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: '0.68rem',
-            color: 'var(--muted)',
-            letterSpacing: '0.06em',
-            textTransform: 'uppercase',
-            fontWeight: 600,
-            marginBottom: '0.4rem',
+            fontSize: '0.6rem',
+            marginBottom: '0.55rem',
+            color: 'var(--fg-dim)',
           }}
         >
           {label}
         </div>
       )}
-      <pre style={{ margin: 0, fontSize: '0.8125rem', lineHeight: 1.7 }}>
+      <pre style={{ margin: 0, fontSize: '0.78rem', lineHeight: 1.7 }}>
         <code>{children}</code>
       </pre>
     </div>
   );
 }
 
-const navItems = [
-  { href: '#authentication', label: 'Authentication' },
-  { href: '#create-order', label: 'Create order' },
-  { href: '#stream-order', label: 'Stream order (SSE)' },
-  { href: '#poll-order', label: 'Poll order (fallback)' },
-  { href: '#order-statuses', label: 'Order statuses' },
-  { href: '#webhooks', label: 'Webhooks' },
-  { href: '#errors', label: 'Error codes' },
-  { href: '#rate-limits', label: 'Rate limits' },
+function Endpoint({ method, path }: { method: 'GET' | 'POST'; path: string }) {
+  const colors: Record<'GET' | 'POST', { fg: string; border: string; bg: string }> = {
+    GET: {
+      fg: 'var(--blue)',
+      border: 'var(--blue-border)',
+      bg: 'var(--blue-muted)',
+    },
+    POST: {
+      fg: 'var(--green)',
+      border: 'var(--green-border)',
+      bg: 'var(--green-muted)',
+    },
+  };
+  const c = colors[method];
+  return (
+    <div
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '0.85rem',
+        background: 'var(--surface)',
+        border: '1px solid var(--border)',
+        borderRadius: 10,
+        padding: '0.7rem 0.95rem 0.7rem 0.7rem',
+        margin: '0 0 1.5rem',
+        fontFamily: 'var(--font-mono)',
+        fontSize: '0.84rem',
+      }}
+    >
+      <span
+        style={{
+          color: c.fg,
+          border: `1px solid ${c.border}`,
+          background: c.bg,
+          borderRadius: 6,
+          padding: '0.18rem 0.55rem',
+          fontWeight: 600,
+          fontSize: '0.72rem',
+          letterSpacing: '0.06em',
+        }}
+      >
+        {method}
+      </span>
+      <span style={{ color: 'var(--fg)' }}>{path}</span>
+    </div>
+  );
+}
+
+// ── Data ───────────────────────────────────────────────────────────
+
+const navSections = [
+  {
+    title: 'Getting started',
+    items: [
+      { href: '#authentication', label: 'Authentication', num: '01' },
+      { href: '#create-order', label: 'Create order', num: '02' },
+    ],
+  },
+  {
+    title: 'Status',
+    items: [
+      { href: '#stream-order', label: 'Stream (SSE)', num: '03' },
+      { href: '#poll-order', label: 'Poll (fallback)', num: '04' },
+      { href: '#order-statuses', label: 'Order statuses', num: '05' },
+    ],
+  },
+  {
+    title: 'Operations',
+    items: [
+      { href: '#webhooks', label: 'Webhooks', num: '06' },
+      { href: '#errors', label: 'Error codes', num: '07' },
+      { href: '#rate-limits', label: 'Rate limits', num: '08' },
+    ],
+  },
 ];
 
 // Stable agent-facing phases (internal pipeline statuses are implementation detail)
@@ -182,133 +260,173 @@ const errors = [
 export default function DocsPage() {
   return (
     <div
+      className="docs-shell"
       style={{
         background: 'var(--bg)',
         color: 'var(--fg)',
         display: 'flex',
-        minHeight: '100%',
+        minHeight: 'calc(100vh - 64px)',
+        position: 'relative',
       }}
     >
-      {/* Sidebar */}
-      <aside
-        style={{
-          width: 220,
-          flexShrink: 0,
-          borderRight: '1px solid var(--border)',
-          position: 'sticky',
-          top: 56,
-          height: 'calc(100vh - 56px)',
-          overflowY: 'auto',
-          padding: '2rem 0',
-          display: 'flex',
-          flexDirection: 'column',
-        }}
-        className="docs-sidebar"
-      >
-        <div style={{ padding: '0 1.25rem', marginBottom: '0.75rem' }}>
-          <span
+      {/* ── Sidebar ─────────────────────────────────────────────── */}
+      <aside className="docs-sidebar">
+        <div className="docs-sidebar-inner">
+          <div
+            className="type-eyebrow"
             style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.68rem',
-              color: 'var(--muted)',
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-              fontWeight: 600,
+              padding: '0 1.75rem',
+              marginBottom: '1.5rem',
+              color: 'var(--fg-dim)',
             }}
           >
-            API Reference
-          </span>
-        </div>
-        <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
-          {navItems.map((item) => (
+            API Reference · v1
+          </div>
+
+          <nav style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+            {navSections.map((group) => (
+              <div key={group.title}>
+                <div
+                  style={{
+                    padding: '0 1.75rem',
+                    fontFamily: 'var(--font-body)',
+                    fontSize: '0.72rem',
+                    fontWeight: 600,
+                    color: 'var(--fg-dim)',
+                    letterSpacing: '0.01em',
+                    marginBottom: '0.45rem',
+                  }}
+                >
+                  {group.title}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  {group.items.map((item) => (
+                    <a key={item.href} href={item.href} className="docs-nav-link">
+                      <span className="docs-nav-num">{item.num}</span>
+                      <span>{item.label}</span>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </nav>
+
+          <div
+            style={{
+              marginTop: 'auto',
+              padding: '1.75rem 1.75rem 0',
+              borderTop: '1px solid var(--border)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.55rem',
+            }}
+          >
+            <div className="type-eyebrow" style={{ fontSize: '0.58rem', color: 'var(--fg-dim)' }}>
+              Support
+            </div>
             <a
-              key={item.href}
-              href={item.href}
+              href="mailto:api@cards402.com"
               style={{
-                padding: '0.4375rem 1.25rem',
-                fontSize: '0.875rem',
-                color: 'var(--muted)',
+                fontSize: '0.8rem',
+                color: 'var(--fg-muted)',
                 textDecoration: 'none',
-                borderRadius: 0,
-                transition: 'color 0.12s',
-                display: 'block',
+                fontFamily: 'var(--font-mono)',
               }}
             >
-              {item.label}
+              api@cards402.com
             </a>
-          ))}
-        </nav>
-
-        <div
-          style={{
-            marginTop: 'auto',
-            padding: '1.5rem 1.25rem 0',
-            borderTop: '1px solid var(--border)',
-            marginRight: 0,
-          }}
-        >
-          <a
-            href="mailto:api@cards402.com"
-            style={{
-              fontSize: '0.8125rem',
-              color: 'var(--muted)',
-              textDecoration: 'none',
-              fontFamily: 'var(--font-mono)',
-            }}
-          >
-            api@cards402.com
-          </a>
+          </div>
         </div>
       </aside>
 
-      {/* Main content */}
-      <div
-        style={{
-          flex: 1,
-          minWidth: 0,
-          padding: '3rem 2.5rem 6rem',
-          maxWidth: 780,
-        }}
-      >
+      {/* ── Main column ─────────────────────────────────────────── */}
+      <div className="docs-main">
         {/* Page header */}
-        <div style={{ marginBottom: '3rem' }}>
+        <header style={{ padding: '4rem 0 3.5rem' }}>
           <div
+            className="type-eyebrow"
             style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.7rem',
               color: 'var(--green)',
-              letterSpacing: '0.1em',
-              textTransform: 'uppercase',
-              fontWeight: 600,
-              marginBottom: '0.625rem',
+              marginBottom: '1.2rem',
             }}
           >
-            cards402.com
+            Cards402 · HTTP API
           </div>
           <h1
+            className="type-display"
             style={{
-              fontSize: 'clamp(1.5rem, 3vw, 2.25rem)',
-              fontWeight: 800,
-              letterSpacing: '-0.03em',
-              marginBottom: '0.75rem',
+              fontSize: 'clamp(2.4rem, 4.5vw + 0.5rem, 4rem)',
+              color: 'var(--fg)',
+              margin: '0 0 1.5rem',
+              maxWidth: 720,
             }}
           >
-            API Reference
+            The{' '}
+            <span
+              style={{
+                fontStyle: 'italic',
+                fontVariationSettings: '"opsz" 144, "SOFT" 80',
+                color: 'var(--green)',
+              }}
+            >
+              reference
+            </span>
+            .
           </h1>
-          <p style={{ color: 'var(--muted)', fontSize: '1rem', lineHeight: 1.65, margin: 0 }}>
-            Base URL: <Code>https://api.cards402.com</Code>
-            <br />
-            All requests require an <Code>X-Api-Key</Code> header. Sign in at{' '}
-            <Link href="/dashboard" style={{ color: 'var(--green)', textDecoration: 'none' }}>
+          <p
+            className="type-body"
+            style={{
+              fontSize: '1.02rem',
+              color: 'var(--fg-muted)',
+              maxWidth: 620,
+              margin: 0,
+            }}
+          >
+            Everything an agent needs to go from a Stellar payment to a real Visa card. One base
+            URL, eight endpoints, zero hosted checkout. Sign in at{' '}
+            <Link
+              href="/dashboard"
+              style={{
+                color: 'var(--fg)',
+                textDecoration: 'none',
+                borderBottom: '1px solid var(--green-border)',
+              }}
+            >
               /dashboard
             </Link>{' '}
-            with your email to create one in seconds — no manual onboarding.
+            with your email to mint an API key in seconds.
           </p>
-        </div>
+
+          <div
+            style={{
+              marginTop: '2.25rem',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.65rem',
+              padding: '0.6rem 0.95rem',
+              background: 'var(--surface)',
+              border: '1px solid var(--border)',
+              borderRadius: 999,
+              fontFamily: 'var(--font-mono)',
+              fontSize: '0.78rem',
+            }}
+          >
+            <span
+              style={{
+                fontSize: '0.62rem',
+                letterSpacing: '0.12em',
+                textTransform: 'uppercase',
+                color: 'var(--fg-dim)',
+              }}
+            >
+              Base URL
+            </span>
+            <span style={{ color: 'var(--green)' }}>https://api.cards402.com</span>
+          </div>
+        </header>
 
         {/* ── Authentication ── */}
-        <Section id="authentication">
-          <SectionTitle>Authentication</SectionTitle>
+        <Section id="authentication" eyebrow="01 · Authentication" title="One header, one key.">
           <Para>
             Every request must include an <Code>X-Api-Key</Code> header. Keys are prefixed with{' '}
             <Code>cards402_</Code> and scoped to a spend limit in USDC.
@@ -331,34 +449,24 @@ export default function DocsPage() {
         </Section>
 
         {/* ── Create order ── */}
-        <Section id="create-order">
-          <SectionTitle>Create order</SectionTitle>
+        <Section
+          id="create-order"
+          eyebrow="02 · Create order"
+          title="One transaction in, one card out."
+        >
           <Para>
             Creates a new card order and returns Stellar payment instructions. The agent must send
             the exact amount to the Stellar address within the quoted window.
           </Para>
 
-          <div
-            style={{
-              background: 'var(--surface)',
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              padding: '0.875rem 1.125rem',
-              marginBottom: '1.25rem',
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.875rem',
-            }}
-          >
-            <span style={{ color: 'var(--green)', fontWeight: 700 }}>POST</span>
-            <span style={{ color: 'var(--muted)', marginLeft: '0.75rem' }}>/orders</span>
-          </div>
+          <Endpoint method="POST" path="/v1/orders" />
 
           <SubTitle>Request body</SubTitle>
           <Para>
             Content-Type: <Code>application/json</Code>
           </Para>
 
-          <div style={{ marginBottom: '1.5rem', overflowX: 'auto' }}>
+          <div style={{ margin: '0 0 1.75rem', overflowX: 'auto' }}>
             <table>
               <thead>
                 <tr>
@@ -373,9 +481,9 @@ export default function DocsPage() {
                   <td>
                     <Code>amount_usdc</Code>
                   </td>
-                  <td style={{ color: 'var(--muted)' }}>string</td>
-                  <td style={{ color: 'var(--muted)' }}>Yes</td>
-                  <td style={{ color: 'var(--muted)' }}>
+                  <td style={{ color: 'var(--fg-muted)' }}>string</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>Yes</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>
                     Card value in USD, as a decimal string (e.g. <Code>&quot;25.00&quot;</Code>).
                   </td>
                 </tr>
@@ -383,9 +491,9 @@ export default function DocsPage() {
                   <td>
                     <Code>webhook_url</Code>
                   </td>
-                  <td style={{ color: 'var(--muted)' }}>string</td>
-                  <td style={{ color: 'var(--muted)' }}>No</td>
-                  <td style={{ color: 'var(--muted)' }}>
+                  <td style={{ color: 'var(--fg-muted)' }}>string</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>No</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>
                     HTTPS URL to receive webhook POSTs on status changes.
                   </td>
                 </tr>
@@ -393,9 +501,9 @@ export default function DocsPage() {
                   <td>
                     <Code>metadata</Code>
                   </td>
-                  <td style={{ color: 'var(--muted)' }}>object</td>
-                  <td style={{ color: 'var(--muted)' }}>No</td>
-                  <td style={{ color: 'var(--muted)' }}>
+                  <td style={{ color: 'var(--fg-muted)' }}>object</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>No</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>
                     Arbitrary JSON stored with the order and echoed back on every read.
                   </td>
                 </tr>
@@ -405,7 +513,7 @@ export default function DocsPage() {
 
           <Para>
             Asset choice happens at <strong>payment time</strong>, not order creation. The response
-            below always carries both a <Code>payment.usdc</Code> quote and a
+            below always carries both a <Code>payment.usdc</Code> quote and a{' '}
             <Code>payment.xlm</Code> quote — call <Code>pay_usdc()</Code> or <Code>pay_xlm()</Code>{' '}
             on the Soroban contract with whichever asset you want to settle in.
           </Para>
@@ -456,31 +564,9 @@ Content-Type: application/json
             {`npx cards402 purchase --amount 25
 # optional: --asset usdc  (default: xlm)`}
           </CodeBlock>
-          <CodeBlock label="Response — 201 Created">
-            {`{
-  "order_id": "b9e1f3a2-7c4d-4b0e-8f1a-2c4e6a8b0d2f",
-  "status": "pending_payment",
-  "payment": {
-    "type": "soroban_contract",
-    "contract_id": "CAAAA...cards402_receiver_contract...",
-    "order_id": "b9e1f3a2-7c4d-4b0e-8f1a-2c4e6a8b0d2f",
-    "usdc": {
-      "amount": "25.00",
-      "asset": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
-    },
-    "xlm": { "amount": "192.84" }
-  },
-  "poll_url": "/v1/orders/b9e1f3a2-7c4d-4b0e-8f1a-2c4e6a8b0d2f",
-  "budget": {
-    "spent_usdc": "0.00",
-    "limit_usdc": null,
-    "remaining_usdc": null
-  }
-}`}
-          </CodeBlock>
 
           <SubTitle>USDC vs XLM — which to use?</SubTitle>
-          <div style={{ marginBottom: '1.25rem', overflowX: 'auto' }}>
+          <div style={{ margin: '0 0 1.25rem', overflowX: 'auto' }}>
             <table>
               <thead>
                 <tr>
@@ -491,24 +577,24 @@ Content-Type: application/json
               </thead>
               <tbody>
                 <tr>
-                  <td style={{ color: 'var(--muted)' }}>Card value</td>
-                  <td style={{ color: 'var(--muted)' }}>Exact — 1 USDC = $1.00</td>
-                  <td style={{ color: 'var(--muted)' }}>Market rate, quoted at order time</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>Card value</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>Exact — 1 USDC = $1.00</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>Market rate, quoted at order time</td>
                 </tr>
                 <tr>
-                  <td style={{ color: 'var(--muted)' }}>Setup</td>
-                  <td style={{ color: 'var(--muted)' }}>Requires USDC trustline</td>
-                  <td style={{ color: 'var(--muted)' }}>No trustline needed</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>Setup</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>Requires USDC trustline</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>No trustline needed</td>
                 </tr>
                 <tr>
-                  <td style={{ color: 'var(--muted)' }}>Wallet needs</td>
-                  <td style={{ color: 'var(--muted)' }}>XLM (fees) + USDC balance</td>
-                  <td style={{ color: 'var(--muted)' }}>XLM balance only</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>Wallet needs</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>XLM (fees) + USDC balance</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>XLM balance only</td>
                 </tr>
                 <tr>
-                  <td style={{ color: 'var(--muted)' }}>Predictability</td>
-                  <td style={{ color: 'var(--muted)' }}>High — no price risk</td>
-                  <td style={{ color: 'var(--muted)' }}>Varies with XLM/USD rate</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>Predictability</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>High — no price risk</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>Varies with XLM/USD rate</td>
                 </tr>
               </tbody>
             </table>
@@ -522,8 +608,8 @@ Content-Type: application/json
           <Para>
             Orders in <Code>pending_payment</Code> expire after <strong>2 hours</strong> if no
             on-chain payment is detected. Expired orders return{' '}
-            <Code>phase: &quot;expired&quot;</Code>
-            and no funds are taken. Create a new order to retry.
+            <Code>phase: &quot;expired&quot;</Code> and no funds are taken. Create a new order to
+            retry.
           </Para>
 
           <SubTitle>Overpayment</SubTitle>
@@ -533,47 +619,45 @@ Content-Type: application/json
             after 2 hours and no card will be issued.
           </Para>
 
-          <div
-            style={{
-              background: 'var(--green-muted)',
-              border: '1px solid var(--green-border)',
-              borderRadius: 8,
-              padding: '0.875rem 1.125rem',
-              fontSize: '0.875rem',
-              lineHeight: 1.65,
-              color: 'var(--fg)',
-            }}
-          >
-            <strong style={{ color: 'var(--green)' }}>Using the SDK?</strong> Call{' '}
-            <Code>purchaseCardOWS()</Code> — it creates the order, signs and submits the Soroban
-            transaction, and polls for the card in a single call. No contract interaction or order
-            ID handling required.
+          <div className="docs-callout">
+            <div className="radial-green-glow" aria-hidden />
+            <div style={{ position: 'relative' }}>
+              <div
+                className="type-eyebrow"
+                style={{ color: 'var(--green)', marginBottom: '0.6rem' }}
+              >
+                Using the SDK?
+              </div>
+              <p
+                style={{
+                  fontFamily: 'var(--font-body)',
+                  fontSize: '0.9rem',
+                  lineHeight: 1.65,
+                  color: 'var(--fg)',
+                  margin: 0,
+                }}
+              >
+                Call <Code>purchaseCardOWS()</Code> — it creates the order, signs and submits the
+                Soroban transaction, and polls for the card in a single call. No contract
+                interaction or order ID handling required.
+              </p>
+            </div>
           </div>
         </Section>
 
-        {/* ── Poll order ── */}
-        <Section id="stream-order">
-          <SectionTitle>Stream order (SSE) — preferred</SectionTitle>
+        {/* ── Stream order ── */}
+        <Section
+          id="stream-order"
+          eyebrow="03 · Stream (SSE)"
+          title="Preferred. One open connection, pushed phases."
+        >
           <Para>
             Subscribe to live phase updates over Server-Sent Events. One open connection, pushed to
             on every transition, closed cleanly when the order reaches a terminal phase. Prefer this
             over polling for anything that runs as a long-lived process.
           </Para>
 
-          <div
-            style={{
-              background: 'var(--surface)',
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              padding: '0.875rem 1.125rem',
-              marginBottom: '1.25rem',
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.875rem',
-            }}
-          >
-            <span style={{ color: '#60a5fa', fontWeight: 700 }}>GET</span>
-            <span style={{ color: 'var(--muted)', marginLeft: '0.75rem' }}>/orders/:id/stream</span>
-          </div>
+          <Endpoint method="GET" path="/orders/:id/stream" />
 
           <Para>
             Each event carries the full order state (same JSON shape as <Code>GET /orders/:id</Code>
@@ -623,35 +707,22 @@ while (true) {
           </CodeBlock>
 
           <Para>
-            The cards402 SDK&apos;s <Code>waitForCard()</Code> already uses this path with polling
+            The Cards402 SDK&apos;s <Code>waitForCard()</Code> already uses this path with polling
             as an automatic fallback, so SDK users get SSE for free. The server emits an SSE comment
             (<Code>: keepalive</Code>) every 15s to prevent intermediate proxies from idle-killing
             the connection.
           </Para>
         </Section>
 
-        <Section id="poll-order">
-          <SectionTitle>Poll order (fallback)</SectionTitle>
+        {/* ── Poll order ── */}
+        <Section id="poll-order" eyebrow="04 · Poll (fallback)" title="When SSE isn't an option.">
           <Para>
             Poll the status of an order when SSE isn&apos;t an option (e.g. middleboxes that strip{' '}
             <Code>text/event-stream</Code>). The response is the same shape as each SSE event&apos;s{' '}
             <Code>data:</Code> payload.
           </Para>
 
-          <div
-            style={{
-              background: 'var(--surface)',
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              padding: '0.875rem 1.125rem',
-              marginBottom: '1.25rem',
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.875rem',
-            }}
-          >
-            <span style={{ color: '#60a5fa', fontWeight: 700 }}>GET</span>
-            <span style={{ color: 'var(--muted)', marginLeft: '0.75rem' }}>/orders/:id</span>
-          </div>
+          <Endpoint method="GET" path="/orders/:id" />
 
           <Para>Suggested poll interval: every 5 seconds for the first 2 minutes.</Para>
 
@@ -698,14 +769,13 @@ while (true) {
         </Section>
 
         {/* ── Order statuses ── */}
-        <Section id="order-statuses">
-          <SectionTitle>Order statuses</SectionTitle>
+        <Section id="order-statuses" eyebrow="05 · Order statuses" title="A tiny state machine.">
           <Para>
             Orders move through a linear state machine. The happy path ends at{' '}
             <Code>delivered</Code>. Failures produce <Code>failed</Code> and queue a refund.
           </Para>
 
-          <div style={{ overflowX: 'auto', marginBottom: '1.25rem' }}>
+          <div style={{ overflowX: 'auto', margin: '0 0 1.5rem' }}>
             <table>
               <thead>
                 <tr>
@@ -721,7 +791,7 @@ while (true) {
                         className={`status-${status}`}
                         style={{
                           fontFamily: 'var(--font-mono)',
-                          fontSize: '0.75rem',
+                          fontSize: '0.72rem',
                           padding: '0.2rem 0.55rem',
                           borderRadius: 4,
                           border: '1px solid',
@@ -732,7 +802,7 @@ while (true) {
                         {status}
                       </span>
                     </td>
-                    <td style={{ color: 'var(--muted)', fontSize: '0.875rem' }}>{meaning}</td>
+                    <td style={{ color: 'var(--fg-muted)', fontSize: '0.86rem' }}>{meaning}</td>
                   </tr>
                 ))}
               </tbody>
@@ -748,7 +818,7 @@ while (true) {
           <Para>
             No payment within 2 hours: <Code>awaiting_payment</Code> → <Code>expired</Code>
           </Para>
-          <Para style={{ color: 'var(--muted)', fontSize: '0.875rem' }}>
+          <Para style={{ color: 'var(--fg-dim)', fontSize: '0.85rem' }}>
             Each poll response also includes a <Code>status</Code> field with the internal pipeline
             state (e.g. <Code>ordering</Code>, <Code>stage1_done</Code>). Treat these as
             informational only — build your logic against <Code>phase</Code>, which is stable across
@@ -757,22 +827,24 @@ while (true) {
         </Section>
 
         {/* ── Webhooks ── */}
-        <Section id="webhooks">
-          <SectionTitle>Webhooks</SectionTitle>
+        <Section id="webhooks" eyebrow="06 · Webhooks" title="Signed, retried, optional.">
           <Para>
-            If you provide a <Code>webhook_url</Code> when creating an order, cards402 will POST to
+            If you provide a <Code>webhook_url</Code> when creating an order, Cards402 will POST to
             it when the order reaches <Code>delivered</Code> or <Code>failed</Code> status.
           </Para>
           <Para>Each webhook request includes two headers for verification:</Para>
           <ul
             style={{
-              color: 'var(--muted)',
-              fontSize: '0.9rem',
+              color: 'var(--fg-muted)',
+              fontFamily: 'var(--font-body)',
+              fontSize: '0.92rem',
               lineHeight: 1.7,
-              paddingLeft: '1.5rem',
+              paddingLeft: '1.25rem',
+              margin: '0 0 1.1rem',
+              maxWidth: 640,
             }}
           >
-            <li>
+            <li style={{ marginBottom: '0.35rem' }}>
               <Code>X-Cards402-Signature: sha256=&lt;hmac&gt;</Code> — HMAC-SHA256 over{' '}
               <Code>&lt;timestamp&gt;.&lt;body&gt;</Code>
             </li>
@@ -828,8 +900,7 @@ function verifyWebhook(rawBody, signature, timestamp, secret) {
         </Section>
 
         {/* ── Error codes ── */}
-        <Section id="errors">
-          <SectionTitle>Error codes</SectionTitle>
+        <Section id="errors" eyebrow="07 · Error codes" title="Typed, stable, documented.">
           <Para>
             All errors return a JSON body with an <Code>error</Code> string and optional{' '}
             <Code>message</Code> field.
@@ -858,14 +929,14 @@ function verifyWebhook(rawBody, signature, timestamp, secret) {
                     </td>
                     <td
                       style={{
-                        color: 'var(--muted)',
+                        color: 'var(--fg-muted)',
                         fontFamily: 'var(--font-mono)',
                         fontSize: '0.8125rem',
                       }}
                     >
                       {status}
                     </td>
-                    <td style={{ color: 'var(--muted)', fontSize: '0.875rem' }}>{meaning}</td>
+                    <td style={{ color: 'var(--fg-muted)', fontSize: '0.86rem' }}>{meaning}</td>
                   </tr>
                 ))}
               </tbody>
@@ -874,22 +945,24 @@ function verifyWebhook(rawBody, signature, timestamp, secret) {
         </Section>
 
         {/* ── Rate limits ── */}
-        <Section id="rate-limits">
-          <SectionTitle>Rate limits</SectionTitle>
+        <Section id="rate-limits" eyebrow="08 · Rate limits" title="Per-key, per-hour, per-minute.">
           <Para>The following limits are enforced per API key:</Para>
           <ul
             style={{
-              color: 'var(--muted)',
-              fontSize: '0.9rem',
+              color: 'var(--fg-muted)',
+              fontFamily: 'var(--font-body)',
+              fontSize: '0.92rem',
               lineHeight: 1.7,
-              paddingLeft: '1.5rem',
+              paddingLeft: '1.25rem',
+              margin: '0 0 1.1rem',
+              maxWidth: 640,
             }}
           >
-            <li>
-              <strong>Order creation</strong> — 60 per hour
+            <li style={{ marginBottom: '0.35rem' }}>
+              <strong style={{ color: 'var(--fg)' }}>Order creation</strong> — 60 per hour
             </li>
             <li>
-              <strong>Status polling</strong> — 600 per minute (10/s)
+              <strong style={{ color: 'var(--fg)' }}>Status polling</strong> — 600 per minute (10/s)
             </li>
           </ul>
           <Para>
@@ -905,33 +978,201 @@ function verifyWebhook(rawBody, signature, timestamp, secret) {
             orders and returns <Code>503 service_temporarily_unavailable</Code> until an admin
             manually unfreezes the system.
           </Para>
-
-          <div
-            style={{ marginTop: '2rem', paddingTop: '2rem', borderTop: '1px solid var(--border)' }}
-          >
-            <p style={{ color: 'var(--muted)', fontSize: '0.875rem', margin: 0 }}>
-              Questions?{' '}
-              <a
-                href="mailto:api@cards402.com"
-                style={{ color: 'var(--green)', textDecoration: 'none' }}
-              >
-                api@cards402.com
-              </a>
-              {' · '}
-              <Link
-                href="/agents.txt"
-                style={{
-                  color: 'var(--muted)',
-                  textDecoration: 'none',
-                  fontFamily: 'var(--font-mono)',
-                }}
-              >
-                /agents.txt
-              </Link>
-            </p>
-          </div>
         </Section>
+
+        {/* ── Footer tail ── */}
+        <div
+          style={{
+            marginTop: '5rem',
+            paddingTop: '2.25rem',
+            borderTop: '1px solid var(--border)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '1rem',
+            flexWrap: 'wrap',
+          }}
+        >
+          <p
+            style={{
+              color: 'var(--fg-dim)',
+              fontFamily: 'var(--font-mono)',
+              fontSize: '0.78rem',
+              margin: 0,
+            }}
+          >
+            Questions?{' '}
+            <a
+              href="mailto:api@cards402.com"
+              style={{ color: 'var(--green)', textDecoration: 'none' }}
+            >
+              api@cards402.com
+            </a>
+          </p>
+          <Link href="/agents.txt" className="link-arrow" style={{ fontSize: '0.72rem' }}>
+            Read /agents.txt
+          </Link>
+        </div>
       </div>
+
+      {/* ── Docs-local styles ─────────────────────────────────── */}
+      <style>{`
+        .docs-sidebar {
+          width: 260px;
+          flex-shrink: 0;
+          border-right: 1px solid var(--border);
+          position: sticky;
+          top: 64px;
+          align-self: flex-start;
+          height: calc(100vh - 64px);
+          overflow-y: auto;
+          z-index: 1;
+        }
+        .docs-sidebar-inner {
+          display: flex;
+          flex-direction: column;
+          height: 100%;
+          padding: 2.25rem 0 1.75rem;
+        }
+        .docs-main {
+          flex: 1;
+          min-width: 0;
+          padding: 0 3rem 6rem;
+          max-width: 820px;
+        }
+        .docs-nav-link {
+          display: flex;
+          align-items: baseline;
+          gap: 0.65rem;
+          padding: 0.45rem 1.75rem;
+          font-family: var(--font-body);
+          font-size: 0.86rem;
+          color: var(--fg-muted);
+          text-decoration: none;
+          position: relative;
+          transition:
+            color 0.3s var(--ease-out),
+            background 0.3s var(--ease-out);
+        }
+        .docs-nav-link::before {
+          content: '';
+          position: absolute;
+          left: 0;
+          top: 0.7rem;
+          bottom: 0.7rem;
+          width: 2px;
+          background: var(--green);
+          box-shadow: 0 0 12px var(--green-glow);
+          transform: scaleY(0);
+          transform-origin: center;
+          transition: transform 0.3s var(--ease-out);
+        }
+        .docs-nav-link:hover {
+          color: var(--fg);
+          background: var(--surface-hover);
+        }
+        .docs-nav-link:hover::before {
+          transform: scaleY(1);
+        }
+        .docs-nav-num {
+          font-family: var(--font-mono);
+          font-size: 0.64rem;
+          color: var(--fg-dim);
+          letter-spacing: 0.05em;
+        }
+        .docs-inline-code {
+          font-family: var(--font-mono);
+          font-size: 0.82em;
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-radius: 4px;
+          padding: 0.1em 0.38em;
+          color: var(--green);
+          white-space: nowrap;
+        }
+        .docs-callout {
+          position: relative;
+          overflow: hidden;
+          background: var(--surface);
+          border: 1px solid var(--green-border);
+          border-radius: 12px;
+          padding: 1.25rem 1.5rem;
+          margin: 0.25rem 0 1.5rem;
+          max-width: 640px;
+        }
+        .docs-callout .radial-green-glow {
+          opacity: 0.18;
+        }
+        .docs-main section:first-of-type {
+          border-top: none;
+        }
+
+        @media (max-width: 960px) {
+          .docs-shell {
+            flex-direction: column !important;
+          }
+          .docs-sidebar {
+            width: 100% !important;
+            position: sticky;
+            top: 64px;
+            height: auto !important;
+            border-right: none !important;
+            border-bottom: 1px solid var(--border);
+            background: rgba(5, 5, 5, 0.82);
+            backdrop-filter: blur(16px) saturate(140%);
+            -webkit-backdrop-filter: blur(16px) saturate(140%);
+          }
+          .docs-sidebar-inner {
+            flex-direction: row;
+            align-items: center;
+            gap: 1.25rem;
+            padding: 0.75rem 1.35rem;
+            overflow-x: auto;
+            height: auto;
+          }
+          .docs-sidebar-inner > div:first-child {
+            display: none;
+          }
+          .docs-sidebar nav {
+            flex-direction: row !important;
+            gap: 0.25rem !important;
+            flex-wrap: nowrap;
+          }
+          .docs-sidebar nav > div > div:first-child {
+            display: none;
+          }
+          .docs-sidebar nav > div {
+            display: flex;
+            align-items: center;
+          }
+          .docs-sidebar nav > div > div:last-child {
+            flex-direction: row !important;
+          }
+          .docs-nav-link {
+            padding: 0.45rem 0.75rem !important;
+            white-space: nowrap;
+          }
+          .docs-nav-link::before {
+            display: none;
+          }
+          .docs-sidebar-inner > div:last-child {
+            display: none;
+          }
+          .docs-main {
+            padding: 0 1.75rem 5rem !important;
+            max-width: 100% !important;
+          }
+        }
+
+        @media (max-width: 560px) {
+          .docs-main {
+            padding: 0 1.1rem 4rem !important;
+          }
+          .docs-main header {
+            padding: 2.5rem 0 2.25rem !important;
+          }
+        }
+      `}</style>
     </div>
   );
 }

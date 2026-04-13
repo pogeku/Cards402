@@ -94,63 +94,72 @@ export function AuthGate() {
         </div>
 
         {stage === 'email' ? (
-          <>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.7rem' }}>
-              <Input
-                type="email"
-                placeholder="you@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                autoFocus
-              />
-              <Button
-                variant="primary"
-                onClick={sendCode}
-                disabled={busy || !email}
-                style={{ width: '100%', justifyContent: 'center' }}
-              >
-                {busy ? 'Sending…' : 'Send code'}
-              </Button>
-            </div>
-          </>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!busy && email) sendCode();
+            }}
+            style={{ display: 'flex', flexDirection: 'column', gap: '0.7rem' }}
+          >
+            <Input
+              type="email"
+              placeholder="you@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              autoFocus
+            />
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={busy || !email}
+              style={{ width: '100%', justifyContent: 'center' }}
+            >
+              {busy ? 'Sending…' : 'Send code'}
+            </Button>
+          </form>
         ) : (
-          <>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.7rem' }}>
-              <div style={{ fontSize: '0.75rem', color: 'var(--fg-dim)' }}>
-                Code sent to <strong style={{ color: 'var(--fg)' }}>{email}</strong>
-              </div>
-              <Input
-                placeholder="6-digit code"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                autoFocus
-              />
-              <Button
-                variant="primary"
-                onClick={verifyCode}
-                disabled={busy || code.length < 6}
-                style={{ width: '100%', justifyContent: 'center' }}
-              >
-                {busy ? 'Verifying…' : 'Sign in'}
-              </Button>
-              <button
-                onClick={() => {
-                  setStage('email');
-                  setCode('');
-                }}
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  color: 'var(--fg-dim)',
-                  fontSize: '0.72rem',
-                  cursor: 'pointer',
-                  marginTop: '0.25rem',
-                }}
-              >
-                ← use different email
-              </button>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!busy && code.length >= 6) verifyCode();
+            }}
+            style={{ display: 'flex', flexDirection: 'column', gap: '0.7rem' }}
+          >
+            <div style={{ fontSize: '0.75rem', color: 'var(--fg-dim)' }}>
+              Code sent to <strong style={{ color: 'var(--fg)' }}>{email}</strong>
             </div>
-          </>
+            <Input
+              placeholder="6-digit code"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              autoFocus
+            />
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={busy || code.length < 6}
+              style={{ width: '100%', justifyContent: 'center' }}
+            >
+              {busy ? 'Verifying…' : 'Sign in'}
+            </Button>
+            <button
+              type="button"
+              onClick={() => {
+                setStage('email');
+                setCode('');
+              }}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--fg-dim)',
+                fontSize: '0.72rem',
+                cursor: 'pointer',
+                marginTop: '0.25rem',
+              }}
+            >
+              ← use different email
+            </button>
+          </form>
         )}
 
         {error && (

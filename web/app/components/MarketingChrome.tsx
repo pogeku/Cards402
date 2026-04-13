@@ -120,7 +120,7 @@ export function MarketingChrome({ children }: { children: ReactNode }) {
             </FooterCol>
 
             <FooterCol title="Network">
-              <FooterLink href="https://stellar.expert/" external>
+              <FooterLink href="https://stellar.org/" external>
                 Stellar
               </FooterLink>
               <FooterLink href="https://www.npmjs.com/package/cards402" external>

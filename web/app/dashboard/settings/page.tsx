@@ -361,7 +361,7 @@ function PlatformTreasuryCard() {
           lineHeight: 1.5,
         }}
       >
-        The cards402 treasury wallet on Stellar. Top this up with XLM or USDC when fulfillment runs
+        The Cards402 treasury wallet on Stellar. Top this up with XLM or USDC when fulfillment runs
         low — it's what funds CTX payments and refunds. Only visible to the platform owner.
       </div>
       {error && (

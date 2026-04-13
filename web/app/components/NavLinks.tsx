@@ -56,7 +56,22 @@ export function NavLinks() {
         }}
       >
         Get started
-        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 400, opacity: 0.6 }}>↗</span>
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 14 14"
+          fill="none"
+          aria-hidden
+          style={{ opacity: 0.7, display: 'block' }}
+        >
+          <path
+            d="M2 7h10m-3.5-3.5L12 7l-3.5 3.5"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
       </Link>
     </div>
   );

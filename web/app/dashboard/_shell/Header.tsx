@@ -6,6 +6,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useDashboard } from '../_lib/DashboardProvider';
 import { applyTheme, loadTheme, saveTheme, type Theme } from '../_ui/theme';
@@ -34,6 +35,7 @@ export function Header() {
   const router = useRouter();
   const [theme, setTheme] = useState<Theme>('dark');
   const [avatarOpen, setAvatarOpen] = useState(false);
+  const [bellOpen, setBellOpen] = useState(false);
 
   // Theme: load saved on mount, listen for system change in system mode.
   useEffect(() => {
@@ -152,48 +154,252 @@ export function Header() {
       </button>
 
       {/* Notifications bell */}
-      <button
-        title={pendingApprovals ? `${pendingApprovals} pending approvals` : 'No pending approvals'}
-        style={{
-          position: 'relative',
-          width: 32,
-          height: 32,
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          background: 'transparent',
-          border: '1px solid var(--border)',
-          borderRadius: 6,
-          color: 'var(--fg-muted)',
-          cursor: 'pointer',
-          flexShrink: 0,
-        }}
-      >
-        <SvgIcon d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0" />
-        {pendingApprovals > 0 && (
-          <span
-            style={{
-              position: 'absolute',
-              top: -4,
-              right: -4,
-              minWidth: 14,
-              height: 14,
-              padding: '0 3px',
-              borderRadius: 7,
-              background: 'var(--red)',
-              color: '#000',
-              fontSize: '0.58rem',
-              fontWeight: 700,
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontFamily: 'var(--font-mono)',
-            }}
-          >
-            {pendingApprovals}
-          </span>
+      <div style={{ position: 'relative', flexShrink: 0 }}>
+        <button
+          onClick={() => setBellOpen((v) => !v)}
+          title={
+            pendingApprovals ? `${pendingApprovals} pending approvals` : 'No pending approvals'
+          }
+          aria-haspopup="true"
+          aria-expanded={bellOpen}
+          style={{
+            position: 'relative',
+            width: 32,
+            height: 32,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: bellOpen ? 'var(--surface-hover)' : 'transparent',
+            border: '1px solid var(--border)',
+            borderRadius: 6,
+            color: 'var(--fg-muted)',
+            cursor: 'pointer',
+          }}
+        >
+          <SvgIcon d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0" />
+          {pendingApprovals > 0 && (
+            <span
+              style={{
+                position: 'absolute',
+                top: -4,
+                right: -4,
+                minWidth: 14,
+                height: 14,
+                padding: '0 3px',
+                borderRadius: 7,
+                background: 'var(--red)',
+                color: '#000',
+                fontSize: '0.58rem',
+                fontWeight: 700,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontFamily: 'var(--font-mono)',
+              }}
+            >
+              {pendingApprovals}
+            </span>
+          )}
+        </button>
+        {bellOpen && (
+          <>
+            {/* Invisible click-catcher to dismiss the tray on outside click */}
+            <div
+              onClick={() => setBellOpen(false)}
+              style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 25,
+              }}
+            />
+            <div
+              role="menu"
+              style={{
+                position: 'absolute',
+                top: 40,
+                right: 0,
+                width: 320,
+                maxWidth: 'calc(100vw - 1rem)',
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
+                borderRadius: 10,
+                boxShadow: 'var(--shadow-float)',
+                zIndex: 30,
+                overflow: 'hidden',
+              }}
+            >
+              <div
+                style={{
+                  padding: '0.7rem 0.85rem',
+                  borderBottom: '1px solid var(--border)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '0.5rem',
+                }}
+              >
+                <div
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: '0.64rem',
+                    fontWeight: 600,
+                    letterSpacing: '0.12em',
+                    textTransform: 'uppercase',
+                    color: 'var(--fg-dim)',
+                  }}
+                >
+                  Notifications
+                </div>
+                {pendingApprovals > 0 && (
+                  <div
+                    style={{
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: '0.64rem',
+                      color: 'var(--fg-dim)',
+                    }}
+                  >
+                    {pendingApprovals} pending
+                  </div>
+                )}
+              </div>
+
+              {pendingApprovals === 0 ? (
+                <div
+                  style={{
+                    padding: '2rem 1rem',
+                    textAlign: 'center',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 32,
+                      height: 32,
+                      borderRadius: '50%',
+                      background: 'var(--surface-hover)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: 'var(--fg-dim)',
+                    }}
+                    aria-hidden
+                  >
+                    <SvgIcon
+                      d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0"
+                      size={14}
+                    />
+                  </div>
+                  <div
+                    style={{
+                      fontSize: '0.82rem',
+                      fontWeight: 500,
+                      color: 'var(--fg)',
+                    }}
+                  >
+                    No new notifications
+                  </div>
+                  <div
+                    style={{
+                      fontSize: '0.72rem',
+                      color: 'var(--fg-dim)',
+                      maxWidth: 220,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    Approval requests and system alerts will show up here.
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+                    {approvals.slice(0, 5).map((a) => (
+                      <Link
+                        key={a.id}
+                        href="/dashboard/approvals"
+                        onClick={() => setBellOpen(false)}
+                        style={{
+                          display: 'block',
+                          padding: '0.7rem 0.85rem',
+                          borderBottom: '1px solid var(--border)',
+                          textDecoration: 'none',
+                          color: 'var(--fg)',
+                          transition: 'background 0.2s var(--ease-out)',
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'baseline',
+                            gap: '0.5rem',
+                            marginBottom: '0.2rem',
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontSize: '0.78rem',
+                              fontWeight: 500,
+                              color: 'var(--fg)',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            Approval · {a.api_key_label || 'unknown key'}
+                          </span>
+                          <span
+                            style={{
+                              fontFamily: 'var(--font-mono)',
+                              fontSize: '0.72rem',
+                              color: 'var(--green)',
+                              flexShrink: 0,
+                            }}
+                          >
+                            ${a.amount_usdc}
+                          </span>
+                        </div>
+                        {a.agent_note && (
+                          <div
+                            style={{
+                              fontSize: '0.7rem',
+                              color: 'var(--fg-dim)',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {a.agent_note}
+                          </div>
+                        )}
+                      </Link>
+                    ))}
+                  </div>
+                  <Link
+                    href="/dashboard/approvals"
+                    onClick={() => setBellOpen(false)}
+                    style={{
+                      display: 'block',
+                      padding: '0.7rem 0.85rem',
+                      borderTop: '1px solid var(--border)',
+                      textAlign: 'center',
+                      fontSize: '0.72rem',
+                      fontFamily: 'var(--font-mono)',
+                      color: 'var(--fg-muted)',
+                      textDecoration: 'none',
+                      letterSpacing: '0.04em',
+                    }}
+                  >
+                    View all approvals →
+                  </Link>
+                </>
+              )}
+            </div>
+          </>
         )}
-      </button>
+      </div>
 
       {/* Avatar / menu */}
       <div style={{ position: 'relative', flexShrink: 0 }}>
