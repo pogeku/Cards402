@@ -217,6 +217,17 @@ async function reconcileOrderingFulfillment() {
 
       // Step 2: ensure the XLM payment was sent. If xlm_sent_at is null we
       // retry, fetching the payment URL from vcc if we don't already have it.
+      //
+      // F9: the retry MUST preserve the original payment asset and sendMax
+      // cap. Without it, a USDC-funded order whose initial payCtxOrder call
+      // failed after getInvoice would silently re-send as raw treasury XLM
+      // (no cap, wrong asset), draining the treasury. The first-pass path
+      // in payment-handler.js passes `{ paymentAsset, maxUsdc }`; we rebuild
+      // the same opts from the order row here.
+      const retryOpts = {
+        paymentAsset: order.payment_asset,
+        maxUsdc: order.amount_usdc,
+      };
       if (!order.xlm_sent_at) {
         if (!paymentUrl) {
           const vccJob = await vccClient.getVccJobStatus(vccJobId);
@@ -232,8 +243,8 @@ async function reconcileOrderingFulfillment() {
               order.id,
             );
           } else {
-            log(`  ${shortId} → retry payCtxOrder`);
-            await payCtxOrder(paymentUrl);
+            log(`  ${shortId} → retry payCtxOrder (asset=${retryOpts.paymentAsset})`);
+            await payCtxOrder(paymentUrl, retryOpts);
             db.prepare(`UPDATE orders SET xlm_sent_at = ?, updated_at = ? WHERE id = ?`).run(
               new Date().toISOString(),
               new Date().toISOString(),
@@ -241,8 +252,8 @@ async function reconcileOrderingFulfillment() {
             );
           }
         } else {
-          log(`  ${shortId} → retry payCtxOrder`);
-          await payCtxOrder(paymentUrl);
+          log(`  ${shortId} → retry payCtxOrder (asset=${retryOpts.paymentAsset})`);
+          await payCtxOrder(paymentUrl, retryOpts);
           db.prepare(`UPDATE orders SET xlm_sent_at = ?, updated_at = ? WHERE id = ?`).run(
             new Date().toISOString(),
             new Date().toISOString(),
@@ -271,8 +282,23 @@ async function reconcileOrderingFulfillment() {
   }
 }
 
-// Poll VCC for orders stuck in pending_payment or ordering where the callback may have been lost.
-// Applies a 10-minute window — short enough to catch lost callbacks without hammering VCC.
+// Poll VCC for orders stuck in pending_payment or ordering where the callback
+// may have been lost. Applies a 10-minute window — short enough to catch lost
+// callbacks without hammering VCC.
+//
+// F8: vcc strips card_number/cvv/expiry from GET /api/jobs/:id by design, so
+// this poll cannot recover the card itself. Its only job is to detect
+// terminal failures (so we can schedule a refund) and to surface a
+// stuck-delivered state for ops when vcc says "delivered" but our row is
+// still 'ordering' — that means the callback was lost permanently and the
+// card sits in vcc's encrypted store. Ops manually reconcile via the vcc
+// admin, which has key access; cards402 must NOT attempt to read card data
+// from the job status endpoint.
+//
+// F10: the failure branch now calls scheduleRefund so the poll-recovery path
+// matches the callback path — every terminal failure queues a refund, no
+// split-brain between "failed-via-callback refunds" and "failed-via-poll
+// doesn't".
 async function recoverStuckOrders() {
   const stuck = /** @type {any[]} */ (
     db
@@ -290,64 +316,25 @@ async function recoverStuckOrders() {
   if (stuck.length === 0) return;
   log(`polling VCC for ${stuck.length} possibly-stuck order(s)`);
 
-  const { enqueueWebhook } = require('./fulfillment');
-
   for (const order of stuck) {
     try {
       const vccJob = await vccClient.getVccJobStatus(order.vcc_job_id);
       const now = new Date().toISOString();
 
-      if (vccJob.status === 'delivered' && vccJob.card_number) {
-        db.prepare(
-          `
-          UPDATE orders
-          SET status = 'delivered', card_number = ?, card_cvv = ?, card_expiry = ?, card_brand = ?, updated_at = ?
-          WHERE id = ?
-        `,
-        ).run(
-          vccJob.card_number,
-          vccJob.card_cvv,
-          vccJob.card_expiry,
-          vccJob.card_brand || null,
-          now,
-          order.id,
-        );
-
-        if (order.api_key_id) {
-          db.prepare(
-            `
-            UPDATE api_keys
-            SET total_spent_usdc = CAST(CAST(total_spent_usdc AS REAL) + CAST(? AS REAL) AS TEXT)
-            WHERE id = ?
-          `,
-          ).run(order.amount_usdc, order.api_key_id);
-        }
-
-        const keyRow = /** @type {any} */ (
-          order.api_key_id
-            ? db
-                .prepare(`SELECT webhook_secret, default_webhook_url FROM api_keys WHERE id = ?`)
-                .get(order.api_key_id)
-            : null
-        );
-        const webhookUrl = order.webhook_url || keyRow?.default_webhook_url;
-        if (webhookUrl) {
-          enqueueWebhook(
-            webhookUrl,
-            {
-              order_id: order.id,
-              status: 'delivered',
-              card: {
-                number: vccJob.card_number,
-                cvv: vccJob.card_cvv,
-                expiry: vccJob.card_expiry,
-                brand: vccJob.card_brand || null,
-              },
-            },
-            keyRow?.webhook_secret || null,
-          ).catch(() => {});
-        }
-        log(`  recovered ${order.id.slice(0, 8)} → delivered via VCC poll`);
+      if (vccJob.status === 'delivered') {
+        // Callback never arrived but vcc has the card. We intentionally do
+        // NOT read card data from the job status endpoint — vcc strips it.
+        // Log a stuck-delivered alert so ops can force-replay the callback
+        // from vcc admin or manually recover. Nudge updated_at so we don't
+        // re-alert on every 5-minute tick.
+        log(`  STUCK DELIVERED ${order.id.slice(0, 8)} — vcc has card, callback lost`);
+        const { event: bizEvent } = require('./lib/logger');
+        bizEvent('order.stuck_delivered', {
+          order_id: order.id,
+          vcc_job_id: order.vcc_job_id,
+          age_minutes: Math.round((Date.now() - Date.parse(order.updated_at)) / 60000),
+        });
+        db.prepare(`UPDATE orders SET updated_at = ? WHERE id = ?`).run(now, order.id);
       } else if (vccJob.status === 'failed') {
         const { publicMessage } = require('./lib/sanitize-error');
         db.prepare(
@@ -355,7 +342,11 @@ async function recoverStuckOrders() {
           UPDATE orders SET status = 'failed', error = ?, updated_at = ? WHERE id = ?
         `,
         ).run(publicMessage(vccJob.error || 'vcc_failed'), now, order.id);
-        log(`  recovered ${order.id.slice(0, 8)} → failed via VCC poll`);
+        // F10: match the callback path — every terminal failure queues a refund
+        scheduleRefund(order.id).catch((err) =>
+          log(`  ${order.id.slice(0, 8)} refund schedule failed: ${err.message}`),
+        );
+        log(`  recovered ${order.id.slice(0, 8)} → failed via VCC poll; refund queued`);
       }
       // If still in-progress (awaiting_payment, queued, running) — leave it alone
     } catch (err) {

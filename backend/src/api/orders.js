@@ -354,12 +354,18 @@ router.post('/', orderCreateLimiter, async (req, res) => {
 
   db.prepare(
     `
-    INSERT INTO orders (id, status, amount_usdc, api_key_id, webhook_url, metadata, vcc_payment_json, request_id)
-    VALUES (@id, 'pending_payment', @amount_usdc, @api_key_id, @webhook_url, @metadata, @vcc_payment_json, @request_id)
+    INSERT INTO orders (id, status, amount_usdc, expected_xlm_amount, api_key_id,
+                        webhook_url, metadata, vcc_payment_json, request_id)
+    VALUES (@id, 'pending_payment', @amount_usdc, @expected_xlm_amount, @api_key_id,
+            @webhook_url, @metadata, @vcc_payment_json, @request_id)
   `,
   ).run({
     id,
     amount_usdc: String(amount),
+    // xlmAmount is the XLM quote embedded in the Soroban payment instructions.
+    // Null if the price oracle was down at create time, in which case we
+    // only accept pay_usdc events for this order — the xlm branch is closed.
+    expected_xlm_amount: xlmAmount || null,
     api_key_id: req.apiKey.id,
     webhook_url: webhook_url || null,
     metadata: metadataStr,

@@ -16,13 +16,13 @@ describe('recoverStuckOrders', () => {
     vccClient.getVccJobStatus = async () => ({ status: 'queued' });
   });
 
-  it('polls VCC and marks order failed when VCC reports failed', async () => {
+  it('polls VCC, fails the order AND queues a refund (audit F10)', async () => {
     const { id: keyId } = await createTestKey({ label: 'recover-key' });
     const orderId = uuidv4();
     db.prepare(
       `
-      INSERT INTO orders (id, status, amount_usdc, payment_asset, api_key_id, vcc_job_id, updated_at, created_at)
-      VALUES (?, 'ordering', '10.00', 'usdc', ?, 'vcc-job-abc', datetime('now', '-15 minutes'), datetime('now', '-15 minutes'))
+      INSERT INTO orders (id, status, amount_usdc, payment_asset, sender_address, api_key_id, vcc_job_id, updated_at, created_at)
+      VALUES (?, 'ordering', '10.00', 'usdc', 'GTESTSENDER', ?, 'vcc-job-abc', datetime('now', '-15 minutes'), datetime('now', '-15 minutes'))
     `,
     ).run(orderId, keyId);
 
@@ -30,7 +30,9 @@ describe('recoverStuckOrders', () => {
     await recoverStuckOrders();
 
     const order = db.prepare(`SELECT * FROM orders WHERE id = ?`).get(orderId);
-    assert.equal(order.status, 'failed');
+    // F10: poll-recovery failure must queue a refund the same way the
+    // callback path does. scheduleRefund flips failed → refund_pending.
+    assert.equal(order.status, 'refund_pending');
     // Raw 'ctx_unavailable' is sanitised to a public-facing message
     // before being stored in orders.error.
     const { publicMessage } = require('../../src/lib/sanitize-error');

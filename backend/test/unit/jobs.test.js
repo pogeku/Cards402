@@ -102,12 +102,22 @@ describe('recoverStuckOrders', () => {
     vccClient.getVccJobStatus = async () => ({ status: 'queued' });
   });
 
-  it('updates order to failed when VCC reports failed', async () => {
+  it('marks failed AND queues a refund when VCC reports failed (audit F10)', async () => {
+    // Seed a sender_address so scheduleRefund can actually progress past
+    // the claim step — without it the refund logic bails out early
+    // ('no sender — left as refund_pending for manual action') which is
+    // still the desired terminal state here, but we want to exercise
+    // the full path.
     const id = seedOrderAt({ status: 'pending_payment', minutesAgo: 15, vcc_job_id: 'vcc-job-1' });
+    db.prepare(`UPDATE orders SET sender_address = ? WHERE id = ?`).run('GTESTSENDER', id);
     vccClient.getVccJobStatus = async () => ({ status: 'failed', error: 'ctx_unavailable' });
     await recoverStuckOrders();
     const order = db.prepare(`SELECT status, error FROM orders WHERE id = ?`).get(id);
-    assert.equal(order.status, 'failed');
+    // F10: the poll-recovery path must queue a refund on terminal failure,
+    // same as the callback-driven path. scheduleRefund flips failed →
+    // refund_pending atomically; seeing 'refund_pending' here proves the
+    // refund was queued and we're not leaking user funds to the void.
+    assert.equal(order.status, 'refund_pending');
     // The error string is sanitised before hitting orders.error — raw
     // internal codes ('ctx_unavailable') map to the generic public
     // message so agents don't see implementation details.
@@ -115,19 +125,24 @@ describe('recoverStuckOrders', () => {
     assert.equal(order.error, publicMessage('ctx_unavailable'));
   });
 
-  it('updates order to delivered when VCC reports delivered with card', async () => {
+  it('leaves stuck-delivered order in ordering without hydrating card (audit F8)', async () => {
+    // vcc strips card_number/cvv/expiry from GET /api/jobs/:id on purpose —
+    // the job-status endpoint is not a card-retrieval channel. The old
+    // behaviour tried to pull card_number out of vccJob and write it to
+    // orders.card_number; that code path was dead against the real vcc
+    // API. New behaviour: detect stuck-delivered, leave the row in
+    // 'ordering', and emit a log so ops can force-replay the callback.
     const id = seedOrderAt({ status: 'ordering', minutesAgo: 15, vcc_job_id: 'vcc-job-2' });
     vccClient.getVccJobStatus = async () => ({
       status: 'delivered',
-      card_number: '4111111111111111',
-      card_cvv: '123',
-      card_expiry: '12/28',
-      card_brand: 'Visa',
+      // vcc intentionally does NOT return card data here; represent reality
     });
     await recoverStuckOrders();
     const order = db.prepare(`SELECT status, card_number FROM orders WHERE id = ?`).get(id);
-    assert.equal(order.status, 'delivered');
-    assert.equal(order.card_number, '4111111111111111');
+    // Status stays 'ordering' — we don't flip to delivered until the
+    // callback actually arrives with the card material.
+    assert.equal(order.status, 'ordering');
+    assert.equal(order.card_number, null);
   });
 
   it('does NOT recover orders without vcc_job_id', async () => {
@@ -184,10 +199,21 @@ describe('recoverStuckOrders', () => {
   it('recovers multiple stuck orders in one pass', async () => {
     const id1 = seedOrderAt({ status: 'pending_payment', minutesAgo: 15, vcc_job_id: 'vcc-job-7' });
     const id2 = seedOrderAt({ status: 'ordering', minutesAgo: 20, vcc_job_id: 'vcc-job-8' });
+    // Give both rows a sender so the refund path can flip them through
+    // scheduleRefund into refund_pending.
+    db.prepare(`UPDATE orders SET sender_address = 'GTEST' WHERE id IN (?, ?)`).run(id1, id2);
     vccClient.getVccJobStatus = async () => ({ status: 'failed', error: 'test_err' });
     await recoverStuckOrders();
-    assert.equal(db.prepare(`SELECT status FROM orders WHERE id = ?`).get(id1).status, 'failed');
-    assert.equal(db.prepare(`SELECT status FROM orders WHERE id = ?`).get(id2).status, 'failed');
+    // Both should land in refund_pending — F10: every poll-recovery failure
+    // must queue a refund.
+    assert.equal(
+      db.prepare(`SELECT status FROM orders WHERE id = ?`).get(id1).status,
+      'refund_pending',
+    );
+    assert.equal(
+      db.prepare(`SELECT status FROM orders WHERE id = ?`).get(id2).status,
+      'refund_pending',
+    );
   });
 });
 

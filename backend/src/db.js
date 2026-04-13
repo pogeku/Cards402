@@ -618,6 +618,24 @@ applyMigration(19, () => {
   }
 });
 
+// Migration 20: expected on-chain payment amounts per order.
+//
+// orders.amount_usdc is the USDC face value (what we charge).
+// expected_xlm_amount is the XLM we quoted to the agent at order-creation
+// time for the pay_xlm path. handlePayment compares the on-chain event
+// amount against these values and rejects mismatches to unmatched_payments
+// so the treasury can't be drained by a tiny pay_xlm/pay_usdc event
+// against a real pending_payment order (adversarial audit finding F0).
+applyMigration(20, () => {
+  for (const sql of [`ALTER TABLE orders ADD COLUMN expected_xlm_amount TEXT`]) {
+    try {
+      db.prepare(sql).run();
+    } catch (_) {
+      /* column already exists */
+    }
+  }
+});
+
 // Audit A-5: post-migration sanity check. If a newer release has rolled
 // through here and bumped the on-disk schema beyond what this binary
 // knows about, fail hard instead of running against a schema we don't
@@ -628,7 +646,7 @@ applyMigration(19, () => {
 //
 // EXPECTED_SCHEMA_VERSION must match the last `applyMigration(N)` call
 // above. Bump it in lock-step with any new migration.
-const EXPECTED_SCHEMA_VERSION = 19;
+const EXPECTED_SCHEMA_VERSION = 20;
 const actualVersion = getSchemaVersion();
 if (actualVersion > EXPECTED_SCHEMA_VERSION) {
   console.error(

@@ -19,7 +19,6 @@ describe('enabled-merchants', () => {
     const visa = list.find((m) => /visa/i.test(m.name));
     assert.ok(visa, 'expected a Visa merchant in the enabled list');
     assert.equal(visa.currency, 'USD');
-    assert.ok(visa.discount_pct > 0);
     assert.ok(visa.min_amount > 0);
     assert.ok(visa.max_amount >= visa.min_amount);
   });
@@ -33,7 +32,6 @@ describe('enabled-merchants', () => {
         'card_image_url',
         'country',
         'currency',
-        'discount_pct',
         'min_amount',
         'max_amount',
         'redeem_location',

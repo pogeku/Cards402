@@ -383,6 +383,102 @@ describe('e2e cards402 ↔ vcc: duplicate payment event', () => {
     const invoiceCallsAfter = fakeVccCalls.filter((c) => c.url === '/api/jobs/invoice').length;
 
     assert.equal(invoiceCallsAfter, invoiceCallsBefore, 'duplicate event should not re-call vcc');
+
+    // F7: the duplicate event must leave an unmatched_payments row so ops
+    // can refund the double-sent funds. Before F7, duplicates vanished
+    // silently and the funds sat in the contract with no durable record.
+    const unmatched = db
+      .prepare(`SELECT * FROM unmatched_payments WHERE claimed_order_id = ?`)
+      .all(orderId);
+    assert.equal(unmatched.length, 1, 'duplicate event should be recorded in unmatched_payments');
+    assert.match(unmatched[0].reason, /order_status_ordering|duplicate_payment/);
+  });
+});
+
+// ── F0 / F7: payment amount validation + unmatched_payments routing ──────────
+
+describe('e2e cards402 ↔ vcc: payment amount validation (audit F0/F7)', () => {
+  it('rejects USDC underpayment and routes it to unmatched_payments', async () => {
+    const { key } = await createTestKey({ label: 'e2e-underpay' });
+    const orderId = (await createOrderViaApi(key, '100.00')).body.order_id;
+
+    // Exploit: pay $0.01 against a $100 order. Before F0 this would have
+    // triggered fulfillment against the $100 face value, draining $99.99
+    // of treasury per attack order.
+    await simulateSorobanPayment(orderId, { amountUsdc: '0.01' });
+
+    // Order must NOT have moved to ordering. No vcc invoice call should
+    // have fired, and the row must still be in pending_payment.
+    const order = db.prepare(`SELECT * FROM orders WHERE id = ?`).get(orderId);
+    assert.equal(order.status, 'pending_payment');
+    const invoiceCalls = fakeVccCalls.filter((c) => c.url === '/api/jobs/invoice').length;
+    assert.equal(invoiceCalls, 0, 'underpaid event must not trigger vcc invoice creation');
+
+    // And the attack payment must be durably recorded so ops can refund.
+    const unmatched = db
+      .prepare(`SELECT * FROM unmatched_payments WHERE claimed_order_id = ?`)
+      .get(orderId);
+    assert.ok(unmatched, 'underpaid event must land in unmatched_payments');
+    assert.equal(unmatched.reason, 'underpaid_usdc');
+    assert.equal(unmatched.amount_usdc, '0.01');
+  });
+
+  it('accepts USDC overpayment and records the excess', async () => {
+    const { key } = await createTestKey({ label: 'e2e-overpay' });
+    const orderId = (await createOrderViaApi(key, '10.00')).body.order_id;
+
+    // Agent pays $10.50 against a $10 order — maybe a rounding guard on
+    // the agent side. Accept the payment, fulfill the order, record the
+    // $0.50 excess so refund bookkeeping stays honest.
+    await simulateSorobanPayment(orderId, { amountUsdc: '10.50' });
+
+    const order = db.prepare(`SELECT * FROM orders WHERE id = ?`).get(orderId);
+    assert.equal(order.status, 'ordering');
+    // excess_usdc is a decimal string at stroop precision
+    assert.equal(parseFloat(order.excess_usdc), 0.5);
+  });
+
+  it('rejects pay_xlm when the order never quoted XLM', async () => {
+    const { key } = await createTestKey({ label: 'e2e-xlm-not-quoted' });
+    const orderId = (await createOrderViaApi(key, '10.00')).body.order_id;
+    // Force expected_xlm_amount=null — simulating an order created while
+    // the XLM price oracle was down, so the agent was only ever offered
+    // the USDC branch.
+    db.prepare(`UPDATE orders SET expected_xlm_amount = NULL WHERE id = ?`).run(orderId);
+
+    await handlePayment({
+      txid: 'fake-xlm-unknown-quote',
+      paymentAsset: 'xlm_soroban',
+      amountUsdc: null,
+      amountXlm: '80.0000000',
+      senderAddress: 'GATTACKER000000000000000000000000000000000000000000000000',
+      orderId,
+    });
+
+    const order = db.prepare(`SELECT * FROM orders WHERE id = ?`).get(orderId);
+    assert.equal(order.status, 'pending_payment');
+    const unmatched = db
+      .prepare(`SELECT * FROM unmatched_payments WHERE claimed_order_id = ?`)
+      .get(orderId);
+    assert.ok(unmatched);
+    assert.equal(unmatched.reason, 'xlm_not_quoted');
+  });
+
+  it('routes payments for unknown order_ids to unmatched_payments', async () => {
+    // No createTestKey, no order at all. The attacker invents an order_id
+    // and tries to get cards402 to treat it as fulfillable.
+    const fakeOrderId = '00000000-0000-0000-0000-000000000000';
+    await simulateSorobanPayment(fakeOrderId, { amountUsdc: '100.00' });
+
+    // No order should have been created, and the payment must be recorded.
+    const order = db.prepare(`SELECT * FROM orders WHERE id = ?`).get(fakeOrderId);
+    assert.equal(order, undefined);
+    const unmatched = db
+      .prepare(`SELECT * FROM unmatched_payments WHERE claimed_order_id = ?`)
+      .get(fakeOrderId);
+    assert.ok(unmatched);
+    assert.equal(unmatched.reason, 'unknown_order');
+    assert.equal(unmatched.amount_usdc, '100.00');
   });
 });
 
