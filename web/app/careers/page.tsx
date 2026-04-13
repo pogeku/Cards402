@@ -184,7 +184,7 @@ export default function CareersPage() {
         eyebrow="Careers"
         title="Come build payment rails for AI"
         accent="agents"
-        intro="Cards402 is small, remote-first, and focused. We publish every salary, we hire from everywhere, and we don\u2019t believe anyone should choose between doing great work and taking care of themselves. Below is what we offer and what we\u2019re currently hiring for."
+        intro="Cards402 is small, remote-first, and focused. We publish every salary, we hire from everywhere, and we don’t believe anyone should choose between doing great work and taking care of themselves. Below is what we offer and what we’re currently hiring for."
       />
 
       {/* Benefits grid */}
