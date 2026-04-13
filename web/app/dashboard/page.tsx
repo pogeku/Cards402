@@ -103,6 +103,416 @@ function AgentStatePill({ apiKey }: { apiKey: ApiKey }) {
   );
 }
 
+// ── Agent detail view ────────────────────────────────────────────────────────
+// Rendered when the user clicks an agent row. Self-contained: title +
+// state pill + wallet (address + live balance + copy) + recent orders +
+// action menu. The action menu (Edit / Disable / Suspend / Delete)
+// lives here instead of on the main row to keep the list compact.
+
+function AgentDetailView({
+  apiKey,
+  balance,
+  orders,
+  onBack,
+  onEdit,
+  onToggle,
+  onSuspend,
+  onDelete,
+}: {
+  apiKey: ApiKey;
+  balance: { xlm: string; usdc: string } | null;
+  orders: Order[];
+  onBack: () => void;
+  onEdit: () => void;
+  onToggle: () => void;
+  onSuspend: () => void;
+  onDelete: () => void;
+}) {
+  const k = apiKey;
+  const [addressCopied, setAddressCopied] = useState(false);
+  const spent = parseFloat(k.total_spent_usdc || '0');
+  const limit = k.spend_limit_usdc ? parseFloat(k.spend_limit_usdc) : null;
+
+  function copyAddress() {
+    if (!k.wallet_public_key) return;
+    navigator.clipboard.writeText(k.wallet_public_key);
+    setAddressCopied(true);
+    setTimeout(() => setAddressCopied(false), 1500);
+  }
+
+  return (
+    <div>
+      <button
+        onClick={onBack}
+        style={{
+          background: 'transparent',
+          border: 'none',
+          color: 'var(--muted)',
+          fontSize: '0.8125rem',
+          fontFamily: 'var(--font-mono)',
+          cursor: 'pointer',
+          padding: 0,
+          marginBottom: '1rem',
+        }}
+      >
+        ← Back to agents
+      </button>
+
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.875rem',
+          flexWrap: 'wrap',
+          marginBottom: '0.5rem',
+        }}
+      >
+        <h2
+          style={{
+            fontSize: '1.375rem',
+            fontWeight: 700,
+            letterSpacing: '-0.02em',
+            margin: 0,
+          }}
+        >
+          {k.label || 'Unlabeled agent'}
+        </h2>
+        <AgentStatePill apiKey={k} />
+        {k.suspended && (
+          <span
+            style={{
+              fontSize: '0.7rem',
+              fontFamily: 'var(--font-mono)',
+              color: '#f87171',
+              fontWeight: 600,
+            }}
+          >
+            suspended
+          </span>
+        )}
+        {!k.enabled && (
+          <span
+            style={{
+              fontSize: '0.7rem',
+              fontFamily: 'var(--font-mono)',
+              color: 'var(--muted)',
+              fontWeight: 600,
+            }}
+          >
+            disabled
+          </span>
+        )}
+        {k.mode === 'sandbox' && (
+          <span
+            style={{
+              fontSize: '0.65rem',
+              fontFamily: 'var(--font-mono)',
+              color: '#fb923c',
+              background: 'rgba(251,146,60,0.1)',
+              border: '1px solid rgba(251,146,60,0.3)',
+              borderRadius: 4,
+              padding: '0.1rem 0.4rem',
+              fontWeight: 600,
+            }}
+          >
+            sandbox
+          </span>
+        )}
+      </div>
+      <div
+        style={{
+          fontFamily: 'var(--font-mono)',
+          fontSize: '0.7rem',
+          color: 'var(--muted)',
+          marginBottom: '1.75rem',
+        }}
+      >
+        {k.id}
+      </div>
+
+      {/* Wallet card */}
+      <div
+        style={{
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
+          borderRadius: 10,
+          padding: '1.25rem 1.5rem',
+          marginBottom: '1.5rem',
+        }}
+      >
+        <div
+          style={{
+            fontSize: '0.65rem',
+            fontFamily: 'var(--font-mono)',
+            color: 'var(--muted)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.08em',
+            marginBottom: '0.625rem',
+          }}
+        >
+          Stellar wallet
+        </div>
+        {k.wallet_public_key ? (
+          <>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.625rem',
+                marginBottom: '0.875rem',
+              }}
+            >
+              <code
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '0.8125rem',
+                  wordBreak: 'break-all',
+                  flex: 1,
+                }}
+              >
+                {k.wallet_public_key}
+              </code>
+              <button
+                onClick={copyAddress}
+                style={{
+                  background: addressCopied ? 'var(--green)' : 'transparent',
+                  color: addressCopied ? '#000' : 'var(--fg)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  padding: '0.3125rem 0.75rem',
+                  fontSize: '0.7rem',
+                  fontFamily: 'var(--font-mono)',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                  flexShrink: 0,
+                }}
+              >
+                {addressCopied ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+            <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap' }}>
+              <div>
+                <div
+                  style={{
+                    fontSize: '0.65rem',
+                    fontFamily: 'var(--font-mono)',
+                    color: 'var(--muted)',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.06em',
+                  }}
+                >
+                  USDC
+                </div>
+                <div
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: '1.25rem',
+                    fontWeight: 700,
+                    color: 'var(--green)',
+                  }}
+                >
+                  {balance ? balance.usdc : '—'}
+                </div>
+              </div>
+              <div>
+                <div
+                  style={{
+                    fontSize: '0.65rem',
+                    fontFamily: 'var(--font-mono)',
+                    color: 'var(--muted)',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.06em',
+                  }}
+                >
+                  XLM
+                </div>
+                <div
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: '1.25rem',
+                    fontWeight: 700,
+                  }}
+                >
+                  {balance ? balance.xlm : '—'}
+                </div>
+              </div>
+              <div style={{ flex: 1, minWidth: 200, color: 'var(--muted)', fontSize: '0.75rem' }}>
+                Send XLM or USDC to the address above to fund this agent. Polling Horizon every 30s.
+              </div>
+            </div>
+          </>
+        ) : (
+          <div style={{ color: 'var(--muted)', fontSize: '0.8125rem' }}>
+            This agent hasn&apos;t reported a wallet yet. Once it runs{' '}
+            <code style={{ fontFamily: 'var(--font-mono)' }}>cards402 onboard</code>, the address
+            and balance will appear here.
+          </div>
+        )}
+      </div>
+
+      {/* Spend card */}
+      <div
+        style={{
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
+          borderRadius: 10,
+          padding: '1.25rem 1.5rem',
+          marginBottom: '1.5rem',
+        }}
+      >
+        <div
+          style={{
+            fontSize: '0.65rem',
+            fontFamily: 'var(--font-mono)',
+            color: 'var(--muted)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.08em',
+            marginBottom: '0.5rem',
+          }}
+        >
+          Spend
+        </div>
+        <div
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: '1.5rem',
+            fontWeight: 700,
+            marginBottom: limit ? '0.5rem' : 0,
+          }}
+        >
+          ${spent.toFixed(2)}
+          {limit ? (
+            <span style={{ color: 'var(--muted)', fontSize: '0.875rem' }}>
+              {' '}
+              / ${limit.toFixed(2)} cap
+            </span>
+          ) : (
+            <span style={{ color: 'var(--muted)', fontSize: '0.875rem' }}> · no cap</span>
+          )}
+        </div>
+        {k.policy_require_approval_above_usdc && (
+          <div style={{ fontSize: '0.75rem', color: '#facc15', marginTop: '0.5rem' }}>
+            Requires owner approval above ${k.policy_require_approval_above_usdc}
+          </div>
+        )}
+        {k.last_used_at && (
+          <div style={{ fontSize: '0.75rem', color: 'var(--muted)', marginTop: '0.375rem' }}>
+            Last used {fmt(k.last_used_at)}
+          </div>
+        )}
+      </div>
+
+      {/* Recent orders */}
+      <div
+        style={{
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
+          borderRadius: 10,
+          padding: '1.25rem 1.5rem',
+          marginBottom: '1.5rem',
+        }}
+      >
+        <div
+          style={{
+            fontSize: '0.65rem',
+            fontFamily: 'var(--font-mono)',
+            color: 'var(--muted)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.08em',
+            marginBottom: '0.75rem',
+          }}
+        >
+          Recent orders ({orders.length})
+        </div>
+        {orders.length === 0 ? (
+          <div style={{ color: 'var(--muted)', fontSize: '0.8125rem' }}>
+            No orders yet. They&apos;ll appear here once the agent makes its first purchase.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {orders.slice(0, 10).map((o) => (
+              <div
+                key={o.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.875rem',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '0.7rem',
+                }}
+              >
+                <span style={{ color: 'var(--muted)', minWidth: 90 }}>{o.id.slice(0, 8)}</span>
+                <span style={{ flex: 1 }}>${o.amount_usdc}</span>
+                <StatusBadge status={o.status} />
+                <span style={{ color: 'var(--muted)' }}>{fmt(o.created_at)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Action menu */}
+      <div
+        style={{
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
+          borderRadius: 10,
+          padding: '1.25rem 1.5rem',
+        }}
+      >
+        <div
+          style={{
+            fontSize: '0.65rem',
+            fontFamily: 'var(--font-mono)',
+            color: 'var(--muted)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.08em',
+            marginBottom: '0.75rem',
+          }}
+        >
+          Actions
+        </div>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <button
+            style={{ ...btnStyle('ghost'), fontSize: '0.8125rem', padding: '0.45rem 0.875rem' }}
+            onClick={onEdit}
+          >
+            Edit policy
+          </button>
+          <button
+            style={{ ...btnStyle('ghost'), fontSize: '0.8125rem', padding: '0.45rem 0.875rem' }}
+            onClick={onToggle}
+          >
+            {k.enabled ? 'Disable' : 'Enable'}
+          </button>
+          <button
+            style={{
+              ...btnStyle(k.suspended ? 'ghost' : 'danger'),
+              fontSize: '0.8125rem',
+              padding: '0.45rem 0.875rem',
+            }}
+            onClick={onSuspend}
+          >
+            {k.suspended ? 'Unsuspend' : 'Suspend'}
+          </button>
+          <button
+            style={{
+              ...btnStyle('ghost'),
+              fontSize: '0.8125rem',
+              padding: '0.45rem 0.875rem',
+              color: '#f87171',
+              borderColor: 'rgba(248,113,113,0.3)',
+            }}
+            onClick={onDelete}
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 interface Order {
   id: string;
   status: string;
@@ -113,6 +523,7 @@ interface Order {
   updated_at: string;
   stellar_txid: string | null;
   card_brand: string | null;
+  api_key_id: string;
   api_key_label: string | null;
 }
 
@@ -150,6 +561,37 @@ interface DashboardInfo {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+const USDC_ISSUER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
+
+async function fetchHorizonBalance(
+  publicKey: string,
+): Promise<{ xlm: string; usdc: string } | null> {
+  try {
+    const res = await fetch(`https://horizon.stellar.org/accounts/${publicKey}`);
+    if (!res.ok) return { xlm: '0', usdc: '0' }; // unactivated
+    const data = (await res.json()) as {
+      balances: Array<{
+        asset_type: string;
+        asset_code?: string;
+        asset_issuer?: string;
+        balance: string;
+      }>;
+    };
+    const balances = data.balances ?? [];
+    const xlm = balances.find((b) => b.asset_type === 'native')?.balance ?? '0';
+    const usdc =
+      balances.find(
+        (b) =>
+          b.asset_type === 'credit_alphanum4' &&
+          b.asset_code === 'USDC' &&
+          b.asset_issuer === USDC_ISSUER,
+      )?.balance ?? '0';
+    return { xlm: parseFloat(xlm).toFixed(4), usdc: parseFloat(usdc).toFixed(2) };
+  } catch {
+    return null;
+  }
+}
 
 const STATUS_COLORS: Record<string, { color: string; bg: string; border: string }> = {
   delivered: { color: 'var(--green)', bg: 'var(--green-muted)', border: 'var(--green-border)' },
@@ -1111,6 +1553,37 @@ export default function DashboardPage() {
   const [editKey, setEditKey] = useState<ApiKey | null>(null);
   const [newKeyResult, setNewKeyResult] = useState<NewKeyData | null>(null);
 
+  // Per-agent live Stellar balances, fetched directly from Horizon
+  // for any key whose agent has reported a wallet_public_key. Polled
+  // every 30s + on every keys refetch — fast enough that funding
+  // shows up in the row promptly without hammering Horizon.
+  const [walletBalances, setWalletBalances] = useState<
+    Record<string, { xlm: string; usdc: string }>
+  >({});
+
+  // Per-agent detail view. Drives via a ?agent=<id> query string so
+  // a permalink works, but updates URL via history.pushState to
+  // avoid the Suspense gymnastics that useSearchParams forces.
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    function syncFromUrl() {
+      const params = new URLSearchParams(window.location.search);
+      setSelectedAgentId(params.get('agent'));
+    }
+    syncFromUrl();
+    window.addEventListener('popstate', syncFromUrl);
+    return () => window.removeEventListener('popstate', syncFromUrl);
+  }, []);
+  function selectAgent(id: string | null) {
+    setSelectedAgentId(id);
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    if (id) url.searchParams.set('agent', id);
+    else url.searchParams.delete('agent');
+    window.history.pushState({}, '', url.toString());
+  }
+
   const fetchAll = useCallback(async () => {
     if (!authed) return;
     setDataErr('');
@@ -1157,6 +1630,34 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchAll();
   }, [fetchAll]);
+
+  // Horizon balance polling for every key that has reported a wallet
+  // address. Refreshes immediately when a new key appears and every
+  // 30s after that. Runs only while authed to avoid hammering Horizon
+  // for nothing when the user is logged out or on the login wall.
+  useEffect(() => {
+    if (!authed) return;
+    const walletKeys = keys.filter((k) => k.wallet_public_key);
+    if (walletKeys.length === 0) return;
+
+    let cancelled = false;
+    async function pollAll() {
+      for (const k of walletKeys) {
+        const bal = await fetchHorizonBalance(k.wallet_public_key!);
+        if (cancelled || !bal) continue;
+        setWalletBalances((prev) => ({ ...prev, [k.id]: bal }));
+      }
+    }
+    pollAll();
+    const id = setInterval(pollAll, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+    // Re-run when the set of walletAddress-bearing keys changes (not
+    // on every render). Serialise to a stable key.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authed, keys.map((k) => `${k.id}:${k.wallet_public_key ?? ''}`).join('|')]);
 
   // Live SSE feed from /dashboard/stream. Pushes an event any time one
   // of the user's agents reports a state transition, one of their
@@ -1557,7 +2058,50 @@ export default function DashboardPage() {
       </div>
 
       {/* ── API Keys tab ─────────────────────────────────────────────────── */}
-      {tab === 'keys' && (
+      {tab === 'keys' && selectedAgentId ? (
+        (() => {
+          const k = keys.find((x) => x.id === selectedAgentId);
+          if (!k) {
+            return (
+              <div
+                style={{
+                  textAlign: 'center',
+                  padding: '4rem 2rem',
+                  color: 'var(--muted)',
+                  fontSize: '0.875rem',
+                }}
+              >
+                Agent not found.{' '}
+                <button
+                  style={{
+                    ...btnStyle('ghost'),
+                    fontSize: '0.8125rem',
+                    marginLeft: '0.5rem',
+                  }}
+                  onClick={() => selectAgent(null)}
+                >
+                  Back to agents
+                </button>
+              </div>
+            );
+          }
+          return (
+            <AgentDetailView
+              apiKey={k}
+              balance={walletBalances[k.id] ?? null}
+              orders={orders.filter((o) => o.api_key_id === k.id)}
+              onBack={() => selectAgent(null)}
+              onEdit={() => setEditKey(k)}
+              onToggle={() => toggleKey(k)}
+              onSuspend={() => suspendKey(k)}
+              onDelete={() => {
+                deleteKey(k);
+                selectAgent(null);
+              }}
+            />
+          );
+        })()
+      ) : tab === 'keys' ? (
         <div>
           <div
             style={{
@@ -1568,7 +2112,7 @@ export default function DashboardPage() {
             }}
           >
             <p style={{ color: 'var(--muted)', fontSize: '0.875rem', margin: 0 }}>
-              Each API key is one agent. Agents use their key to request virtual cards.
+              Each API key is one agent. Click an agent to see its wallet, balance, and actions.
             </p>
             <button style={btnStyle('primary')} onClick={() => setShowCreate(true)}>
               + New agent key
@@ -1593,53 +2137,77 @@ export default function DashboardPage() {
                 const limit = k.spend_limit_usdc ? parseFloat(k.spend_limit_usdc) : null;
                 const pct = limit ? Math.min(100, (spent / limit) * 100) : 0;
                 const isActive = k.enabled && !k.suspended;
-                const statusColor = k.suspended
-                  ? '#f87171'
-                  : k.enabled
-                    ? 'var(--green)'
-                    : 'var(--muted)';
+                const balance = walletBalances[k.id];
                 return (
-                  <div
+                  <button
                     key={k.id}
+                    type="button"
+                    onClick={() => selectAgent(k.id)}
                     style={{
                       background: 'var(--surface)',
                       border: '1px solid var(--border)',
                       borderRadius: 10,
-                      padding: '1.25rem 1.5rem',
+                      padding: '1rem 1.25rem',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      color: 'var(--fg)',
+                      width: '100%',
+                      fontFamily: 'inherit',
+                      transition: 'border-color 0.15s, background 0.15s',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.borderColor = 'var(--green-border)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.borderColor = 'var(--border)';
                     }}
                   >
                     <div
                       style={{
                         display: 'flex',
-                        alignItems: 'flex-start',
-                        gap: '1rem',
+                        alignItems: 'center',
+                        gap: '1.25rem',
                         flexWrap: 'wrap',
                       }}
                     >
-                      <div style={{ flex: 1, minWidth: 200 }}>
+                      <div style={{ flex: '1 1 240px', minWidth: 0 }}>
                         <div
                           style={{
                             display: 'flex',
                             alignItems: 'center',
                             gap: '0.625rem',
-                            marginBottom: '0.25rem',
+                            marginBottom: '0.375rem',
                             flexWrap: 'wrap',
                           }}
                         >
                           <span style={{ fontWeight: 700, fontSize: '0.9375rem' }}>
-                            {k.label || 'Unlabeled key'}
+                            {k.label || 'Unlabeled agent'}
                           </span>
                           <AgentStatePill apiKey={k} />
-                          <span
-                            style={{
-                              fontSize: '0.7rem',
-                              fontFamily: 'var(--font-mono)',
-                              color: statusColor,
-                              fontWeight: 600,
-                            }}
-                          >
-                            {k.suspended ? 'suspended' : k.enabled ? 'active' : 'disabled'}
-                          </span>
+                          {k.suspended && (
+                            <span
+                              style={{
+                                fontSize: '0.65rem',
+                                fontFamily: 'var(--font-mono)',
+                                color: '#f87171',
+                                fontWeight: 600,
+                              }}
+                            >
+                              suspended
+                            </span>
+                          )}
+                          {!k.enabled && (
+                            <span
+                              style={{
+                                fontSize: '0.65rem',
+                                fontFamily: 'var(--font-mono)',
+                                color: 'var(--muted)',
+                                fontWeight: 600,
+                              }}
+                            >
+                              disabled
+                            </span>
+                          )}
                           {k.mode === 'sandbox' && (
                             <span
                               style={{
@@ -1656,84 +2224,119 @@ export default function DashboardPage() {
                               sandbox
                             </span>
                           )}
-                          {k.expires_at && new Date(k.expires_at) <= new Date() && (
-                            <span
-                              style={{
-                                fontSize: '0.65rem',
-                                fontFamily: 'var(--font-mono)',
-                                color: '#f87171',
-                                fontWeight: 600,
-                              }}
-                            >
-                              expired
-                            </span>
-                          )}
-                          {k.expires_at && new Date(k.expires_at) > new Date() && (
-                            <span
-                              style={{
-                                fontSize: '0.65rem',
-                                fontFamily: 'var(--font-mono)',
-                                color: 'var(--muted)',
-                              }}
-                            >
-                              expires {new Date(k.expires_at).toLocaleDateString()}
-                            </span>
-                          )}
                         </div>
-                        <div
-                          style={{
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: '0.7rem',
-                            color: 'var(--muted)',
-                          }}
-                        >
-                          {k.id}
-                        </div>
-                        {k.last_used_at && (
+                        {k.wallet_public_key ? (
                           <div
                             style={{
-                              fontSize: '0.75rem',
+                              fontFamily: 'var(--font-mono)',
+                              fontSize: '0.7rem',
                               color: 'var(--muted)',
-                              marginTop: '0.25rem',
+                              wordBreak: 'break-all',
                             }}
                           >
-                            Last used {fmt(k.last_used_at)}
+                            {k.wallet_public_key.slice(0, 8)}…{k.wallet_public_key.slice(-6)}
                           </div>
-                        )}
-                        {k.policy_require_approval_above_usdc && (
+                        ) : (
                           <div
-                            style={{ fontSize: '0.75rem', color: '#facc15', marginTop: '0.25rem' }}
+                            style={{
+                              fontFamily: 'var(--font-mono)',
+                              fontSize: '0.7rem',
+                              color: 'var(--muted)',
+                            }}
                           >
-                            Requires approval above ${k.policy_require_approval_above_usdc}
+                            no wallet yet
                           </div>
                         )}
                       </div>
-                      <div style={{ minWidth: 160 }}>
+                      <div style={{ minWidth: 130, textAlign: 'right' }}>
                         <div
                           style={{
-                            fontSize: '0.7rem',
+                            fontSize: '0.65rem',
                             fontFamily: 'var(--font-mono)',
                             color: 'var(--muted)',
-                            marginBottom: '0.375rem',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.06em',
+                            marginBottom: '0.25rem',
                           }}
                         >
-                          SPENT
+                          Wallet balance
+                        </div>
+                        {balance ? (
+                          <div
+                            style={{
+                              fontFamily: 'var(--font-mono)',
+                              fontSize: '0.875rem',
+                              fontWeight: 700,
+                            }}
+                          >
+                            <span style={{ color: 'var(--green)' }}>{balance.usdc}</span>
+                            <span style={{ color: 'var(--muted)', fontSize: '0.7rem' }}> USDC</span>
+                            <div
+                              style={{
+                                fontSize: '0.7rem',
+                                color: 'var(--muted)',
+                                marginTop: '0.125rem',
+                              }}
+                            >
+                              {balance.xlm} XLM
+                            </div>
+                          </div>
+                        ) : k.wallet_public_key ? (
+                          <div
+                            style={{
+                              fontSize: '0.7rem',
+                              color: 'var(--muted)',
+                              fontFamily: 'var(--font-mono)',
+                              opacity: 0.6,
+                            }}
+                          >
+                            loading…
+                          </div>
+                        ) : (
+                          <div
+                            style={{
+                              fontSize: '0.7rem',
+                              color: 'var(--muted)',
+                              opacity: 0.4,
+                            }}
+                          >
+                            —
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ minWidth: 130, textAlign: 'right' }}>
+                        <div
+                          style={{
+                            fontSize: '0.65rem',
+                            fontFamily: 'var(--font-mono)',
+                            color: 'var(--muted)',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.06em',
+                            marginBottom: '0.25rem',
+                          }}
+                        >
+                          Spent
                         </div>
                         <div
                           style={{
                             fontFamily: 'var(--font-mono)',
-                            fontSize: '0.9375rem',
+                            fontSize: '0.875rem',
                             fontWeight: 700,
                             color: isActive ? 'var(--fg)' : 'var(--muted)',
                           }}
                         >
                           ${spent.toFixed(2)}
-                          {limit ? ` / $${limit.toFixed(2)}` : ' / ∞'}
+                          {limit ? (
+                            <span style={{ color: 'var(--muted)', fontSize: '0.7rem' }}>
+                              {' '}
+                              / ${limit.toFixed(2)}
+                            </span>
+                          ) : null}
                         </div>
                         {limit && (
                           <div
                             style={{
-                              height: 4,
+                              height: 3,
                               background: 'var(--border)',
                               borderRadius: 2,
                               overflow: 'hidden',
@@ -1755,63 +2358,23 @@ export default function DashboardPage() {
                       </div>
                       <div
                         style={{
-                          display: 'flex',
-                          gap: '0.5rem',
-                          flexWrap: 'wrap',
-                          alignItems: 'flex-start',
+                          color: 'var(--muted)',
+                          fontSize: '1.25rem',
+                          marginLeft: '0.25rem',
+                          flexShrink: 0,
                         }}
+                        aria-hidden
                       >
-                        <button
-                          style={{
-                            ...btnStyle('ghost'),
-                            fontSize: '0.8125rem',
-                            padding: '0.375rem 0.75rem',
-                          }}
-                          onClick={() => setEditKey(k)}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          style={{
-                            ...btnStyle('ghost'),
-                            fontSize: '0.8125rem',
-                            padding: '0.375rem 0.75rem',
-                          }}
-                          onClick={() => toggleKey(k)}
-                        >
-                          {k.enabled ? 'Disable' : 'Enable'}
-                        </button>
-                        <button
-                          style={{
-                            ...btnStyle(k.suspended ? 'ghost' : 'danger'),
-                            fontSize: '0.8125rem',
-                            padding: '0.375rem 0.75rem',
-                          }}
-                          onClick={() => suspendKey(k)}
-                        >
-                          {k.suspended ? 'Unsuspend' : 'Suspend'}
-                        </button>
-                        <button
-                          style={{
-                            ...btnStyle('ghost'),
-                            fontSize: '0.8125rem',
-                            padding: '0.375rem 0.75rem',
-                            color: '#f87171',
-                            borderColor: 'rgba(248,113,113,0.3)',
-                          }}
-                          onClick={() => deleteKey(k)}
-                        >
-                          Delete
-                        </button>
+                        →
                       </div>
                     </div>
-                  </div>
+                  </button>
                 );
               })}
             </div>
           )}
         </div>
-      )}
+      ) : null}
 
       {/* ── Orders tab ───────────────────────────────────────────────────── */}
       {tab === 'orders' && (

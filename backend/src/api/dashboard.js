@@ -168,7 +168,7 @@ router.get('/orders', (req, res) => {
   let query = `
     SELECT o.id, o.status, o.amount_usdc, o.payment_asset, o.stellar_txid,
            o.card_brand, o.error, o.created_at, o.updated_at,
-           k.label AS api_key_label
+           o.api_key_id, k.label AS api_key_label
     FROM orders o
     JOIN api_keys k ON o.api_key_id = k.id
     WHERE k.dashboard_id = ?
