@@ -15,6 +15,9 @@ import { saveCards402Config } from '../config';
 import { createOWSWallet, getOWSBalance } from '../ows';
 import { Cards402Client } from '../client';
 
+// Exported for tests — see src/commands/onboard.test.ts
+export { deriveDefaultWalletName as _deriveDefaultWalletName };
+
 interface OnboardArgs {
   claim?: string;
   walletName?: string;
@@ -52,10 +55,40 @@ the api key into any env var yourself.
 
 Options:
   --claim <code>         One-time claim code from the dashboard. Required.
-  --wallet-name <name>   Name for the OWS wallet. Default: cards402-agent
+  --wallet-name <name>   Name for the OWS wallet. If omitted, a unique
+                         name is derived from the agent label + the
+                         claim code so two separate agents on the same
+                         machine can't accidentally share a wallet.
   --api-base <url>       Override the default https://api.cards402.com/v1
   -h, --help             Show this message
 `);
+}
+
+/**
+ * Derive a unique, deterministic wallet name from the agent label and
+ * claim code. Two different claims always produce different names, so
+ * running `cards402 onboard` multiple times on the same machine gives
+ * each agent its own OWS wallet file instead of silently reusing the
+ * previous agent's private keys. The claim-code suffix is what makes
+ * it unique; the label is just there to make the vault file readable
+ * on disk.
+ */
+function deriveDefaultWalletName(claim: string, label: string | null): string {
+  // Strip the `c402_` prefix (if present), take the first 8 hex chars
+  // for a short-but-unique suffix. The claim code is cryptographically
+  // random — 8 hex chars = 32 bits, collision probability negligible
+  // at any realistic fleet size.
+  const raw = claim.replace(/^c402_/i, '');
+  const suffix = raw.slice(0, 8).toLowerCase();
+  // Slugify label: lowercase, replace non-alnum with -, collapse
+  // repeats, trim hyphens, cap length. Falls back to `agent` if empty.
+  const slug =
+    (label ?? 'agent')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 24) || 'agent';
+  return `cards402-${slug}-${suffix}`;
 }
 
 export async function onboardCommand(argv: string[]): Promise<number> {
@@ -71,7 +104,10 @@ export async function onboardCommand(argv: string[]): Promise<number> {
   }
 
   const apiBase = args.apiBase || process.env.CARDS402_BASE_URL || 'https://api.cards402.com/v1';
-  const walletName = args.walletName || 'cards402-agent';
+  // We can't derive the default wallet name until AFTER the claim is
+  // redeemed (we need the label). So we start with the explicit
+  // --wallet-name override, and if it wasn't passed we compute a
+  // unique default after step 1.
 
   // Step 1 — trade claim code for api key.
   process.stdout.write('→ Claiming agent credentials…\n');
@@ -105,6 +141,13 @@ export async function onboardCommand(argv: string[]): Promise<number> {
     process.stderr.write(`error: network failure during claim: ${String(err)}\n`);
     return 1;
   }
+
+  // Resolve wallet name: explicit override wins, otherwise derive from
+  // the agent label + the claim code so every onboarding run produces
+  // a distinct wallet. This closes the "second agent inherited the
+  // first agent's wallet" bug where both claims used the static
+  // default 'cards402-agent' name.
+  const walletName = args.walletName || deriveDefaultWalletName(args.claim, claimResponse.label);
 
   // Step 2 — persist config so the SDK finds it on next run.
   const { path: configPath } = saveCards402Config({
