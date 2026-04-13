@@ -167,11 +167,13 @@ async function reconcileOrderingFulfillment() {
       }
 
       log(`  ${shortId} → hard-fail (${reason}, attempt ${order.fulfillment_attempt})`);
+      // Sanitise before storing — agents read this column.
+      const { publicMessage } = require('./lib/sanitize-error');
       db.prepare(
         `
         UPDATE orders SET status = 'failed', error = ?, updated_at = ? WHERE id = ?
       `,
-      ).run(reason, new Date().toISOString(), order.id);
+      ).run(publicMessage(reason), new Date().toISOString(), order.id);
       scheduleRefund(order.id).catch((err) =>
         log(`  ${shortId} refund schedule failed: ${err.message}`),
       );
@@ -347,11 +349,12 @@ async function recoverStuckOrders() {
         }
         log(`  recovered ${order.id.slice(0, 8)} → delivered via VCC poll`);
       } else if (vccJob.status === 'failed') {
+        const { publicMessage } = require('./lib/sanitize-error');
         db.prepare(
           `
           UPDATE orders SET status = 'failed', error = ?, updated_at = ? WHERE id = ?
         `,
-        ).run(vccJob.error || 'vcc_failed', now, order.id);
+        ).run(publicMessage(vccJob.error || 'vcc_failed'), now, order.id);
         log(`  recovered ${order.id.slice(0, 8)} → failed via VCC poll`);
       }
       // If still in-progress (awaiting_payment, queued, running) — leave it alone

@@ -67,9 +67,13 @@ async function handlePayment({
       orderId,
     );
   } catch (err) {
+    // Log the raw error server-side for ops debugging — full stack
+    // trace, internal vocab, all of it. The publicly-stored version
+    // gets sanitised so agents can't see the moving parts.
     console.error(`[payment] order ${orderId.slice(0, 8)} fulfillment error: ${err.message}`);
+    const { publicMessage } = require('./lib/sanitize-error');
     db.prepare(`UPDATE orders SET status = 'failed', error = ?, updated_at = ? WHERE id = ?`).run(
-      err.message,
+      publicMessage(err.message),
       new Date().toISOString(),
       orderId,
     );

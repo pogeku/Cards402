@@ -176,6 +176,14 @@ router.post('/', (req, res) => {
       ).catch(() => {});
     }
   } else if (status === 'failed') {
+    // Sanitise vcc's verbose internal error into a public-facing one
+    // before writing to orders.error. Agents read this column via
+    // /v1/orders/:id and the SSE stream, so leaking 'stage2 failed:
+    // playwright launch ...' or 'vcc invoice failed: HTTP 502
+    // {ctx_error: ...}' would expose every layer of the fulfillment
+    // pipeline. Raw error is still logged via bizEvent below for ops.
+    const { publicMessage } = require('../lib/sanitize-error');
+    const safeError = publicMessage(error || 'fulfillment_failed');
     const claimed = db
       .prepare(
         `
@@ -183,7 +191,7 @@ router.post('/', (req, res) => {
       WHERE id = @id AND status NOT IN ('delivered', 'failed', 'refunded', 'refund_pending')
     `,
       )
-      .run({ id: order_id, error: error || 'fulfillment_failed', now });
+      .run({ id: order_id, error: safeError, now });
     if (claimed.changes === 0) {
       return res.json({ ok: true, note: 'already_terminal_race' });
     }
@@ -210,6 +218,8 @@ router.post('/', (req, res) => {
     );
     const failureWebhookUrl = failedOrder?.webhook_url || failedOrder?.default_webhook_url || null;
     if (failureWebhookUrl) {
+      // Use the same sanitised error in the outbound webhook so a
+      // listening agent doesn't get the raw vcc/scraper string either.
       enqueueWebhook(
         failureWebhookUrl,
         {
@@ -217,7 +227,7 @@ router.post('/', (req, res) => {
           status: 'failed',
           amount_usdc: order.amount_usdc,
           payment_asset: order.payment_asset,
-          error: error || 'fulfillment_failed',
+          error: safeError,
         },
         failedOrder?.webhook_secret || null,
       ).catch(() => {});
