@@ -40,6 +40,9 @@ contract/target/
 # Claude local state
 .claude/
 
+# Audit artifacts
+docs/audits/
+
 # Old audit files (rolled into docs/audits/)
 audit-fixes.md
 claude-audit.md
