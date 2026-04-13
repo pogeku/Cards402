@@ -43,18 +43,32 @@ function log(level, msg, fields = {}) {
 }
 
 /**
- * Emit a business event — used for metrics and auditing.
- * These are always emitted (never suppressed) so they can be ingested by
- * metrics pipelines regardless of log verbosity setting.
+ * Emit a business event — used for metrics, auditing, and the live
+ * dashboard SSE feed. These are always emitted (never suppressed) so
+ * they can be ingested by metrics pipelines regardless of log verbosity.
+ *
+ * Also forwards a 'bizEvent' event on the in-process event bus so any
+ * connected admin/dashboard SSE clients can react in real time — lets
+ * us replace the 30s dashboard refresh loop with a push-based model
+ * without touching every bizEvent call site.
  *
  * @param {string} name   dot-namespaced event name, e.g. 'order.fulfilled'
  * @param {Record<string, unknown>} [fields]
  */
 function event(name, fields = {}) {
-  if (IS_TEST) return;
+  if (!IS_TEST) {
+    const line = JSON.stringify({ ts: now(), type: 'event', event: name, ...fields });
+    process.stdout.write(line + '\n');
+  }
 
-  const line = JSON.stringify({ ts: now(), type: 'event', event: name, ...fields });
-  process.stdout.write(line + '\n');
+  // Lazy-require so the logger module stays a leaf (avoids a circular
+  // require path between logger → event-bus → anything that logs).
+  try {
+    const { emit: busEmit } = require('./event-bus');
+    busEmit('biz', { name, fields });
+  } catch {
+    /* event bus not loaded yet (very early boot) — drop silently */
+  }
 }
 
 module.exports = { log, event };

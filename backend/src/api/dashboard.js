@@ -20,6 +20,70 @@ const router = Router();
 
 router.use(requireAuth, requireDashboard);
 
+// ── Live SSE feed ─────────────────────────────────────────────────────────────
+
+// GET /dashboard/stream — Server-Sent Events feed of state changes
+// scoped to this user's dashboard. Pushes every agent_state / order /
+// approval transition that involves one of the user's api_keys, plus a
+// coarse 'refresh' ping when business events unrelated to a specific
+// key happen (system freeze, key lifecycle). Clients should refetch
+// their full state on 'refresh' and patch on the typed events.
+router.get('/stream', (req, res) => {
+  const { subscribe } = require('../lib/event-bus');
+  const dashboardId = req.dashboard.id;
+
+  // Pre-load the set of api_key_ids this dashboard owns so we can
+  // filter events cheaply. Re-read on each event would hammer the DB
+  // under fanout.
+  const keyRows = /** @type {any[]} */ (
+    db.prepare(`SELECT id FROM api_keys WHERE dashboard_id = ?`).all(dashboardId)
+  );
+  const ownedKeys = new Set(keyRows.map((r) => r.id));
+
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.flushHeaders?.();
+  res.write(': connected\n\n');
+
+  function send(type, payload) {
+    res.write(`event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`);
+  }
+  send('ready', { at: new Date().toISOString() });
+
+  const unsubscribe = subscribe((evt) => {
+    // Event filtering — a dashboard only sees events about its own keys.
+    const keyId = evt.api_key_id ?? evt.fields?.api_key_id;
+    if (keyId && !ownedKeys.has(keyId)) {
+      // A new key was just created for this dashboard → refresh the set
+      // so subsequent events for it land. Cheap: one SELECT.
+      if (
+        evt.type === 'biz' &&
+        evt.fields?.name === 'key.created' &&
+        evt.fields?.dashboard_id === dashboardId
+      ) {
+        ownedKeys.add(keyId);
+        send('refresh', { reason: 'key_created' });
+        return;
+      }
+      return;
+    }
+    send(evt.type, evt);
+  });
+
+  const keepalive = setInterval(() => {
+    res.write(': keepalive\n\n');
+  }, 15000);
+
+  req.on('close', () => {
+    clearInterval(keepalive);
+    unsubscribe();
+  });
+});
+
 // ── Dashboard info ────────────────────────────────────────────────────────────
 
 // GET /dashboard — dashboard info + live stats
@@ -215,7 +279,8 @@ function validateApiKeyFields({
 
 // GET /dashboard/api-keys
 router.get('/api-keys', (req, res) => {
-  res.json(
+  const { deriveAgentState } = require('../lib/agent-state');
+  const rows = /** @type {any[]} */ (
     db
       .prepare(
         `
@@ -223,12 +288,14 @@ router.get('/api-keys', (req, res) => {
            enabled, suspended, last_used_at, created_at,
            policy_daily_limit_usdc, policy_single_tx_limit_usdc,
            policy_require_approval_above_usdc, policy_allowed_hours, policy_allowed_days,
-           mode, rate_limit_rpm, expires_at
+           mode, rate_limit_rpm, expires_at,
+           agent_state, agent_state_at, agent_state_detail
     FROM api_keys WHERE dashboard_id = ? ORDER BY created_at DESC
   `,
       )
-      .all(req.dashboard.id),
+      .all(req.dashboard.id)
   );
+  res.json(rows.map((row) => ({ ...row, agent: deriveAgentState(row) })));
 });
 
 // POST /dashboard/api-keys — create a new agent API key

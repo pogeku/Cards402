@@ -30,6 +30,7 @@ export {
   addUsdcTrustlineOWS,
   payViaContractOWS,
   purchaseCardOWS,
+  onboardAgent,
   // Back-compat alias.
   payVCCOWS,
 } from './ows';
@@ -38,6 +39,8 @@ export type {
   PayViaContractOwsOpts,
   PayVCCOwsOpts,
   PurchaseCardOwsOpts,
+  OnboardAgentOpts,
+  OnboardAgentResult,
 } from './ows';
 
 export {

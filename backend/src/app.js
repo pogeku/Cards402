@@ -160,6 +160,62 @@ app.get('/v1/policy/check', (req, res) => {
   return res.json(policyCheck(req.apiKey.id, parseFloat(amount)));
 });
 
+// POST /v1/agent/status — agent reports setup / lifecycle transitions.
+// Drives the live "onboarding state" pill in the dashboards. Idempotent:
+// an agent can POST the same state repeatedly without side-effects.
+app.post('/v1/agent/status', (req, res) => {
+  const { emit: emitBusEvent } = require('./lib/event-bus');
+  const ALLOWED_STATES = new Set(['initializing', 'awaiting_funding']);
+  const { state, wallet_public_key, detail } = req.body || {};
+
+  if (state !== undefined && !ALLOWED_STATES.has(state)) {
+    return res.status(400).json({
+      error: 'invalid_state',
+      message: `state must be one of: ${[...ALLOWED_STATES].join(', ')} (the 'minted' and 'active' states are derived automatically from activity)`,
+    });
+  }
+  if (wallet_public_key !== undefined && wallet_public_key !== null) {
+    if (!/^G[A-Z2-7]{55}$/.test(wallet_public_key)) {
+      return res.status(400).json({
+        error: 'invalid_wallet_public_key',
+        message: 'wallet_public_key must be a valid Stellar G-address (56 chars, starts with G)',
+      });
+    }
+  }
+
+  const fields = [];
+  const params = { id: req.apiKey.id, at: new Date().toISOString() };
+  if (state !== undefined) {
+    fields.push('agent_state = @state', 'agent_state_at = @at');
+    params.state = state;
+  }
+  if (wallet_public_key !== undefined) {
+    fields.push('wallet_public_key = @wallet_public_key');
+    params.wallet_public_key = wallet_public_key || null;
+  }
+  if (detail !== undefined) {
+    fields.push('agent_state_detail = @detail');
+    params.detail = detail ? String(detail).slice(0, 500) : null;
+  }
+  if (fields.length === 0) {
+    return res.status(400).json({
+      error: 'nothing_to_update',
+      message: 'Provide at least one of: state, wallet_public_key, detail',
+    });
+  }
+
+  db.prepare(`UPDATE api_keys SET ${fields.join(', ')} WHERE id = @id`).run(params);
+
+  emitBusEvent('agent_state', {
+    api_key_id: req.apiKey.id,
+    state: state ?? null,
+    wallet_public_key: wallet_public_key ?? null,
+    detail: detail ?? null,
+  });
+
+  res.json({ ok: true });
+});
+
 // GET /v1/usage — agent's own spend and order summary
 app.get('/v1/usage', (req, res) => {
   const counts = db

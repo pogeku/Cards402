@@ -24,6 +24,44 @@ const router = Router();
 // Regular users manage their own dashboards via /dashboard/*.
 router.use(requireAuth, requireOwner);
 
+// GET /admin/stream — Server-Sent Events feed of every state change
+// the admin dashboard cares about. Replaces the legacy 30s polling
+// refresh loop — clients get pushed to on every order transition,
+// approval decision, agent_state change, and system event, and should
+// refetch the full snapshot (stats, orders, keys, approvals) once on
+// connect and then patch incrementally.
+router.get('/stream', (req, res) => {
+  const { subscribe } = require('../lib/event-bus');
+
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.flushHeaders?.();
+  res.write(': connected\n\n');
+
+  function send(type, payload) {
+    res.write(`event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`);
+  }
+  send('ready', { at: new Date().toISOString() });
+
+  const unsubscribe = subscribe((evt) => {
+    // Admin sees everything; no per-dashboard filtering.
+    send(evt.type, evt);
+  });
+
+  const keepalive = setInterval(() => {
+    res.write(': keepalive\n\n');
+  }, 15000);
+
+  req.on('close', () => {
+    clearInterval(keepalive);
+    unsubscribe();
+  });
+});
+
 // GET /admin/dashboards — all tenants with summary stats
 router.get('/dashboards', (req, res) => {
   const rows = db
@@ -427,7 +465,8 @@ router.post('/api-keys', requireOwner, async (req, res) => {
 
 // GET /admin/api-keys — list all keys (includes policy and new fields)
 router.get('/api-keys', (req, res) => {
-  res.json(
+  const { deriveAgentState } = require('../lib/agent-state');
+  const rows = /** @type {any[]} */ (
     db
       .prepare(
         `
@@ -435,12 +474,14 @@ router.get('/api-keys', (req, res) => {
            enabled, suspended, created_at, last_used_at, key_prefix,
            policy_daily_limit_usdc, policy_single_tx_limit_usdc, policy_require_approval_above_usdc,
            policy_allowed_hours, policy_allowed_days,
-           mode, rate_limit_rpm, expires_at
+           mode, rate_limit_rpm, expires_at,
+           agent_state, agent_state_at, agent_state_detail
     FROM api_keys
   `,
       )
-      .all(),
+      .all()
   );
+  res.json(rows.map((row) => ({ ...row, agent: deriveAgentState(row) })));
 });
 
 // PATCH /admin/api-keys/:id — update limits, policy, or disable

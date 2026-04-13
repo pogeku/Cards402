@@ -12,6 +12,14 @@ const AUTH_BASE = '/api/auth';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
+interface AgentState {
+  state: 'minted' | 'initializing' | 'awaiting_funding' | 'active';
+  label: string;
+  detail: string | null;
+  since: string | null;
+  wallet_public_key: string | null;
+}
+
 interface ApiKey {
   id: string;
   label: string | null;
@@ -31,6 +39,58 @@ interface ApiKey {
   mode: 'live' | 'sandbox';
   rate_limit_rpm: number | null;
   expires_at: string | null;
+  agent?: AgentState;
+}
+
+const AGENT_STATE_COLORS: Record<string, string> = {
+  minted: '#6b7280',
+  initializing: '#facc15',
+  awaiting_funding: '#fb923c',
+  active: '#22c55e',
+};
+const AGENT_STATE_LABELS: Record<string, string> = {
+  minted: 'Minted',
+  initializing: 'Setting up',
+  awaiting_funding: 'Awaiting deposit',
+  active: 'Active',
+};
+
+function AgentStatePill({ apiKey }: { apiKey: ApiKey }) {
+  const state = apiKey.agent?.state ?? 'minted';
+  const color = AGENT_STATE_COLORS[state] ?? AGENT_STATE_COLORS.minted;
+  const label = apiKey.agent?.label ?? AGENT_STATE_LABELS[state] ?? 'Minted';
+  return (
+    <span
+      title={apiKey.agent?.detail ?? undefined}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '0.375rem',
+        fontSize: '0.7rem',
+        fontFamily: 'var(--font-mono)',
+        color,
+        padding: '0.2rem 0.55rem',
+        borderRadius: 4,
+        border: `1px solid ${color}33`,
+        background: `${color}14`,
+      }}
+    >
+      <span
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: '50%',
+          background: color,
+          display: 'inline-block',
+          animation:
+            state === 'initializing' || state === 'awaiting_funding'
+              ? 'pulse 2s ease-in-out infinite'
+              : undefined,
+        }}
+      />
+      {label}
+    </span>
+  );
 }
 
 interface Order {
@@ -724,6 +784,61 @@ export default function DashboardPage() {
     fetchAll();
   }, [fetchAll]);
 
+  // Live SSE feed from /dashboard/stream. Pushes an event any time one
+  // of the user's agents reports a state transition, one of their
+  // orders changes phase, or an approval decision is recorded. Any
+  // event triggers a full refetch — it's local HTTP, ~10ms. If the
+  // stream drops we reopen with a short backoff, and a 60s safety net
+  // ensures the UI stays fresh even if SSE is blocked entirely.
+  useEffect(() => {
+    if (!authed) return;
+    let closed = false;
+    let abortController: AbortController | null = null;
+    let reopenTimer: ReturnType<typeof setTimeout> | null = null;
+    const safetyNet = setInterval(() => fetchAll(), 60_000);
+
+    async function openStream() {
+      if (closed) return;
+      abortController = new AbortController();
+      try {
+        const res = await fetch(`${API_BASE}/dashboard/stream`, {
+          headers: { Accept: 'text/event-stream' },
+          signal: abortController.signal,
+        });
+        if (!res.ok || !res.body) throw new Error(`stream http ${res.status}`);
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        while (!closed) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let idx: number;
+          while ((idx = buf.indexOf('\n\n')) !== -1) {
+            const event = buf.slice(0, idx);
+            buf = buf.slice(idx + 2);
+            const dataLine = event.split('\n').find((l) => l.startsWith('data: '));
+            if (!dataLine) continue;
+            fetchAll();
+            break;
+          }
+        }
+      } catch {
+        /* swallow — reopen with backoff */
+      } finally {
+        if (!closed) reopenTimer = setTimeout(openStream, 2000);
+      }
+    }
+    openStream();
+
+    return () => {
+      closed = true;
+      abortController?.abort();
+      if (reopenTimer) clearTimeout(reopenTimer);
+      clearInterval(safetyNet);
+    };
+  }, [authed, fetchAll]);
+
   // ── Auth ──────────────────────────────────────────────────────────────────
 
   async function sendCode() {
@@ -1140,6 +1255,7 @@ export default function DashboardPage() {
                           <span style={{ fontWeight: 700, fontSize: '0.9375rem' }}>
                             {k.label || 'Unlabeled key'}
                           </span>
+                          <AgentStatePill apiKey={k} />
                           <span
                             style={{
                               fontSize: '0.7rem',

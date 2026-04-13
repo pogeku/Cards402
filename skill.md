@@ -20,23 +20,40 @@ npm install @ctx.com/cards402
 ```
 
 ```javascript
-import { createOWSWallet, getOWSBalance } from '@ctx.com/cards402';
+import { onboardAgent, getOWSBalance } from '@ctx.com/cards402';
 
-// Creates a new encrypted Stellar wallet, or returns the existing one
-// if a wallet with this name is already in the vault. Idempotent — safe
-// to call on every startup.
-const { publicKey } = createOWSWallet('my-agent');
+// One call: reports 'initializing' to the backend, creates (or
+// fetches) the encrypted wallet, reports 'awaiting_funding' with
+// the wallet address, returns the public key + balance.
+// Idempotent — safe to call on every startup.
+const { publicKey, balance } = await onboardAgent({
+  apiKey: process.env.CARDS402_API_KEY,
+  walletName: 'my-agent',
+});
 console.log('Fund this Stellar address:', publicKey);
-
-// Wait for your operator to send funds, then check:
-const balance = await getOWSBalance('my-agent');
-console.log(`XLM: ${balance.xlm}  USDC: ${balance.usdc}`);
+console.log(`Current balance: ${balance.xlm} XLM  ${balance.usdc} USDC`);
 ```
+
+**The operator sees your setup progress live** in their cards402
+dashboard — as soon as `onboardAgent` runs, your key moves through
+the state pill from "Minted" → "Setting up" → "Awaiting deposit".
+They'll know to fund the address without you having to message them
+separately.
 
 **Ask your operator to fund `publicKey`** with however much USDC or
 XLM you need for your intended purchases, plus ~2 XLM to cover the
 Stellar account reserve and fees. There is no minimum top-up beyond
 that — send what you actually need.
+
+Once they've funded, re-check the balance on demand:
+
+```javascript
+const balance = await getOWSBalance('my-agent');
+console.log(`XLM: ${balance.xlm}  USDC: ${balance.usdc}`);
+```
+
+When you make your first successful purchase, the backend automatically
+flips your state to "Active" — no extra reporting required.
 
 ### ⚠ Persisting your wallet
 

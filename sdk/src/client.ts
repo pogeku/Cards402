@@ -359,4 +359,42 @@ export class Cards402Client {
     if (!res.ok) return this.handleError(res);
     return res.json() as Promise<UsageSummary>;
   }
+
+  // Report a setup lifecycle transition to the backend. The owner's
+  // admin dashboard and the agent's own dashboard subscribe to these
+  // via SSE and show a live "onboarding state" pill, so operators can
+  // see at a glance which agents are setting up, which are awaiting
+  // deposits, and which are active.
+  //
+  // Valid states:
+  //   'initializing'     — the agent is just starting setup
+  //   'awaiting_funding' — wallet created, waiting for on-chain deposit
+  //
+  // 'minted' (never contacted) and 'active' (first delivered order) are
+  // derived by the backend from activity, so you don't report those.
+  //
+  // Errors are swallowed: dashboard state is a best-effort signal, not
+  // something that should break the purchase flow if the endpoint is
+  // transiently unreachable.
+  async reportStatus(
+    state: 'initializing' | 'awaiting_funding',
+    opts: { wallet_public_key?: string; detail?: string } = {},
+  ): Promise<void> {
+    try {
+      await this.fetchWithRetry(`${this.baseUrl}/agent/status`, {
+        method: 'POST',
+        headers: {
+          'X-Api-Key': this.apiKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          state,
+          wallet_public_key: opts.wallet_public_key,
+          detail: opts.detail,
+        }),
+      });
+    } catch {
+      /* best-effort; do not block the caller */
+    }
+  }
 }

@@ -39,6 +39,14 @@ interface Order {
   api_key_label: string | null;
 }
 
+interface AgentState {
+  state: 'minted' | 'initializing' | 'awaiting_funding' | 'active';
+  label: string;
+  detail: string | null;
+  since: string | null;
+  wallet_public_key: string | null;
+}
+
 interface ApiKey {
   id: string;
   label: string | null;
@@ -58,6 +66,7 @@ interface ApiKey {
   mode: 'live' | 'sandbox';
   rate_limit_rpm: number | null;
   expires_at: string | null;
+  agent?: AgentState; // computed server-side, present on all keys
 }
 
 interface ActivityPoint {
@@ -466,67 +475,32 @@ function WebhookUrlInput({ value, onChange }: { value: string; onChange: (v: str
   );
 }
 
+const AGENT_STATE_COLORS: Record<string, string> = {
+  minted: '#6b7280', // grey — never seen
+  initializing: '#facc15', // yellow — working on it
+  awaiting_funding: '#fb923c', // orange — waiting on operator
+  active: '#22c55e', // green — delivered at least one order
+};
+const AGENT_STATE_LABELS: Record<string, string> = {
+  minted: 'Minted',
+  initializing: 'Setting up',
+  awaiting_funding: 'Awaiting deposit',
+  active: 'Active',
+};
+
 function AgentStatusDot({ apiKey }: { apiKey: ApiKey }) {
-  if (apiKey.wallet_public_key) {
-    return (
-      <span
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.375rem',
-          fontSize: '0.72rem',
-          color: 'var(--green)',
-          fontFamily: 'var(--font-mono)',
-        }}
-      >
-        <span
-          style={{
-            width: 7,
-            height: 7,
-            borderRadius: '50%',
-            background: 'var(--green)',
-            display: 'inline-block',
-            flexShrink: 0,
-          }}
-        />
-        Wallet ready
-      </span>
-    );
-  }
-  if (apiKey.last_used_at) {
-    return (
-      <span
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.375rem',
-          fontSize: '0.72rem',
-          color: '#facc15',
-          fontFamily: 'var(--font-mono)',
-        }}
-      >
-        <span
-          style={{
-            width: 7,
-            height: 7,
-            borderRadius: '50%',
-            background: '#facc15',
-            display: 'inline-block',
-            flexShrink: 0,
-          }}
-        />
-        Setting up wallet
-      </span>
-    );
-  }
+  const state = apiKey.agent?.state ?? 'minted';
+  const color = AGENT_STATE_COLORS[state] ?? AGENT_STATE_COLORS.minted;
+  const label = apiKey.agent?.label ?? AGENT_STATE_LABELS[state] ?? 'Minted';
   return (
     <span
+      title={apiKey.agent?.detail ?? undefined}
       style={{
         display: 'flex',
         alignItems: 'center',
         gap: '0.375rem',
         fontSize: '0.72rem',
-        color: '#fb923c',
+        color,
         fontFamily: 'var(--font-mono)',
       }}
     >
@@ -535,12 +509,18 @@ function AgentStatusDot({ apiKey }: { apiKey: ApiKey }) {
           width: 7,
           height: 7,
           borderRadius: '50%',
-          background: '#fb923c',
+          background: color,
           display: 'inline-block',
           flexShrink: 0,
+          // subtle pulse for transient states so live transitions are
+          // visible in the corner of the operator's eye
+          animation:
+            state === 'initializing' || state === 'awaiting_funding'
+              ? 'pulse 2s ease-in-out infinite'
+              : undefined,
         }}
       />
-      Awaiting connection
+      {label}
     </span>
   );
 }
@@ -1715,7 +1695,6 @@ export function AdminClient() {
   const [editingKey, setEditingKey] = useState<ApiKey | null>(null);
   const [reviewingApproval, setReviewingApproval] = useState<ApprovalRequest | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
-  const refreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Activity sparklines per key
   const [keyActivity, setKeyActivity] = useState<Record<string, ActivityPoint[]>>({});
@@ -2041,14 +2020,66 @@ export function AdminClient() {
     }
   }, [apiKeys]);
 
-  // Auto-refresh every 30s
+  // Live SSE subscription — replaces the legacy 30s refresh loop.
+  // The backend pushes a message whenever any business event fires
+  // (order transitions, approval decisions, agent state changes, key
+  // lifecycle, system freeze). We refetch the full snapshot on any
+  // event — it's a local HTTP round-trip to the same process, so it's
+  // ~10ms and simpler than maintaining per-event patch logic.
+  //
+  // If the stream closes (network, tab sleep, process restart) the
+  // effect reopens after a short backoff. A ~60s safety-net refresh
+  // covers the pathological case where SSE is unavailable entirely.
   useEffect(() => {
-    if (refreshTimer.current) clearInterval(refreshTimer.current);
-    if (autoRefresh && authed) {
-      refreshTimer.current = setInterval(fetchAll, 30_000);
+    if (!authed || !autoRefresh) return;
+
+    let closed = false;
+    let abortController: AbortController | null = null;
+    let reopenTimer: ReturnType<typeof setTimeout> | null = null;
+    const safetyNet = setInterval(fetchAll, 60_000);
+
+    async function openStream() {
+      if (closed) return;
+      abortController = new AbortController();
+      try {
+        const res = await fetch(`${API_BASE}/admin/stream`, {
+          headers: { Accept: 'text/event-stream' },
+          signal: abortController.signal,
+        });
+        if (!res.ok || !res.body) throw new Error(`stream http ${res.status}`);
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        while (!closed) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let idx: number;
+          while ((idx = buf.indexOf('\n\n')) !== -1) {
+            const event = buf.slice(0, idx);
+            buf = buf.slice(idx + 2);
+            const dataLine = event.split('\n').find((l) => l.startsWith('data: '));
+            if (!dataLine) continue;
+            // Any SSE message = something changed. Pull the full snapshot.
+            fetchAll();
+            break;
+          }
+        }
+      } catch {
+        /* swallow — reopen with backoff */
+      } finally {
+        if (!closed) {
+          reopenTimer = setTimeout(openStream, 2000);
+        }
+      }
     }
+    openStream();
+
     return () => {
-      if (refreshTimer.current) clearInterval(refreshTimer.current);
+      closed = true;
+      abortController?.abort();
+      if (reopenTimer) clearTimeout(reopenTimer);
+      clearInterval(safetyNet);
     };
   }, [autoRefresh, authed, fetchAll]);
 

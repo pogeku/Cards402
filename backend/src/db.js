@@ -453,6 +453,34 @@ applyMigration(13, () => {
   }
 });
 
+// Migration 14: live agent setup state. Drives the real-time "onboarding
+// status" pill in the admin + user dashboards. Agents report transitions
+// via POST /v1/agent/status; the backend also derives 'active' once the
+// first order is delivered, so agents that never report at all still
+// land in the right bucket once they make their first purchase.
+//
+//   minted            → key created, no API call yet (derived: last_used_at IS NULL)
+//   initializing      → agent is spinning up, creating wallet
+//   awaiting_funding  → wallet created, address reported, balance not yet seen
+//   active            → first delivered order exists (derived)
+//
+// 'minted' and 'active' are computed at read time so they never drift
+// out of sync; the stored column only holds the explicitly-reported
+// transient states ('initializing' and 'awaiting_funding').
+applyMigration(14, () => {
+  for (const sql of [
+    `ALTER TABLE api_keys ADD COLUMN agent_state TEXT`,
+    `ALTER TABLE api_keys ADD COLUMN agent_state_at TEXT`,
+    `ALTER TABLE api_keys ADD COLUMN agent_state_detail TEXT`,
+  ]) {
+    try {
+      db.prepare(sql).run();
+    } catch (_) {
+      /* column already exists */
+    }
+  }
+});
+
 // Audit A-5: post-migration sanity check. If a newer release has rolled
 // through here and bumped the on-disk schema beyond what this binary
 // knows about, fail hard instead of running against a schema we don't
@@ -463,7 +491,7 @@ applyMigration(13, () => {
 //
 // EXPECTED_SCHEMA_VERSION must match the last `applyMigration(N)` call
 // above. Bump it in lock-step with any new migration.
-const EXPECTED_SCHEMA_VERSION = 13;
+const EXPECTED_SCHEMA_VERSION = 14;
 const actualVersion = getSchemaVersion();
 if (actualVersion > EXPECTED_SCHEMA_VERSION) {
   console.error(

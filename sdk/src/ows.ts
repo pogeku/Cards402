@@ -141,6 +141,70 @@ export async function getOWSBalance(
   return { xlm, usdc };
 }
 
+// ── Onboarding helper ─────────────────────────────────────────────────────────
+
+export interface OnboardAgentOpts {
+  /** cards402 API key (cards402_…) */
+  apiKey: string;
+  /** Local name for the wallet in the OWS vault, e.g. 'my-agent' */
+  walletName: string;
+  /** Override the default https://api.cards402.com/v1 */
+  baseUrl?: string;
+  /** Optional passphrase for extra at-rest encryption */
+  passphrase?: string;
+  /** Override the default ~/.ows/wallets vault path — use a persistent
+   *  volume if you're running on ephemeral storage (Lambda, Cloud Run,
+   *  scratch containers). Lost vault = lost funds. */
+  vaultPath?: string;
+}
+
+export interface OnboardAgentResult {
+  publicKey: string;
+  balance: { xlm: string; usdc: string };
+}
+
+/**
+ * One-shot agent setup: reports `initializing` to cards402, creates or
+ * fetches the OWS wallet, reports `awaiting_funding` with the wallet
+ * address, and returns the public key + current balance. Idempotent —
+ * safe to call on every agent startup.
+ *
+ * The backend broadcasts these transitions over the live SSE dashboard
+ * feed, so operators see the agent moving through states in real time.
+ */
+export async function onboardAgent(opts: OnboardAgentOpts): Promise<OnboardAgentResult> {
+  const { Cards402Client } = await import('./client');
+  const client = new Cards402Client({ apiKey: opts.apiKey, baseUrl: opts.baseUrl });
+
+  // 1. Signal "spinning up" before we touch the filesystem. Best-effort:
+  //    reportStatus swallows errors so a backend hiccup can't block setup.
+  await client.reportStatus('initializing', { detail: 'creating wallet' });
+
+  // 2. Create or fetch the wallet. Idempotent via createOWSWallet's
+  //    getWallet-first path.
+  const { publicKey } = createOWSWallet(opts.walletName, opts.passphrase, opts.vaultPath);
+
+  // 3. Fetch balance. On a fresh wallet this hits Horizon and may 404
+  //    if the account isn't activated yet (< 1 XLM on-chain). Swallow
+  //    that case and return 0/0; the dashboard will show "Awaiting
+  //    deposit" and the next getOWSBalance call will see the funds.
+  let balance = { xlm: '0', usdc: '0' };
+  try {
+    balance = await getOWSBalance(opts.walletName, opts.vaultPath);
+  } catch {
+    /* unactivated account — normal on first run */
+  }
+
+  // 4. Report the wallet address so the dashboard can show it and
+  //    start polling Horizon for the balance.
+  await client.reportStatus('awaiting_funding', {
+    wallet_public_key: publicKey,
+    detail: `xlm=${balance.xlm} usdc=${balance.usdc}`,
+  });
+
+  return { publicKey, balance };
+}
+
 // ── Signing bridge ────────────────────────────────────────────────────────────
 
 /**
