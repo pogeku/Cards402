@@ -46,7 +46,7 @@ const COMPONENTS: Array<{
   {
     label: 'Webhook delivery',
     status: 'operational',
-    note: 'Delivery queue caught up.',
+    note: 'Outbound queue caught up.',
   },
   {
     label: 'Dashboard',

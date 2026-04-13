@@ -25,7 +25,7 @@ const PERKS = [
   },
   {
     title: 'Monthly Stellar payouts',
-    body: 'Payouts settle directly to your Stellar wallet on the first of every month. USDC by default, XLM if you prefer. One on-chain transaction, auditable in public.',
+    body: 'Every month, your earnings settle directly to your Stellar wallet on the first. USDC by default, XLM if you prefer. One on-chain transaction, auditable in public.',
   },
   {
     title: 'White-label dashboard',
