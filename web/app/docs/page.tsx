@@ -2,9 +2,10 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 
 export const metadata: Metadata = {
-  title: 'API Reference — Cards402',
+  title: 'API reference',
   description:
     'Full API reference for Cards402: create orders, stream status, verify webhooks, and handle errors.',
+  alternates: { canonical: 'https://cards402.com/docs' },
 };
 
 // ── Inline primitives ─────────────────────────────────────────────
