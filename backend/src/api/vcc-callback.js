@@ -8,6 +8,7 @@ const db = require('../db');
 const { enqueueWebhook, scheduleRefund } = require('../fulfillment');
 const { verifyVccSignature } = require('../vcc-client');
 const { sealCard } = require('../lib/card-vault');
+const { normalizeCardBrand } = require('../lib/normalize-card');
 const { event: bizEvent } = require('../lib/logger');
 
 const router = Router();
@@ -198,7 +199,11 @@ router.post('/', (req, res) => {
             number: card.number,
             cvv: card.cvv,
             expiry: card.expiry,
-            brand: card.brand || null,
+            // Normalise the upstream merchant-catalog string before it
+            // hits the agent transcript. Raw value stays in the orders
+            // row for ops; agents see "USD Visa Card" not "Visa® Reward
+            // Card, 6-Month Expiration [ITNL] eGift Card".
+            brand: normalizeCardBrand(card.brand),
           },
         },
         keyRow?.webhook_secret || null,

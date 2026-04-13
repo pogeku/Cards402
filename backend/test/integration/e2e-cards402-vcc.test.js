@@ -328,14 +328,19 @@ describe('e2e cards402 ↔ vcc: happy path', () => {
       `callback returned ${callbackRes.status}: ${JSON.stringify(callbackRes.body)}`,
     );
 
-    // 7. Agent polls and sees the card.
+    // 7. Agent polls and sees the card. The brand is normalised before
+    // crossing the agent boundary (audit-style sanitisation): the raw
+    // upstream merchant string never leaks into the agent transcript.
     const pollRes = await request.get(`/v1/orders/${orderId}`).set('X-Api-Key', key);
     assert.equal(pollRes.status, 200);
     assert.equal(pollRes.body.phase, 'ready');
     assert.equal(pollRes.body.card.number, card.number);
     assert.equal(pollRes.body.card.cvv, card.cvv);
     assert.equal(pollRes.body.card.expiry, card.expiry);
-    assert.equal(pollRes.body.card.brand, card.brand);
+    // Test fixture sends 'Visa' as the raw brand → normaliser maps to
+    // 'USD Visa Card'. The raw upstream value still lives in the orders
+    // row for ops/audit, just not on the agent-facing API.
+    assert.equal(pollRes.body.card.brand, 'USD Visa Card');
   });
 });
 

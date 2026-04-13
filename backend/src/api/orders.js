@@ -483,7 +483,16 @@ function buildOrderResponse(order) {
     // F1: card_number/cvv/expiry are sealed at rest. openCard pass-throughs
     // plaintext rows during the upgrade window so legacy orders still work.
     const { openCard } = require('../lib/card-vault');
-    response.card = openCard(order);
+    const { normalizeCardBrand } = require('../lib/normalize-card');
+    const card = openCard(order);
+    if (card) {
+      // Replace the raw upstream brand (e.g. "Visa® Reward Card, 6-Month
+      // Expiration [ITNL] eGift Card") with a stable agent-facing label
+      // before sending to the agent. The raw brand stays in the DB row
+      // for ops/audit but never reaches the agent transcript.
+      card.brand = normalizeCardBrand(card.brand);
+    }
+    response.card = card;
   }
 
   if (order.status === 'expired') {
