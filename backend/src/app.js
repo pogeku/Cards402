@@ -12,7 +12,9 @@ const { log } = require('./lib/logger');
 const auth = require('./middleware/auth');
 const ordersRouter = require('./api/orders');
 const { buildBudget, policyCheck } = require('./api/orders');
-const adminRouter = require('./api/admin');
+// Legacy /admin/* router was retired with the ampersand dashboard rewrite.
+// The new /dashboard surface (mounted below) is the canonical operator API
+// and is what /api/admin-proxy on the web app forwards to.
 const dashboardRouter = require('./api/dashboard');
 const authRouter = require('./api/auth');
 const internalRouter = require('./api/internal');
@@ -358,7 +360,6 @@ app.get('/v1/usage', (req, res) => {
 
 app.use('/auth', authLimiter, authRouter);
 app.use('/dashboard', adminLimiter, dashboardRouter);
-app.use('/admin', adminLimiter, adminRouter);
 app.use('/internal', adminLimiter, internalRouter);
 // VCC callback — HMAC-authenticated, no session required.
 // Rate-limited generously to handle bursts while blocking floods.

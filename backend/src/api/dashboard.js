@@ -944,4 +944,35 @@ router.get('/policy-decisions', (req, res) => {
   res.json(db.prepare(query).all(...params));
 });
 
+// GET /dashboard/platform-wallet — treasury wallet public key + network.
+//
+// Replaces the legacy /admin/platform-wallet endpoint that used to live on
+// the retired admin client. Gated on the deployment-level platform-owner
+// flag (CARDS402_PLATFORM_OWNER_EMAIL) so regular dashboard users never
+// see treasury internals — only the email that runs the cards402 instance
+// can pull this. Balance is fetched client-side from Horizon so the
+// backend never has to touch the network on every poll.
+router.get('/platform-wallet', (req, res) => {
+  if (!req.user.is_platform_owner) {
+    return res.status(403).json({ error: 'forbidden', message: 'platform owner only' });
+  }
+  try {
+    const { Keypair } = require('@stellar/stellar-sdk');
+    const secret = process.env.STELLAR_XLM_SECRET;
+    if (!secret) {
+      return res.status(503).json({ error: 'STELLAR_XLM_SECRET not configured' });
+    }
+    const keypair = Keypair.fromSecret(secret);
+    res.json({
+      public_key: keypair.publicKey(),
+      network: process.env.STELLAR_NETWORK || 'mainnet',
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: 'failed_to_derive_platform_wallet',
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
 module.exports = router;
