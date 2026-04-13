@@ -10,8 +10,16 @@ declare global {
     interface Request {
       /** Set by middleware/auth.js — the authenticated API key row */
       apiKey: import('better-sqlite3').RunResult & Record<string, any>;
-      /** Set by middleware/requireAuth.js — the authenticated user row */
-      user: { id: string; email: string; role: 'owner' | 'user'; dashboard_id?: string };
+      /** Set by middleware/requireAuth.js — the authenticated user row.
+       *  is_platform_owner is a deployment-level flag (matches
+       *  CARDS402_PLATFORM_OWNER_EMAIL), distinct from the dashboard role. */
+      user: {
+        id: string;
+        email: string;
+        role: 'owner' | 'user';
+        is_platform_owner: boolean;
+        dashboard_id?: string;
+      };
       /** Set by the request-id middleware in app.js */
       id: string;
       /** Set by express.json verify callback — raw string body for HMAC */

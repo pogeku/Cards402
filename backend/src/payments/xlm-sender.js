@@ -202,7 +202,12 @@ function parseStellarPayUri(uri) {
 //     absorbs DEX slippage + fees.
 //
 // Returns the Stellar transaction hash.
-async function payCtxOrder(paymentUrl, { paymentAsset, maxUsdc } = {}) {
+/**
+ * @param {string} paymentUrl
+ * @param {{ paymentAsset?: string, maxUsdc?: string|number }} [opts]
+ */
+async function payCtxOrder(paymentUrl, opts = {}) {
+  const { paymentAsset, maxUsdc } = opts;
   const { destination, amount, memo } = parseStellarPayUri(paymentUrl);
   if (!destination || !amount || !memo) {
     throw new Error(`Invalid CTX payment URL: ${paymentUrl}`);

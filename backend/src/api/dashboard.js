@@ -436,6 +436,7 @@ router.patch('/api-keys/:id', requirePermission('agent:update'), async (req, res
     }
   }
 
+  /** @type {Record<string, any>} */
   const fields = {};
   if (enabled !== undefined) fields.enabled = enabled ? 1 : 0;
   if (spend_limit_usdc !== undefined) fields.spend_limit_usdc = spend_limit_usdc || null;
