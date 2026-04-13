@@ -1,0 +1,28 @@
+/* TEAM */
+
+Cards402 is built by a small distributed team focused on payment
+infrastructure for autonomous agents. We publish every salary and we write
+everything down. Come work with us: https://cards402.com/careers
+
+Contact: hello@cards402.com
+Press:   press@cards402.com
+Security: security@cards402.com
+Location: Remote-first · London HQ
+
+/* THANKS */
+
+- Stellar Development Foundation, for a payment network that agents can
+  actually settle on.
+- Pathward, N.A., for issuing the cards we sell at face value.
+- InComm Payments, for operating the upstream card programme we plug into.
+- Every customer who shipped an agent on top of this in the first quarter
+  and told us what was broken.
+
+/* SITE */
+
+Last update: 2026-04-14
+Standards: HTML5, CSS3, TypeScript
+Components: Next.js 16, React 19
+Typography: Fraunces (display), IBM Plex Sans (body), IBM Plex Mono (data)
+Design: Editorial minimalism, single mint accent
+Tooling: Turbopack, pnpm, Vitest, Playwright

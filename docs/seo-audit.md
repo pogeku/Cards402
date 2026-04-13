@@ -4,6 +4,9 @@ Audit performed after the phase 1–3 site build. Scope is technical SEO and
 on-page SEO for marketing routes; product analytics and content strategy are
 out of scope.
 
+**Updated during loop iteration 2** — items marked 🟢 have landed since
+the initial audit. See the bottom of this doc for the delta.
+
 ## Score summary
 
 | Area                           | Status | Notes                                                                     |
@@ -126,6 +129,58 @@ true` to both Fraunces and Plex if they aren't already. Verify.
 18. **Internationalisation (`next-intl` or similar)** — adds a `[locale]`
     segment to every route and switches content per locale. Not yet
     urgent; document before touching.
+
+## Loop iteration 2 delta — 2026-04-14
+
+Everything below was marked as a gap in the original audit and has since
+been implemented. Leaving the gap list above intact as historical
+context; this section is the running log of what's now ✅.
+
+- 🟢 **BreadcrumbList structured data** — live on `/docs/quickstart` and
+  `/legal/cardholder-agreement`. Pairs with the page titles so Google
+  shows `Cards402 › Docs › Quickstart` in the SERP.
+- 🟢 **`hreflang="en-GB"` + `hreflang="x-default"`** — added via
+  `alternates.languages` in `app/layout.tsx`. Ready to accept real
+  locale URLs once we translate.
+- 🟢 **Keywords meta removed.** Google has ignored it since ~2009 and
+  it was drifting out of sync with on-page copy.
+- 🟢 **`/.well-known/security.txt`** — researchers land here with the
+  disclosure contact, expiry, and policy link. Expires 2027-04-14.
+- 🟢 **`humans.txt`** — served at the root, credits the team, mirrors
+  the brand.
+- 🟢 **`llms.txt`** — emerging standard for AI/LLM content discovery.
+  Placed at the root with an exact-structure document index per the
+  draft spec (<https://llmstxt.org>). Perfect-fit audience.
+- 🟢 **Custom 404 + error boundary** — `not-found.tsx` with
+  `robots: noindex` so Google doesn't catalogue the fallback, plus a
+  route-level `error.tsx` that surfaces the Next.js error digest as a
+  support reference ID.
+- 🟢 **`Article` / BlogPosting JSON-LD on changelog entries.** Each
+  entry is now wrapped in an `ItemList` with `BlogPosting` children,
+  and the `<article>` elements have stable hash-fragment ids matching
+  the JSON-LD URLs. Google can index them individually.
+- 🟢 **RSS feed at `/changelog/feed.xml`** — RSS 2.0 route handler
+  with per-entry guids and a 1h edge cache. Feed-reader auto-discovery
+  wired via `alternates.types` on the changelog head, so pasting
+  `/changelog` into NetNewsWire picks it up.
+- 🟢 **Status page (`/status`)** — closed the dangling reference from
+  the Terms page to `status.cards402.com`. Component-by-component
+  health + worst-of banner + subscribe block.
+- 🟢 **`/skill.md`** — was a 404 referenced from the landing hero CTA.
+  Now a real agent-onboarding brief.
+
+### Still open from the original gaps list
+
+- ⚠️ Per-page OG images (nested `opengraph-image.tsx` at `/pricing`,
+  `/careers`, `/changelog`).
+- ⚠️ Font preloading + `adjustFontFallback: true` on Fraunces / Plex.
+- ⚠️ Status page at `status.cards402.com` (the real dashboard, not the
+  Cards402-hosted summary on `/status`).
+- ⚠️ Lighthouse/CWV pass on prod.
+- ⚠️ Internationalisation (next-intl).
+- ⚠️ Blog.
+- ⚠️ Embed Fraunces/Plex base64 into `opengraph-image.tsx` so the
+  social card isn't Georgia-fallback.
 
 ## What I'd NOT do
 

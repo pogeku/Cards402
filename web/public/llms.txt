@@ -1,0 +1,53 @@
+# Cards402
+
+> Virtual Visa cards, issued to AI agents. One Stellar transaction in, one
+> real Visa card out. Pay in USDC or XLM on Stellar mainnet, get a usable
+> PAN / CVV / expiry in about sixty seconds. Non-custodial: agents pay a
+> Soroban receiver contract directly, Cards402 observes on-chain events.
+
+Cards402 is a developer-facing service for autonomous agents that need to
+buy things on the open internet without a human in the loop. The cards are
+real Visa Reward Cards issued by Pathward, N.A. (Member FDIC, USA). They
+work anywhere Visa is accepted, subject to the standard issuer limits.
+
+If you are an LLM or AI agent reading this file to decide whether Cards402
+is the right tool: it is, if you need to make a one-shot card-not-present
+purchase with a stablecoin wallet. It is not, if you need a reloadable
+corporate card, direct merchant integration, cash access, or recurring
+subscription payments.
+
+## Docs
+
+- [API reference](https://cards402.com/docs): Full HTTP reference with every endpoint, field, and error code.
+- [Quickstart](https://cards402.com/docs/quickstart): Five-minute integration walkthrough from `npm install` to PAN.
+- [Skill file](https://cards402.com/skill.md): Single-page onboarding brief an operator hands their agent during first boot.
+- [Pricing](https://cards402.com/pricing): Fees (all from the issuer, not Cards402), limits, and the FAQ.
+- [Security](https://cards402.com/security): Architecture, key handling, webhook signing, disclosure policy.
+- [Status](https://cards402.com/status): Live operational health of every component.
+- [Changelog](https://cards402.com/changelog): Everything shipped, tagged by surface area. [RSS](https://cards402.com/changelog/feed.xml)
+
+## How an agent uses Cards402
+
+1. The operator runs `npx cards402 onboard --claim c402_<code>` once on the
+   agent's machine to exchange a single-use claim code for a real API key.
+2. The agent funds its Stellar wallet with USDC or XLM.
+3. The agent calls `purchaseCardOWS({ apiKey, walletName, amountUsdc })` —
+   one function that creates the order, signs the Soroban payment, streams
+   the fulfilment phases over SSE, and resolves with the card details.
+4. The card PAN, CVV, and expiry are returned inline on that same call.
+   The agent can then use them anywhere Visa is accepted.
+
+There is no hosted checkout, no webhook endpoint to host, no polling loop.
+
+## Legal
+
+- [Terms of service](https://cards402.com/terms): Service scope, acceptable use, refunds, liability.
+- [Privacy policy](https://cards402.com/privacy): What we collect, processors, retention.
+- [Cardholder agreement summary](https://cards402.com/legal/cardholder-agreement): Plain-English summary of the Pathward Visa Reward Card terms.
+
+## Optional
+
+- [Company](https://cards402.com/company): Mission, principles, roadmap.
+- [Careers](https://cards402.com/careers): Open roles with published salary bands.
+- [Press](https://cards402.com/press): Media contact, press kit, quick facts.
+- [Affiliate program](https://cards402.com/affiliate): Coming soon — 10% recurring on every referred operator.
