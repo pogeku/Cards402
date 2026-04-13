@@ -152,9 +152,49 @@ function TagChip({ tag }: { tag: Tag }) {
   );
 }
 
+// BlogPosting ItemList — each changelog entry as a structured
+// posting. Google treats this as an index of time-stamped updates
+// even though they all share the /changelog URL. Anchors are hash
+// fragments onto the same page.
+function slug(s: string) {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+const changelogJsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'ItemList',
+  itemListElement: ENTRIES.map((e, i) => ({
+    '@type': 'ListItem',
+    position: i + 1,
+    item: {
+      '@type': 'BlogPosting',
+      headline: e.version ? `v${e.version} — ${e.title}` : e.title,
+      datePublished: e.date,
+      description: e.body,
+      url: `https://cards402.com/changelog#${e.date}-${slug(e.title)}`,
+      author: { '@type': 'Organization', name: 'Cards402' },
+      publisher: {
+        '@type': 'Organization',
+        name: 'Cards402',
+        logo: {
+          '@type': 'ImageObject',
+          url: 'https://cards402.com/icon.png',
+        },
+      },
+    },
+  })),
+};
+
 export default function ChangelogPage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(changelogJsonLd) }}
+      />
       <PageHero
         eyebrow="Changelog"
         title="Everything we've"
@@ -171,6 +211,7 @@ export default function ChangelogPage() {
         >
           {ENTRIES.map((e, i) => (
             <article
+              id={`${e.date}-${slug(e.title)}`}
               key={e.date + e.title}
               style={{
                 display: 'grid',
@@ -178,6 +219,7 @@ export default function ChangelogPage() {
                 gap: '2rem',
                 padding: '2.25rem 0',
                 borderBottom: i === ENTRIES.length - 1 ? 'none' : '1px solid var(--border)',
+                scrollMarginTop: 80,
               }}
               className="changelog-entry"
             >
