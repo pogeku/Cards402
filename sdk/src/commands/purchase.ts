@@ -17,7 +17,7 @@ import * as os from 'os';
 import * as path from 'path';
 
 import { loadCards402Config } from '../config';
-import { purchaseCardOWS } from '../ows';
+import { purchaseCardOWS, getOWSBalance } from '../ows';
 import { ResumableError, OrderFailedError } from '../errors';
 
 interface PurchaseArgs {
@@ -67,7 +67,10 @@ for the api key, wallet name, vault path, and passphrase env var.
 
 Options:
   -a, --amount <USDC>        Card value in USD. Required for new purchases.
-  --asset xlm|usdc           Which asset to pay with. Default: xlm
+  --asset xlm|usdc           Which asset to pay with. Default: auto — picks
+                             USDC if the wallet has enough USDC to cover the
+                             order, otherwise pays in XLM. Pass an explicit
+                             value to force one.
   --wallet-name <name>       Override the wallet name from config.json
   --vault-path <path>        Override the vault path from config.json
   --passphrase-env <ENVNAME> Override the passphrase env var from config.json.
@@ -163,7 +166,6 @@ Your operator can mint a claim code from https://cards402.com/dashboard.
   }
 
   const walletName = args.walletName || config.wallet_name || 'cards402-agent';
-  const paymentAsset = args.asset ?? 'xlm';
 
   // F12: vault_path and passphrase_env both come from config first, then
   // CLI overrides. The passphrase value is read from process.env at call
@@ -177,6 +179,51 @@ Your operator can mint a claim code from https://cards402.com/dashboard.
         `Set ${passphraseEnv} to your wallet passphrase before running purchase.\n`,
     );
     return 2;
+  }
+
+  // Resolve the payment asset. If the user didn't pass --asset we auto-pick
+  // based on what the wallet actually holds — agents that try to pay in an
+  // asset they have no balance for is the #1 failure mode in early piloting.
+  // Rule:
+  //   - explicit --asset wins always
+  //   - on resume, asset doesn't matter (the order is already paid or
+  //     waiting for an existing payment)
+  //   - otherwise: pick USDC if the wallet has enough USDC to cover the
+  //     order, else pick XLM
+  let paymentAsset: 'xlm' | 'usdc';
+  if (args.asset) {
+    paymentAsset = args.asset;
+  } else if (args.resume) {
+    paymentAsset = 'xlm'; // unused on resume, any value is fine
+  } else {
+    try {
+      const bal = await getOWSBalance(walletName, vaultPath);
+      const usdcBal = parseFloat(bal.usdc || '0');
+      const wantUsdc = parseFloat(args.amount || '0');
+      if (usdcBal >= wantUsdc && wantUsdc > 0) {
+        paymentAsset = 'usdc';
+        process.stdout.write(
+          `→ Auto-picked USDC (wallet has ${usdcBal.toFixed(2)} USDC; covers $${wantUsdc.toFixed(2)})\n`,
+        );
+      } else {
+        paymentAsset = 'xlm';
+        if (usdcBal > 0) {
+          process.stdout.write(
+            `→ Auto-picked XLM (wallet has only ${usdcBal.toFixed(2)} USDC; needs $${wantUsdc.toFixed(2)})\n`,
+          );
+        } else {
+          process.stdout.write(`→ Auto-picked XLM (no USDC in wallet)\n`);
+        }
+      }
+    } catch {
+      // Horizon down or unactivated wallet — fall back to XLM (no
+      // trustline required) and let payViaContractOWS surface the real
+      // error if the wallet really has nothing.
+      paymentAsset = 'xlm';
+      process.stdout.write(
+        `→ Could not read balance from Horizon — defaulting to XLM. Pass --asset usdc to override.\n`,
+      );
+    }
   }
 
   if (args.resume) {

@@ -74,10 +74,21 @@ When your user asks you to buy a card, run:
 npx cards402 purchase --amount <USD>
 ```
 
+**Pay with the asset you actually have.** By default `cards402 purchase`
+checks your wallet balance via Horizon and auto-picks: USDC if you have
+enough USDC to cover the order, otherwise XLM. Do **not** override the
+asset unless you have a specific reason — passing `--asset usdc` when
+the wallet only holds XLM will fail at the trustline / DEX step and
+waste a Stellar fee. If you must check first:
+
+```bash
+npx cards402 wallet balance
+```
+
 Optional flags:
 
-- `--asset xlm` (default) or `--asset usdc`
-- `--wallet-name <name>` (default: the one set during onboard)
+- `--asset xlm|usdc` — force a specific asset. Default: auto (recommended).
+- `--wallet-name <name>` — override the wallet name from config.
 
 `cards402 purchase` reads `~/.cards402/config.json` for the api key
 and wallet name, so you do not need to pass either. The command:
@@ -204,14 +215,21 @@ your user explicitly asks, and only for the amount they ask for. Do
 not run this as part of setup, testing, or on your own initiative.
 
 ```javascript
-import { purchaseCardOWS } from 'cards402';
+import { purchaseCardOWS, getOWSBalance } from 'cards402';
+
+// Check what the wallet actually has BEFORE picking the asset. If you
+// pay in an asset you don't hold the call will fail at the Stellar
+// step and waste a fee.
+const bal = await getOWSBalance('my-agent');
+const wantUsdc = '<amount the user requested>';
+const paymentAsset = parseFloat(bal.usdc) >= parseFloat(wantUsdc) ? 'usdc' : 'xlm';
 
 const card = await purchaseCardOWS({
   apiKey: process.env.CARDS402_API_KEY,
   baseUrl: process.env.CARDS402_BASE_URL,
   walletName: 'my-agent',
-  amountUsdc: '<amount the user requested>',
-  paymentAsset: 'xlm', // or 'usdc'
+  amountUsdc: wantUsdc,
+  paymentAsset,
 });
 
 console.log('Card:', card.number, 'CVV:', card.cvv, 'Exp:', card.expiry);
