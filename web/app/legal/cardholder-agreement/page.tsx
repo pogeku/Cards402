@@ -10,9 +10,33 @@ export const metadata: Metadata = {
   alternates: { canonical: 'https://cards402.com/legal/cardholder-agreement' },
 };
 
+// BreadcrumbList JSON-LD — Legal → Cardholder agreement.
+const breadcrumbJsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'BreadcrumbList',
+  itemListElement: [
+    {
+      '@type': 'ListItem',
+      position: 1,
+      name: 'Legal',
+      item: 'https://cards402.com/terms',
+    },
+    {
+      '@type': 'ListItem',
+      position: 2,
+      name: 'Cardholder agreement',
+      item: 'https://cards402.com/legal/cardholder-agreement',
+    },
+  ],
+};
+
 export default function CardholderAgreementPage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbJsonLd) }}
+      />
       <PageHero
         eyebrow="Legal · Cardholder agreement"
         title="Your card, your"

@@ -8,6 +8,27 @@ export const metadata: Metadata = {
   alternates: { canonical: 'https://cards402.com/docs/quickstart' },
 };
 
+// BreadcrumbList JSON-LD — tells Google this page sits Docs → Quickstart
+// so the SERP shows the hierarchy instead of a raw URL.
+const breadcrumbJsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'BreadcrumbList',
+  itemListElement: [
+    {
+      '@type': 'ListItem',
+      position: 1,
+      name: 'Docs',
+      item: 'https://cards402.com/docs',
+    },
+    {
+      '@type': 'ListItem',
+      position: 2,
+      name: 'Quickstart',
+      item: 'https://cards402.com/docs/quickstart',
+    },
+  ],
+};
+
 function Code({ children }: { children: string }) {
   return (
     <code
@@ -177,6 +198,10 @@ export default function QuickstartPage() {
         padding: '4.5rem 1.75rem 6rem',
       }}
     >
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbJsonLd) }}
+      />
       <div className="type-eyebrow" style={{ color: 'var(--green)', marginBottom: '1.1rem' }}>
         Docs · Quickstart · 5 minutes
       </div>

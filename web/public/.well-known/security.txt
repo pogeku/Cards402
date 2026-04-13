@@ -1,0 +1,13 @@
+Contact: mailto:security@cards402.com
+Contact: https://cards402.com/security
+Expires: 2027-04-14T00:00:00Z
+Preferred-Languages: en
+Canonical: https://cards402.com/.well-known/security.txt
+Policy: https://cards402.com/security
+Acknowledgments: https://cards402.com/security
+
+# Cards402 responsible disclosure
+# Report vulnerabilities to security@cards402.com.
+# We acknowledge within 24 hours, triage within 72, and publish a
+# postmortem to https://cards402.com/changelog once the fix is live.
+# See https://cards402.com/security for bounty tiers and scope.

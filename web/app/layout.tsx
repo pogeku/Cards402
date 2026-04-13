@@ -53,21 +53,18 @@ export const metadata: Metadata = {
   applicationName: SITE_NAME,
   generator: 'Next.js',
   metadataBase: new URL(SITE_URL),
-  alternates: { canonical: SITE_URL },
-  keywords: [
-    'virtual cards',
-    'ai agents',
-    'stellar',
-    'usdc',
-    'x402',
-    'visa',
-    'agent payments',
-    'soroban',
-    'stablecoin',
-    'mcp',
-    'autonomous agents',
-    'developer api',
-  ],
+  alternates: {
+    canonical: SITE_URL,
+    // Declaring en-GB as the primary locale and x-default for anyone
+    // landing from a non-English search. Once we actually translate
+    // pages this block is where the real locale URLs go.
+    languages: {
+      'en-GB': SITE_URL,
+      'x-default': SITE_URL,
+    },
+  },
+  // Keywords meta intentionally omitted — Google has ignored it since
+  // ~2009 and it becomes a footgun once pages drift from the list.
   authors: [{ name: 'Cards402', url: SITE_URL }],
   creator: 'Cards402',
   publisher: 'Cards402',
