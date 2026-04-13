@@ -53,7 +53,16 @@ async function handlePayment({
       `UPDATE orders SET vcc_job_id = ?, callback_nonce = ?, updated_at = ? WHERE id = ?`,
     ).run(vccJobId, callbackNonce, new Date().toISOString(), orderId);
 
-    await payCtxOrder(paymentUrl);
+    // Branch Stellar payment on what the agent paid us:
+    //   - XLM → forward as-is from treasury
+    //   - USDC → atomic PathPaymentStrictReceive (USDC→DEX→XLM→CTX)
+    // order.amount_usdc is the USDC amount the agent paid (the order's
+    // USD face value); it's our sendMax cap on the swap side of the
+    // path payment.
+    await payCtxOrder(paymentUrl, {
+      paymentAsset,
+      maxUsdc: order.amount_usdc,
+    });
     db.prepare(`UPDATE orders SET xlm_sent_at = ?, updated_at = ? WHERE id = ?`).run(
       new Date().toISOString(),
       new Date().toISOString(),
