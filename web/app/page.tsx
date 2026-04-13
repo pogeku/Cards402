@@ -6,7 +6,7 @@
 // maximum — restraint, not density.
 
 import Link from 'next/link';
-import { HeroConstellation } from '@/app/components/HeroConstellation';
+import { HeroScene, HeroCard } from '@/app/components/HeroCard';
 
 const agentOneLiner = `Read https://cards402.com/skill.md and set up
 this agent by running:
@@ -90,7 +90,9 @@ export default function Home() {
           overflow: 'hidden',
         }}
       >
-        <div className="radial-ink-glow" aria-hidden />
+        {/* Scene is a full-bleed backdrop painting starfield + conic
+            holographic wash + halo across the entire hero section. */}
+        <HeroScene />
         <div
           style={{
             maxWidth: 1180,
@@ -100,6 +102,7 @@ export default function Home() {
             gap: '3rem',
             alignItems: 'center',
             position: 'relative',
+            zIndex: 2,
           }}
           className="hero-grid"
         >
@@ -221,15 +224,10 @@ export default function Home() {
             </div>
           </div>
 
-          <div
-            style={{
-              position: 'relative',
-              aspectRatio: '600 / 440',
-              color: 'var(--fg)',
-            }}
-            className="hero-art"
-          >
-            <HeroConstellation />
+          {/* Card flows with the grid: right column on desktop,
+              wraps below the text on tablet + mobile. */}
+          <div className="hero-art">
+            <HeroCard />
           </div>
         </div>
       </section>
