@@ -24,8 +24,22 @@ jobs:
             set -e
             cd /opt/cards402
 
-            echo "=== Pulling latest ==="
-            git pull origin main
+            echo "=== Syncing to origin/main (fetch + hard reset + clean) ==="
+            # Strategy: prod is a pure mirror of origin/main. Anything edited
+            # or rsync'd onto prod outside the deploy pipeline is treated as
+            # cruft and removed. Earlier deploys used `git pull` which fails
+            # when untracked files accumulate (a previous rsync had landed
+            # the dashboard rewrite as untracked, and the subsequent pull
+            # refused to overwrite). fetch + reset + clean is idempotent and
+            # self-healing.
+            #
+            # SAFETY: .env files, *.db / *.db-wal / *.db-shm, and node_modules
+            # are all in .gitignore so `git clean -fd` skips them. If you
+            # need to keep something else under /opt/cards402 that isn't
+            # tracked, add it to .gitignore BEFORE the next deploy.
+            git fetch origin main
+            git reset --hard origin/main
+            git clean -fd
 
             echo "=== Root workspace (installs web + sdk) ==="
             npm ci
