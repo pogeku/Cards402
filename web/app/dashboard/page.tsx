@@ -55,6 +55,14 @@ const AGENT_STATE_LABELS: Record<string, string> = {
   active: 'Active',
 };
 
+interface NewKeyData {
+  id: string;
+  key: string;
+  webhook_secret: string;
+  label: string | null;
+  claim?: { code: string; expires_at: string; ttl_ms: number };
+}
+
 function AgentStatePill({ apiKey }: { apiKey: ApiKey }) {
   const state = apiKey.agent?.state ?? 'minted';
   const color = AGENT_STATE_COLORS[state] ?? AGENT_STATE_COLORS.minted;
@@ -269,12 +277,7 @@ function CreateKeyModal({
   onCreated,
 }: {
   onClose: () => void;
-  onCreated: (key: {
-    key: string;
-    webhook_secret: string;
-    id: string;
-    label: string | null;
-  }) => void;
+  onCreated: (key: NewKeyData) => void;
 }) {
   const [label, setLabel] = useState('');
   const [err, setErr] = useState('');
@@ -592,45 +595,237 @@ function EditKeyModal({
 
 // ── New Key Result Modal ─────────────────────────────────────────────────────
 
+// ── Live agent onboarding modal ──────────────────────────────────────────────
+// Opens when a new key is created and walks the operator through a live
+// stepper driven by the per-tenant SSE feed the parent is already running:
+//
+//   1. Waiting for handshake   — spinner + paste block with the claim code
+//   2. Claim redeemed          — agent CLI completed `cards402 onboard`
+//   3. Wallet ready            — wallet address reported, balance polling
+//   4. Awaiting deposit        — highlighted address + live balance
+//   5. Funded                  — ready for the first purchase
+//   6. Active                  — first delivered order recorded
+//
+// `liveKey` is the corresponding row from the parent's `keys` state.
+// Because the parent refetches on every SSE event, this prop reactively
+// updates every time the backend fires anything that touches the row.
+
 function NewKeyResult({
   data,
+  liveKey,
   onClose,
 }: {
-  data: {
-    key: string;
-    webhook_secret: string;
-    label: string | null;
-    claim?: { code: string; expires_at: string; ttl_ms: number };
-  };
+  data: NewKeyData;
+  liveKey: ApiKey | null;
   onClose: () => void;
 }) {
   const [copied, setCopied] = useState(false);
-  // Prefer the claim-based snippet if the backend returned one (new flow).
-  // The raw api key stays behind a reveal for power users who want to
-  // use the SDK without going through `cards402 onboard`.
-  const snippet = data.claim
-    ? [
-        'Read https://cards402.com/skill.md',
-        'and set up this agent by running:',
-        '',
-        `  npx cards402 onboard --claim ${data.claim.code}`,
-        '',
-        'That one command trades the code for a fresh api key, stores',
-        'it locally, creates a Stellar wallet, and registers with the',
-        'cards402 dashboard. The code is one-shot and expires in 10',
-        'minutes — mint a new one if it runs out.',
-      ].join('\n')
-    : [
-        'Read https://cards402.com/skill.md',
-        'and set up this agent with:',
-        `  key: ${data.key}`,
-        '  api_url: https://api.cards402.com/v1',
-      ].join('\n');
+  const [revealKey, setRevealKey] = useState(false);
+  const [horizonBalance, setHorizonBalance] = useState<{ xlm: string; usdc: string } | null>(null);
+
+  // Derive the current step from liveKey + horizon balance. Both are
+  // reactive inputs so the stepper advances automatically.
+  const agentState = liveKey?.agent?.state ?? 'minted';
+  const walletAddress = liveKey?.agent?.wallet_public_key ?? liveKey?.wallet_public_key ?? null;
+  const xlmNum = parseFloat(horizonBalance?.xlm ?? '0');
+  const usdcNum = parseFloat(horizonBalance?.usdc ?? '0');
+  const hasFunds = xlmNum >= 1 || usdcNum > 0;
+
+  type Step = 'waiting' | 'claimed' | 'wallet' | 'awaiting_deposit' | 'funded' | 'active';
+
+  let step: Step = 'waiting';
+  if (agentState === 'active') step = 'active';
+  else if (hasFunds && walletAddress) step = 'funded';
+  else if (agentState === 'awaiting_funding' && walletAddress) step = 'awaiting_deposit';
+  else if (walletAddress) step = 'wallet';
+  else if (agentState === 'initializing') step = 'claimed';
+
+  // Poll Horizon for live balance as soon as we know the wallet address.
+  // 5s interval — fast enough that funding shows up within the same
+  // breath the operator hits Send on their exchange.
+  useEffect(() => {
+    if (!walletAddress) return;
+    let cancelled = false;
+    async function tick() {
+      try {
+        const res = await fetch(`https://horizon.stellar.org/accounts/${walletAddress}`);
+        if (cancelled) return;
+        if (!res.ok) {
+          // Unactivated accounts 404 on Horizon — treat as 0/0 and keep polling.
+          setHorizonBalance({ xlm: '0', usdc: '0' });
+          return;
+        }
+        const payload = (await res.json()) as {
+          balances: Array<{
+            asset_type: string;
+            asset_code?: string;
+            asset_issuer?: string;
+            balance: string;
+          }>;
+        };
+        const balances = payload.balances ?? [];
+        const xlm = balances.find((b) => b.asset_type === 'native')?.balance ?? '0';
+        const usdc =
+          balances.find(
+            (b) =>
+              b.asset_code === 'USDC' &&
+              b.asset_issuer === 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+          )?.balance ?? '0';
+        setHorizonBalance({
+          xlm: parseFloat(xlm).toFixed(4),
+          usdc: parseFloat(usdc).toFixed(2),
+        });
+      } catch {
+        /* transient — next tick will retry */
+      }
+    }
+    tick();
+    const id = setInterval(tick, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [walletAddress]);
+
+  // Guard: the backend must return a claim code. If it's missing, the
+  // dashboard is running against a pre-claim backend — surface an
+  // error rather than silently falling back to pasting the raw key.
+  if (!data.claim) {
+    return (
+      <div
+        style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.85)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 200,
+        }}
+      >
+        <div
+          style={{
+            background: 'var(--bg)',
+            border: '1px solid #f87171',
+            borderRadius: 12,
+            padding: '2rem',
+            width: 520,
+            maxWidth: '92vw',
+          }}
+        >
+          <h3 style={{ color: '#f87171', marginTop: 0 }}>Backend too old</h3>
+          <p style={{ color: 'var(--muted)', fontSize: '0.875rem' }}>
+            The dashboard expected a one-time claim code in the create-key response but the backend
+            didn&apos;t return one. This usually means the server is running a version older than
+            the frontend. Refresh and try again; if it persists, check the deploy.
+          </p>
+          <button style={btnStyle('primary')} onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const snippet = [
+    'Read https://cards402.com/skill.md',
+    'and set up this agent by running:',
+    '',
+    `  npx cards402 onboard --claim ${data.claim.code}`,
+  ].join('\n');
 
   async function copy() {
     await navigator.clipboard.writeText(snippet);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
+  }
+
+  function Spinner() {
+    return (
+      <span
+        style={{
+          display: 'inline-block',
+          width: 12,
+          height: 12,
+          borderRadius: '50%',
+          border: '2px solid rgba(255,255,255,0.15)',
+          borderTopColor: 'var(--green)',
+          animation: 'spin 0.8s linear infinite',
+          marginRight: '0.5rem',
+          verticalAlign: 'middle',
+        }}
+      />
+    );
+  }
+
+  function StepRow({
+    state,
+    title,
+    detail,
+  }: {
+    state: 'pending' | 'active' | 'done';
+    title: string;
+    detail?: React.ReactNode;
+  }) {
+    const color =
+      state === 'done' ? 'var(--green)' : state === 'active' ? '#facc15' : 'var(--muted)';
+    return (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: '0.625rem',
+          padding: '0.5rem 0',
+          opacity: state === 'pending' ? 0.5 : 1,
+        }}
+      >
+        <span
+          style={{
+            marginTop: 4,
+            width: 8,
+            height: 8,
+            borderRadius: '50%',
+            background: color,
+            flexShrink: 0,
+            animation: state === 'active' ? 'pulse 2s ease-in-out infinite' : undefined,
+          }}
+        />
+        <div style={{ flex: 1 }}>
+          <div
+            style={{
+              fontSize: '0.8125rem',
+              fontFamily: 'var(--font-mono)',
+              color,
+              fontWeight: state === 'done' ? 400 : 600,
+            }}
+          >
+            {state === 'done' ? '✓ ' : ''}
+            {title}
+          </div>
+          {detail && (
+            <div style={{ color: 'var(--muted)', fontSize: '0.75rem', marginTop: '0.25rem' }}>
+              {detail}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const stepOrder: Step[] = [
+    'waiting',
+    'claimed',
+    'wallet',
+    'awaiting_deposit',
+    'funded',
+    'active',
+  ];
+  const stepIndex = stepOrder.indexOf(step);
+  function stepState(s: Step): 'pending' | 'active' | 'done' {
+    const i = stepOrder.indexOf(s);
+    if (i < stepIndex) return 'done';
+    if (i === stepIndex) return 'active';
+    return 'pending';
   }
 
   return (
@@ -643,6 +838,7 @@ function NewKeyResult({
         alignItems: 'center',
         justifyContent: 'center',
         zIndex: 200,
+        padding: '2rem',
       }}
     >
       <div
@@ -651,8 +847,10 @@ function NewKeyResult({
           border: '1px solid var(--green-border)',
           borderRadius: 12,
           padding: '2rem',
-          width: 620,
+          width: 640,
           maxWidth: '92vw',
+          maxHeight: '92vh',
+          overflowY: 'auto',
         }}
       >
         <div
@@ -676,9 +874,8 @@ function NewKeyResult({
             lineHeight: 1.55,
           }}
         >
-          {data.claim
-            ? 'Copy the whole block below and paste it to your agent. The one-time code expires in 10 minutes — the raw api key never leaves your dashboard.'
-            : 'The key is shown once. Copy the whole block below and paste it to your agent — it tells them how to set themselves up from scratch.'}
+          The claim code is one-shot and expires in 10 minutes. The raw api key never leaves your
+          dashboard — the agent&apos;s CLI trades the code for it over HTTPS.
         </p>
         <div style={{ position: 'relative' }}>
           <pre
@@ -718,9 +915,167 @@ function NewKeyResult({
             {copied ? 'Copied' : 'Copy'}
           </button>
         </div>
-        <div style={{ marginTop: '1.5rem', display: 'flex', justifyContent: 'flex-end' }}>
+
+        {/* Live progress stepper */}
+        <div
+          style={{
+            marginTop: '1.75rem',
+            padding: '1rem 1.125rem',
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+          }}
+        >
+          <div
+            style={{
+              fontSize: '0.7rem',
+              fontFamily: 'var(--font-mono)',
+              color: 'var(--muted)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.08em',
+              marginBottom: '0.5rem',
+            }}
+          >
+            {step === 'active'
+              ? 'Setup complete'
+              : step === 'funded'
+                ? 'Funded — ready to buy cards'
+                : 'Live setup progress'}
+          </div>
+
+          <StepRow
+            state={stepState('waiting')}
+            title={step === 'waiting' ? 'Waiting for agent handshake' : 'Waiting for agent'}
+            detail={
+              step === 'waiting' ? (
+                <span>
+                  <Spinner />
+                  Run the command above in your agent&apos;s terminal. The dashboard will update
+                  automatically as it progresses — nothing to refresh.
+                </span>
+              ) : null
+            }
+          />
+          <StepRow
+            state={stepState('claimed')}
+            title="Claim redeemed"
+            detail={
+              step === 'claimed' ? (
+                <span>
+                  <Spinner />
+                  Agent traded the claim code for an api key. Creating OWS wallet…
+                </span>
+              ) : stepIndex > 1 ? (
+                'Agent exchanged the claim for an api key.'
+              ) : null
+            }
+          />
+          <StepRow
+            state={stepState('wallet')}
+            title="Wallet created"
+            detail={
+              walletAddress ? (
+                <code
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: '0.7rem',
+                    wordBreak: 'break-all',
+                  }}
+                >
+                  {walletAddress}
+                </code>
+              ) : null
+            }
+          />
+          <StepRow
+            state={stepState('awaiting_deposit')}
+            title="Awaiting deposit"
+            detail={
+              step === 'awaiting_deposit' ? (
+                <>
+                  <div>
+                    <Spinner />
+                    Polling Horizon every 5s. Send XLM or USDC to the address above to continue.
+                  </div>
+                  {horizonBalance && (
+                    <div style={{ marginTop: '0.375rem', fontFamily: 'var(--font-mono)' }}>
+                      balance: {horizonBalance.xlm} XLM · {horizonBalance.usdc} USDC
+                    </div>
+                  )}
+                </>
+              ) : null
+            }
+          />
+          <StepRow
+            state={stepState('funded')}
+            title="Funded"
+            detail={
+              horizonBalance && stepIndex >= stepOrder.indexOf('funded') ? (
+                <span style={{ fontFamily: 'var(--font-mono)' }}>
+                  {horizonBalance.xlm} XLM · {horizonBalance.usdc} USDC
+                </span>
+              ) : null
+            }
+          />
+          <StepRow
+            state={stepState('active')}
+            title="Active — first card delivered"
+            detail={
+              liveKey?.agent?.detail && stepIndex === stepOrder.indexOf('active')
+                ? liveKey.agent.detail
+                : null
+            }
+          />
+        </div>
+
+        <details
+          style={{
+            marginTop: '1.25rem',
+            color: 'var(--muted)',
+            fontSize: '0.75rem',
+          }}
+        >
+          <summary style={{ cursor: 'pointer', userSelect: 'none' }}>
+            Advanced — reveal raw api key (only if you need to bypass the CLI onboard flow)
+          </summary>
+          <p style={{ marginTop: '0.5rem' }}>
+            Most operators should never need this. The raw api key is only useful if you&apos;re
+            wiring the SDK into an existing app that manages its own wallet — and in that case you
+            should set <code>CARDS402_API_KEY</code> manually rather than pasting it into an
+            agent&apos;s chat.
+          </p>
+          <button onClick={() => setRevealKey((r) => !r)} style={btnStyle('ghost')}>
+            {revealKey ? 'Hide raw key' : 'Reveal raw key'}
+          </button>
+          {revealKey && (
+            <pre
+              style={{
+                background: '#000',
+                border: '1px solid #333',
+                borderRadius: 6,
+                padding: '0.625rem 0.75rem',
+                fontSize: '0.7rem',
+                wordBreak: 'break-all',
+                margin: '0.5rem 0 0',
+                fontFamily: 'var(--font-mono)',
+                color: '#fca5a5',
+              }}
+            >
+              {data.key}
+            </pre>
+          )}
+        </details>
+
+        <div
+          style={{
+            marginTop: '1.5rem',
+            display: 'flex',
+            justifyContent: 'flex-end',
+            gap: '0.75rem',
+          }}
+        >
           <button style={btnStyle('primary')} onClick={onClose}>
-            Done
+            {step === 'active' || step === 'funded' ? 'Done' : 'Close'}
           </button>
         </div>
       </div>
@@ -752,11 +1107,7 @@ export default function DashboardPage() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [editKey, setEditKey] = useState<ApiKey | null>(null);
-  const [newKeyResult, setNewKeyResult] = useState<{
-    key: string;
-    webhook_secret: string;
-    label: string | null;
-  } | null>(null);
+  const [newKeyResult, setNewKeyResult] = useState<NewKeyData | null>(null);
 
   const fetchAll = useCallback(async () => {
     if (!authed) return;
@@ -1663,7 +2014,13 @@ export default function DashboardPage() {
           }}
         />
       )}
-      {newKeyResult && <NewKeyResult data={newKeyResult} onClose={() => setNewKeyResult(null)} />}
+      {newKeyResult && (
+        <NewKeyResult
+          data={newKeyResult}
+          liveKey={keys.find((k) => k.id === newKeyResult.id) ?? null}
+          onClose={() => setNewKeyResult(null)}
+        />
+      )}
     </div>
   );
 }

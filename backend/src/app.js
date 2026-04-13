@@ -197,10 +197,31 @@ app.post('/v1/agent/claim', claimLimiter, (req, res) => {
     db.prepare(`SELECT id, label FROM api_keys WHERE id = ?`).get(row.api_key_id)
   );
 
+  // Flip the key into 'initializing' state the instant the claim is
+  // redeemed, so the dashboard's modal + state pill progress even if the
+  // agent's CLI hasn't yet gotten to its own reportStatus call (network
+  // lag, CLI crash between claim and wallet creation, etc.).
+  db.prepare(
+    `UPDATE api_keys
+     SET agent_state = 'initializing',
+         agent_state_at = @at,
+         agent_state_detail = 'claim redeemed'
+     WHERE id = @id`,
+  ).run({ id: row.api_key_id, at: now });
+
+  // Emit both a generic claim event (for audit) and the typed
+  // agent_state event (for the SSE subscribers filtering by type).
   bizEvent('agent.claimed', {
     api_key_id: row.api_key_id,
     label: key?.label ?? null,
     ip,
+  });
+  const { emit: emitBusEvent } = require('./lib/event-bus');
+  emitBusEvent('agent_state', {
+    api_key_id: row.api_key_id,
+    state: 'initializing',
+    wallet_public_key: null,
+    detail: 'claim redeemed',
   });
 
   res.json({
