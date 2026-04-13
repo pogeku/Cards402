@@ -460,6 +460,31 @@ function expireApprovalRequests() {
   }
 }
 
+// Retention sweep — purge sealed card columns after delivered orders age
+// out. Adversarial audit F1: even sealed, the longer card data sits at
+// rest the larger the at-rest blast radius. vcc already does its own
+// retention sweep on the encrypted upstream copy; this is the cards402
+// mirror so both stores converge on "delete the PAN once the agent
+// no longer needs it from us".
+//
+// Default retention: 30 days. Tuned via CARD_RETENTION_DAYS. Card_brand
+// stays — it isn't sensitive and is useful for analytics.
+function purgeOldCards() {
+  const days = parseInt(process.env.CARD_RETENTION_DAYS || '30', 10);
+  const result = db
+    .prepare(
+      `
+    UPDATE orders
+    SET card_number = NULL, card_cvv = NULL, card_expiry = NULL
+    WHERE status = 'delivered'
+      AND card_number IS NOT NULL
+      AND datetime(updated_at) < datetime('now', ?)
+  `,
+    )
+    .run(`-${days} days`);
+  if (result.changes > 0) log(`purged card data on ${result.changes} delivered order(s)`);
+}
+
 // Clean up expired idempotency keys older than 24 hours
 function pruneIdempotencyKeys() {
   const result = db
@@ -553,6 +578,7 @@ async function runJobs() {
     await recoverStuckOrders();
     await retryWebhooks();
     pruneIdempotencyKeys();
+    purgeOldCards();
   } catch (err) {
     console.error(`[jobs] unhandled error: ${err.message}`);
   }
@@ -608,4 +634,5 @@ module.exports = {
   recoverStuckOrders,
   retryWebhooks,
   pruneIdempotencyKeys,
+  purgeOldCards,
 };

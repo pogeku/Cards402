@@ -304,14 +304,23 @@ router.post('/', orderCreateLimiter, async (req, res) => {
     return res.status(status).json(body);
   }
 
-  // Sandbox mode — return a fake card instantly, skip VCC and Stellar entirely
+  // Sandbox mode — return a fake card instantly, skip VCC and Stellar entirely.
+  // F1: even sandbox writes go through sealCard so the storage shape is
+  // uniform with prod and the read path doesn't have to branch.
   if (req.apiKey.mode === 'sandbox') {
+    const { sealCard } = require('../lib/card-vault');
+    const sealed = sealCard({
+      number: '4111111111111111',
+      cvv: '123',
+      expiry: '12/99',
+      brand: 'Visa',
+    });
     db.prepare(
       `
       INSERT INTO orders (id, status, amount_usdc, api_key_id, webhook_url, metadata, request_id,
                           card_number, card_cvv, card_expiry, card_brand)
       VALUES (@id, 'delivered', @amount_usdc, @api_key_id, @webhook_url, @metadata, @request_id,
-              '4111111111111111', '123', '12/99', 'Visa')
+              @num, @cvv, @expiry, @brand)
     `,
     ).run({
       id,
@@ -320,6 +329,10 @@ router.post('/', orderCreateLimiter, async (req, res) => {
       webhook_url: webhook_url || null,
       metadata: metadataStr,
       request_id: req.id || null,
+      num: sealed.number,
+      cvv: sealed.cvv,
+      expiry: sealed.expiry,
+      brand: sealed.brand,
     });
 
     const sandboxBody = {
@@ -467,12 +480,10 @@ function buildOrderResponse(order) {
   }
 
   if (order.status === 'delivered') {
-    response.card = {
-      number: order.card_number,
-      cvv: order.card_cvv,
-      expiry: order.card_expiry,
-      brand: order.card_brand,
-    };
+    // F1: card_number/cvv/expiry are sealed at rest. openCard pass-throughs
+    // plaintext rows during the upgrade window so legacy orders still work.
+    const { openCard } = require('../lib/card-vault');
+    response.card = openCard(order);
   }
 
   if (order.status === 'expired') {

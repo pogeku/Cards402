@@ -70,6 +70,10 @@ router.get('/orders/:id/card', requireCardReveal, (req, res) => {
   if (!order.card_number) {
     return res.status(409).json({ error: 'no_card', message: 'Order has no card data' });
   }
+  // F1: card columns are sealed at rest. openCard handles both sealed and
+  // legacy plaintext rows transparently.
+  const { openCard } = require('../lib/card-vault');
+  const card = openCard(order);
 
   // Audit the reveal — actor, target, IP, UA. Resource_type = 'card_reveal'
   // makes filtering trivial in the audit log search later.
@@ -100,12 +104,7 @@ router.get('/orders/:id/card', requireCardReveal, (req, res) => {
 
   res.json({
     order_id: order.id,
-    card: {
-      number: order.card_number,
-      cvv: order.card_cvv,
-      expiry: order.card_expiry,
-      brand: order.card_brand,
-    },
+    card,
   });
 });
 

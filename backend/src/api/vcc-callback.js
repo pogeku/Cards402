@@ -7,6 +7,7 @@ const { Router } = require('express');
 const db = require('../db');
 const { enqueueWebhook, scheduleRefund } = require('../fulfillment');
 const { verifyVccSignature } = require('../vcc-client');
+const { sealCard } = require('../lib/card-vault');
 const { event: bizEvent } = require('../lib/logger');
 
 const router = Router();
@@ -130,6 +131,11 @@ router.post('/', (req, res) => {
   }
 
   if (status === 'fulfilled' && card) {
+    // F1: seal PAN/CVV/expiry before writing. The seal helper throws in
+    // production when CARDS402_SECRET_BOX_KEY is unset (F5 enforced it at
+    // env validation time, so this is belt-and-braces). card_brand stays
+    // plaintext — Visa/Mastercard isn't sensitive.
+    const sealed = sealCard(card);
     const claimed = db
       .prepare(
         `
@@ -141,10 +147,10 @@ router.post('/', (req, res) => {
       )
       .run({
         id: order_id,
-        num: card.number,
-        cvv: card.cvv,
-        expiry: card.expiry,
-        brand: card.brand || null,
+        num: sealed.number,
+        cvv: sealed.cvv,
+        expiry: sealed.expiry,
+        brand: sealed.brand,
         now,
       });
     if (claimed.changes === 0) {

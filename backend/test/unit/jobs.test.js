@@ -10,7 +10,12 @@ const { v4: uuidv4 } = require('uuid');
 const { db, resetDb } = require('../helpers/app');
 
 // Load the jobs module and injectable modules for mocking
-const { expireStaleOrders, recoverStuckOrders, pruneIdempotencyKeys } = require('../../src/jobs');
+const {
+  expireStaleOrders,
+  recoverStuckOrders,
+  pruneIdempotencyKeys,
+  purgeOldCards,
+} = require('../../src/jobs');
 const vccClient = require('../../src/vcc-client');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -214,6 +219,48 @@ describe('recoverStuckOrders', () => {
       db.prepare(`SELECT status FROM orders WHERE id = ?`).get(id2).status,
       'refund_pending',
     );
+  });
+});
+
+// ── purgeOldCards (audit F1) ──────────────────────────────────────────────────
+
+describe('purgeOldCards', () => {
+  beforeEach(() => resetDb());
+
+  function seedDeliveredOrder({ daysAgo = 0 } = {}) {
+    const id = uuidv4();
+    const ts = new Date(Date.now() - daysAgo * 86_400_000)
+      .toISOString()
+      .replace('T', ' ')
+      .slice(0, 19);
+    db.prepare(
+      `
+      INSERT INTO orders
+        (id, status, amount_usdc, payment_asset, api_key_id, card_number, card_cvv, card_expiry, card_brand, created_at, updated_at)
+      VALUES (?, 'delivered', '10.00', 'usdc', NULL, '4111111111111111', '123', '12/28', 'Visa', ?, ?)
+    `,
+    ).run(id, ts, ts);
+    return id;
+  }
+
+  it('purges card_number/cvv/expiry on delivered orders older than the retention window', () => {
+    const oldId = seedDeliveredOrder({ daysAgo: 60 });
+    purgeOldCards();
+    const row = db
+      .prepare(`SELECT card_number, card_cvv, card_expiry, card_brand FROM orders WHERE id = ?`)
+      .get(oldId);
+    assert.equal(row.card_number, null);
+    assert.equal(row.card_cvv, null);
+    assert.equal(row.card_expiry, null);
+    // Brand stays — it's not sensitive and is useful for analytics.
+    assert.equal(row.card_brand, 'Visa');
+  });
+
+  it('keeps card data on delivered orders inside the retention window', () => {
+    const recentId = seedDeliveredOrder({ daysAgo: 5 });
+    purgeOldCards();
+    const row = db.prepare(`SELECT card_number FROM orders WHERE id = ?`).get(recentId);
+    assert.equal(row.card_number, '4111111111111111');
   });
 });
 
