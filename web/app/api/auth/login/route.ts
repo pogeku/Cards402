@@ -16,7 +16,13 @@ export async function POST(req: NextRequest) {
 
   const upstream = await fetch(`${getBackendBaseUrl()}/auth/login`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      // The backend enforces HTTPS via x-forwarded-proto; our upstream
+      // fetch is plain HTTP (localhost:4000), so set it explicitly so
+      // the backend sees the request as originating over TLS.
+      'X-Forwarded-Proto': 'https',
+    },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(15000),
   });

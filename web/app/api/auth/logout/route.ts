@@ -15,7 +15,10 @@ export async function POST(_req: NextRequest) {
     // Best-effort — backend logout failure should not block the client logout
     await fetch(`${getBackendBaseUrl()}/auth/logout`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${session.token}` },
+      headers: {
+        Authorization: `Bearer ${session.token}`,
+        'X-Forwarded-Proto': 'https',
+      },
       signal: AbortSignal.timeout(10000),
     }).catch(() => {});
   }

@@ -30,7 +30,10 @@ export async function POST(req: NextRequest) {
 
   const upstream = await fetch(`${getBackendBaseUrl()}/auth/verify`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Forwarded-Proto': 'https',
+    },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(15000),
   });

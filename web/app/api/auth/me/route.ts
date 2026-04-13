@@ -16,7 +16,10 @@ export async function GET(_req: NextRequest) {
   }
 
   const upstream = await fetch(`${getBackendBaseUrl()}/auth/me`, {
-    headers: { Authorization: `Bearer ${session.token}` },
+    headers: {
+      Authorization: `Bearer ${session.token}`,
+      'X-Forwarded-Proto': 'https',
+    },
     signal: AbortSignal.timeout(10000),
   });
 
