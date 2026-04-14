@@ -194,6 +194,54 @@ this into a real roadmap later.
 - **Internationalisation.** English-only today. Spanish, Portuguese, and
   Japanese would cover most of the agent-developer demand we see.
 
+## Surfaces added during loop iteration 7 (backlog extensions)
+
+### Documentation hardening
+
+- **OpenAPI spec still top-of-mind.** Iterations 1–7 have found
+  19 distinct drift bugs between /docs and the real
+  sdk/backend. Pattern remains: hand-written docs always drift
+  against code, even when both are edited by the same person
+  in the same week. Rest of the backlog assumes this item
+  eventually ships.
+- **docs + sdk + backend compile-tested together in CI.** The
+  hardest class of bug caught this iteration was "the docs
+  document a 201 response, but the backend can also return a
+  202 with a completely different shape on the approval path".
+  An integration test that hits both branches with the SDK
+  error classes matched against the docs table would have
+  caught it instantly.
+- **Tests for SDK error type dispatch.** sdk/src/errors.ts has
+  a parseApiError switch that maps HTTP bodies to typed errors.
+  A test that POSTs every documented error code from the docs
+  table through parseApiError and asserts the result is the
+  matching subclass would verify the code/class mapping stays
+  in sync with docs.
+
+### Backend observability for agents
+
+- **`GET /v1/policy/check` is real but undocumented.** Agents
+  with approval-gated policies could use it to preflight an
+  amount before burning a rate-limit slot on POST /v1/orders
+  that returns 202. Would pair well with a new SDK method
+  \`client.checkPolicy(amountUsdc)\`.
+- **Surface \`refund_pending\` as a public phase** or document
+  that the public "failed" phase can linger for minutes-to-
+  hours before transitioning to "refunded" when the refund
+  settles. Today the docs imply it's instant.
+
+### Content
+
+- **Agent framework quickstarts.** Beyond the raw SDK,
+  targeted quickstarts for LangChain, CrewAI, autogen, Claude
+  Agent SDK, and the Claude Desktop MCP host would eat the
+  first-week integration curve for each framework.
+- **Receipt format spec.** When an agent completes a card
+  purchase, a stable "receipt" structure it can cite in its
+  own output (back to the human operator, or to another agent)
+  would be genuinely useful. ItemList JSON-LD + our own
+  thin wrapper.
+
 ## Surfaces added during loop iteration 5 (backlog extensions)
 
 ### More auto-sync candidates
