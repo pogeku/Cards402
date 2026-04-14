@@ -5,7 +5,7 @@
 // isn't available (old browsers, restrictive permissions policy) —
 // the button falls back to selecting the text.
 
-import { useState, type CSSProperties } from 'react';
+import { useRef, useState, type CSSProperties } from 'react';
 
 export function CopyCodeBlock({
   label,
@@ -17,6 +17,7 @@ export function CopyCodeBlock({
   maxHeight?: number;
 }) {
   const [copied, setCopied] = useState(false);
+  const preRef = useRef<HTMLPreElement>(null);
 
   async function copy() {
     try {
@@ -24,10 +25,11 @@ export function CopyCodeBlock({
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1600);
     } catch {
-      // Clipboard API unavailable — select the pre so the user can
-      // still ⌘C it manually.
+      // Clipboard API unavailable — select the <pre> so the user can
+      // still ⌘C it manually. Uses a ref rather than a random DOM id
+      // (the old getElementById-with-random-id path never matched).
       const sel = window.getSelection();
-      const pre = document.getElementById('copy-target-' + Math.random());
+      const pre = preRef.current;
       if (sel && pre) {
         const range = document.createRange();
         range.selectNodeContents(pre);
@@ -60,7 +62,7 @@ export function CopyCodeBlock({
         </div>
       )}
       <div style={{ position: 'relative' }}>
-        <pre style={preStyle}>
+        <pre ref={preRef} style={preStyle}>
           <code>{children}</code>
         </pre>
         <button
