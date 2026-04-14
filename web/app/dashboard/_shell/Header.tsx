@@ -161,6 +161,11 @@ export function Header() {
           title={
             pendingApprovals ? `${pendingApprovals} pending approvals` : 'No pending approvals'
           }
+          aria-label={
+            pendingApprovals
+              ? `Notifications — ${pendingApprovals} pending approvals`
+              : 'Notifications'
+          }
           aria-haspopup="true"
           aria-expanded={bellOpen}
           style={{
