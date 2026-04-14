@@ -20,24 +20,36 @@ export const metadata: Metadata = {
   }),
 };
 
-// Upcoming pieces, ordered by when they'd plausibly ship. Labelled as
-// drafts / planned until one is actually published. The layout is the
-// same shell we'll use when there are real posts, so swapping this
-// over will be content-only.
-const PIPELINE = [
+// Published posts (the few that are live) followed by the pipeline
+// of drafts. Each entry has a `slug` when it's shipped, in which
+// case the title links out to the full post; drafts leave `slug`
+// undefined and render as plain rows.
+type Post = {
+  date: string;
+  title: string;
+  excerpt: string;
+  tags: string[];
+  slug?: string;
+};
+
+const PUBLISHED: Post[] = [
+  {
+    date: '2026-04-14',
+    slug: 'anatomy-of-a-cards402-order',
+    title: 'Anatomy of a Cards402 order',
+    excerpt:
+      'Every millisecond of the 33-second path from agent.purchaseCard() to PAN-in-hand. Payment confirmation, Stage 1 scrape, Stage 2 fulfilment, the SSE stream, and the failure modes we found along the way.',
+    tags: ['engineering', 'fulfilment'],
+  },
+];
+
+const PIPELINE: Post[] = [
   {
     date: 'Coming soon',
     title: 'How we built non-custodial card issuance on Soroban',
     excerpt:
       'Architecture walkthrough of the Cards402 receiver contract, the Stellar watcher, and the fulfilment pipeline. Why agents pay the contract directly and what it takes to keep the backend from ever touching a customer wallet.',
     tags: ['architecture', 'stellar'],
-  },
-  {
-    date: 'Coming soon',
-    title: 'Anatomy of a Cards402 order',
-    excerpt:
-      'Every millisecond of the 33-second path from agent.purchaseCard() to PAN-in-hand. Payment confirmation, Stage 1 scrape, Stage 2 fulfilment, the SSE stream, and all the places it can (and has) failed.',
-    tags: ['engineering', 'fulfilment'],
   },
   {
     date: 'Coming soon',
@@ -62,70 +74,115 @@ export default function BlogIndexPage() {
         eyebrow="Blog"
         title="Engineering honest writing from the"
         accent="team"
-        intro="We don't do content marketing. When we publish, it's because we built something interesting or shipped something worth understanding. The queue below is what we're working on — nothing is up yet, but when the first post lands it'll show here and the RSS feed will light up."
+        intro="We don’t do content marketing. When we publish, it’s because we built something interesting or shipped something worth understanding. Every post cross-posts to the changelog RSS."
       />
 
-      {/* Coming-soon notice */}
-      <section style={{ padding: '1rem 1.35rem 2.5rem' }}>
+      {/* Published posts */}
+      <PageSection eyebrow="Published" title="Posts.">
         <div
           style={{
-            maxWidth: 1180,
-            margin: '0 auto',
-            padding: '1.5rem 1.85rem',
-            background: 'var(--yellow-muted)',
-            border: '1px solid var(--yellow-border)',
-            borderRadius: 12,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '1rem',
-            flexWrap: 'wrap',
+            display: 'grid',
+            gap: '0',
+            borderTop: '1px solid var(--border)',
           }}
         >
-          <span
-            className="pulse-green"
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: '50%',
-              background: 'var(--yellow)',
-              flexShrink: 0,
-            }}
-          />
-          <div style={{ flex: 1, minWidth: 240 }}>
-            <div
-              className="type-eyebrow"
-              style={{ fontSize: '0.58rem', marginBottom: '0.3rem', color: 'var(--yellow)' }}
-            >
-              In draft
-            </div>
-            <div
+          {PUBLISHED.map((p) => (
+            <article
+              key={p.title}
               style={{
-                fontFamily: 'var(--font-body)',
-                fontSize: '0.88rem',
-                color: 'var(--fg)',
+                padding: '2rem 0',
+                borderBottom: '1px solid var(--border)',
+                display: 'grid',
+                gridTemplateColumns: 'minmax(110px, 130px) minmax(0, 1fr)',
+                gap: '2rem',
+                alignItems: 'baseline',
               }}
+              className="blog-pipeline-row"
             >
-              The pipeline below lists posts in progress. Subscribe to the changelog RSS —
-              we&apos;ll cross-post every publication there.
-            </div>
-          </div>
-          <Link
-            href="/changelog/feed.xml"
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.72rem',
-              color: 'var(--fg)',
-              textDecoration: 'none',
-              padding: '0.55rem 0.95rem',
-              borderRadius: 999,
-              border: '1px solid var(--border-strong)',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            RSS →
-          </Link>
+              <div
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '0.68rem',
+                  color: 'var(--fg-dim)',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.07em',
+                }}
+              >
+                <time dateTime={p.date}>
+                  {new Date(p.date).toLocaleDateString('en-GB', {
+                    day: '2-digit',
+                    month: 'short',
+                    year: 'numeric',
+                  })}
+                </time>
+              </div>
+              <div>
+                <h2
+                  style={{
+                    fontFamily: 'var(--font-display)',
+                    fontSize: 'clamp(1.3rem, 2vw + 0.3rem, 1.8rem)',
+                    fontWeight: 500,
+                    color: 'var(--fg)',
+                    margin: '0 0 0.7rem',
+                    letterSpacing: '-0.02em',
+                    lineHeight: 1.15,
+                  }}
+                >
+                  <Link
+                    href={`/blog/${p.slug}`}
+                    style={{
+                      color: 'var(--fg)',
+                      textDecoration: 'none',
+                      transition: 'color 0.3s var(--ease-out)',
+                    }}
+                    className="blog-post-title"
+                  >
+                    {p.title} →
+                  </Link>
+                </h2>
+                <p
+                  style={{
+                    fontFamily: 'var(--font-body)',
+                    fontSize: '0.9rem',
+                    color: 'var(--fg-muted)',
+                    lineHeight: 1.68,
+                    margin: '0 0 0.85rem',
+                    maxWidth: 620,
+                  }}
+                >
+                  {p.excerpt}
+                </p>
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: '0.4rem',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  {p.tags.map((t) => (
+                    <span
+                      key={t}
+                      style={{
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: '0.6rem',
+                        padding: '0.2rem 0.55rem',
+                        borderRadius: 999,
+                        color: 'var(--fg-dim)',
+                        background: 'var(--surface)',
+                        border: '1px solid var(--border)',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.06em',
+                      }}
+                    >
+                      {t}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </article>
+          ))}
         </div>
-      </section>
+      </PageSection>
 
       {/* Pipeline */}
       <PageSection eyebrow="Pipeline" title="What's on deck.">
@@ -267,6 +324,9 @@ export default function BlogIndexPage() {
       </section>
 
       <style>{`
+        .blog-post-title:hover {
+          color: var(--green);
+        }
         @media (max-width: 720px) {
           .blog-pipeline-row {
             grid-template-columns: minmax(0, 1fr) !important;

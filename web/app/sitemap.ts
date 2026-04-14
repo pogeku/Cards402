@@ -18,6 +18,11 @@ const ROUTES: Array<{
   { path: '/security', changeFrequency: 'monthly', priority: 0.8 },
   { path: '/status', changeFrequency: 'hourly', priority: 0.75 },
   { path: '/blog', changeFrequency: 'weekly', priority: 0.75 },
+  {
+    path: '/blog/anatomy-of-a-cards402-order',
+    changeFrequency: 'monthly',
+    priority: 0.7,
+  },
   { path: '/changelog', changeFrequency: 'weekly', priority: 0.7 },
   { path: '/company', changeFrequency: 'monthly', priority: 0.7 },
   { path: '/careers', changeFrequency: 'weekly', priority: 0.7 },

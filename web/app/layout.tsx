@@ -102,6 +102,15 @@ export const metadata: Metadata = {
       'max-snippet': -1,
     },
   },
+  // Search-engine verification tokens. Drop real values when the
+  // corresponding properties are registered in Google Search Console
+  // / Bing Webmaster Tools / Yandex etc. Empty strings are omitted
+  // by Next.js so leaving them undefined here is fine.
+  verification: {
+    // google: 'paste Search Console HTML-tag token',
+    // yandex: 'paste Yandex Webmaster token',
+    // other: { 'msvalidate.01': 'paste Bing Webmaster token' },
+  },
   category: 'technology',
 };
 
