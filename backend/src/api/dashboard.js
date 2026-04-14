@@ -672,18 +672,51 @@ router.post(
 
     const now = new Date().toISOString();
     const decisionNote = shortString(req.body.note, 1000);
-    db.prepare(
-      `UPDATE approval_requests SET status = 'approved', decided_at = ?, decided_by = ?, decision_note = ? WHERE id = ?`,
-    ).run(now, req.user.email, decisionNote, req.params.id);
-    db.prepare(
-      `
-    UPDATE orders
-    SET status = 'pending_payment',
-        vcc_payment_json = ?,
-        updated_at = ?
-    WHERE id = ?
-  `,
-    ).run(JSON.stringify(contractPayment), now, approval.order_id);
+
+    // Atomic compare-and-swap on BOTH rows. The first UPDATE guards
+    // against the expireApprovalRequests job racing the approve click
+    // between the SELECT at line 646 and here (between the async
+    // usdToXlm call the window is wide enough to matter). The second
+    // UPDATE guards against operating on an order that the expiry job
+    // already flipped to 'rejected'. If either guard fails we bail
+    // out with 410 Gone — the caller should refresh the approval
+    // list.
+    const approvalChanged = db
+      .prepare(
+        `UPDATE approval_requests
+         SET status = 'approved', decided_at = ?, decided_by = ?, decision_note = ?
+         WHERE id = ? AND status = 'pending' AND datetime(expires_at) >= datetime('now')`,
+      )
+      .run(now, req.user.email, decisionNote, req.params.id);
+    if (approvalChanged.changes === 0) {
+      return res.status(410).json({
+        error: 'approval_expired_or_decided',
+        message:
+          'Approval could not be finalised — it may have just expired or been decided by another operator.',
+      });
+    }
+    const orderChanged = db
+      .prepare(
+        `UPDATE orders
+         SET status = 'pending_payment',
+             vcc_payment_json = ?,
+             updated_at = ?
+         WHERE id = ? AND status = 'awaiting_approval'`,
+      )
+      .run(JSON.stringify(contractPayment), now, approval.order_id);
+    if (orderChanged.changes === 0) {
+      // Approval row moved to 'approved' but the order is no longer
+      // 'awaiting_approval' — shouldn't happen under normal flows,
+      // but log it and return a 409 so the operator can investigate.
+      bizEvent('approval.order_state_drift', {
+        approval_id: req.params.id,
+        order_id: approval.order_id,
+      });
+      return res.status(409).json({
+        error: 'order_state_drift',
+        message: 'Approval approved but order is no longer in awaiting_approval state.',
+      });
+    }
     recordDecision(
       approval.api_key_id,
       approval.order_id,
@@ -740,14 +773,25 @@ router.post('/approval-requests/:id/reject', requirePermission('approval:decide'
 
   const now = new Date().toISOString();
   const note = shortString(req.body.note, 1000) || 'Rejected';
+  // Atomic compare-and-swap: only flip 'pending' → 'rejected'. Guards
+  // against the expireApprovalRequests job racing us to 'expired'.
+  const approvalChanged = db
+    .prepare(
+      `UPDATE approval_requests
+       SET status = 'rejected', decided_at = ?, decided_by = ?, decision_note = ?
+       WHERE id = ? AND status = 'pending'`,
+    )
+    .run(now, req.user.email, note, req.params.id);
+  if (approvalChanged.changes === 0) {
+    return res.status(409).json({
+      error: 'already_decided',
+      message: 'Approval could not be rejected — it may have just been decided or expired.',
+    });
+  }
   db.prepare(
-    `UPDATE approval_requests SET status = 'rejected', decided_at = ?, decided_by = ?, decision_note = ? WHERE id = ?`,
-  ).run(now, req.user.email, note, req.params.id);
-  db.prepare(`UPDATE orders SET status = 'rejected', error = ?, updated_at = ? WHERE id = ?`).run(
-    note,
-    now,
-    approval.order_id,
-  );
+    `UPDATE orders SET status = 'rejected', error = ?, updated_at = ?
+     WHERE id = ? AND status = 'awaiting_approval'`,
+  ).run(note, now, approval.order_id);
   recordDecision(
     approval.api_key_id,
     approval.order_id,

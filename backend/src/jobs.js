@@ -468,19 +468,25 @@ function expireApprovalRequests() {
 
   const now = new Date().toISOString();
   for (const approval of expired) {
+    // Atomic compare-and-swap: only flip 'pending' → 'expired'. If an
+    // operator raced us to 'approved' or 'rejected' between our SELECT
+    // above and this UPDATE, leave their decision alone and skip the
+    // order-state flip below.
+    const approvalChanged = db
+      .prepare(
+        `UPDATE approval_requests
+         SET status = 'expired', decided_at = ?
+         WHERE id = ? AND status = 'pending'`,
+      )
+      .run(now, approval.id);
+    if (approvalChanged.changes === 0) {
+      log(`  approval ${approval.id.slice(0, 8)} decided by operator in-flight — skipping expiry`);
+      continue;
+    }
     db.prepare(
-      `
-      UPDATE approval_requests
-      SET status = 'expired', decided_at = ?
-      WHERE id = ?
-    `,
-    ).run(now, approval.id);
-    db.prepare(
-      `
-      UPDATE orders
-      SET status = 'rejected', error = ?, updated_at = ?
-      WHERE id = ?
-    `,
+      `UPDATE orders
+       SET status = 'rejected', error = ?, updated_at = ?
+       WHERE id = ? AND status = 'awaiting_approval'`,
     ).run(
       'Approval request expired — owner did not respond within 2 hours',
       now,
