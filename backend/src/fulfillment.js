@@ -161,6 +161,14 @@ async function fireWebhook(url, payload, webhookSecret, _log) {
       headers,
       body,
       signal: AbortSignal.timeout(10000),
+      // Refuse to follow redirects. assertSafeUrl() validates the
+      // ORIGINAL hostname against the private-IP blocklist, but
+      // Node's fetch follows 3xx responses by default — so a
+      // tenant-controlled public HTTPS endpoint could return a
+      // 307 to http://127.0.0.1:4000/... or the cloud metadata
+      // endpoint and we'd happily follow. 'error' aborts the
+      // fetch on any 3xx response, closing the redirect SSRF hole.
+      redirect: 'error',
     });
     responseStatus = res.status;
     try {
