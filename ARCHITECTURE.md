@@ -102,7 +102,7 @@ cards402/
 
 ### Steps
 
-1. **Agent creates an order.** `POST /v1/orders` with `{ amount_usdc, payment_asset, webhook_url? }` and an `Idempotency-Key` header. cards402 validates the request, evaluates the policy engine, and either:
+1. **Agent creates an order.** `POST /v1/orders` with `{ amount_usdc, webhook_url?, metadata? }` and an `Idempotency-Key` header. Note: asset choice happens at _payment_ time, not creation time — the response includes both a USDC quote and an XLM quote, and the agent picks which one to pay by calling `pay_usdc` or `pay_xlm` on the receiver contract. cards402 validates the request, evaluates the policy engine, and either:
    - returns a Soroban `contractPayment` response `{ type: 'soroban_contract', contract_id, order_id, usdc, xlm }` and an order in `pending_payment`; or
    - returns 202 with `phase: 'awaiting_approval'` and creates an approval request for the dashboard owner to decide within 2 hours.
 2. **Agent pays the contract.** Using the SDK's `payViaContract` / `payViaContractOWS`, the agent builds a Soroban transaction invoking `pay_usdc(from, amount_i128, order_id_bytes)` (or `pay_xlm`) on the receiver contract, signs, simulates, assembles, and submits via RPC. `order_id` is UTF-8 bytes of the order UUID.
@@ -128,7 +128,7 @@ After `STUCK_RETRY_AFTER_MS = 2 min` of inactivity the reconciler retries the ne
 
 ### Failure modes
 
-- **Any fulfillment step throws** → order moves to `failed`, `error` is recorded, `scheduleRefund(orderId)` queues a USDC refund to `sender_address`. The refund txid is stored in `refund_stellar_txid` (the original payment txid stays in `stellar_txid`).
+- **Any fulfillment step throws** → order moves to `failed`, `error` is recorded, `scheduleRefund(orderId)` queues a refund to `sender_address` in the same asset the agent paid with (USDC if `payment_asset = 'usdc_soroban'`, XLM if `'xlm_soroban'`). The refund txid is stored in `refund_stellar_txid` in the DB (the original payment txid stays in `stellar_txid`) and exposed to agents on `GET /v1/orders/:id` as `refund.stellar_txid` (nested object).
 - **3 consecutive failures** → system freezes. `/v1/orders` returns 503. Owner unfreezes via `POST /admin/system/unfreeze`.
 - **Payment never arrives** → the order expires after 2 hours (`expireStaleOrders` in `jobs.js`) and moves to `expired`; no funds were taken.
 - **Approval times out** → `expireApprovalRequests` moves the approval to `expired` and the order to `rejected` after 2 hours.
