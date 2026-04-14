@@ -133,7 +133,10 @@ export interface components {
     schemas: {
         CreateOrderRequest: {
             /**
-             * @description Card value in USD as a decimal string, e.g. "10.00"
+             * @description Card value in USD as a positive decimal string, e.g. "10.00".
+             *     Maximum "1000.00" per order — orders above this cap are
+             *     rejected with `invalid_amount`. The cap is platform-level;
+             *     the Pathward-issued card itself can hold up to $10,000.
              * @example 10.00
              * @example 25.50
              * @example 100.00
@@ -299,20 +302,58 @@ export interface components {
             message?: string;
         };
         /**
-         * @description Delivered to `webhook_url` when an order reaches a terminal state.
-         *     Signed with HMAC-SHA256 if a `webhook_secret` was issued with the
-         *     API key. Headers: `X-Cards402-Signature: sha256=<hex>`,
+         * @description Delivered to `webhook_url` on every meaningful order-state
+         *     transition. Signed with HMAC-SHA256 if a `webhook_secret` was
+         *     issued with the API key. Headers:
+         *     `X-Cards402-Signature: sha256=<hex>`,
          *     `X-Cards402-Timestamp: <epoch_ms>`.
+         *
+         *     Every payload carries `order_id` and `status`. The rest of the
+         *     shape varies by event — `delivered` carries `card` + pricing,
+         *     `failed` carries `error` + pricing, `expired` / `pending_payment`
+         *     (approved) / `rejected` carry a `note` or `error` but no card
+         *     or pricing. Consumers should branch on `status`.
          */
         WebhookPayload: {
             /** Format: uuid */
             order_id: string;
-            /** @enum {string} */
-            status: "delivered" | "failed";
+            /**
+             * @description The terminal state of the order. `delivered` and `failed`
+             *     are the primary happy / sad paths; `expired` fires when an
+             *     order hits its 2-hour payment window; `pending_payment` is
+             *     emitted when an approval-gated order is approved and is
+             *     now payable; `rejected` fires when an approval is denied.
+             * @enum {string}
+             */
+            status: "delivered" | "failed" | "expired" | "pending_payment" | "rejected";
+            /**
+             * @description The public phase corresponding to `status`. Present on
+             *     every non-delivered/non-failed event (expired, approved,
+             *     rejected) so consumers can match phase-based logic.
+             */
+            phase?: components["schemas"]["OrderPhase"];
+            /**
+             * @description Present on `delivered` and `failed` events. Omitted on
+             *     `expired`, `pending_payment`, and `rejected`.
+             */
             amount_usdc?: string;
+            /**
+             * @description Present on `delivered` and `failed` events. One of
+             *     `usdc_soroban` or `xlm_soroban`.
+             */
             payment_asset?: string;
+            /** @description Only present when `status == delivered`. */
             card?: components["schemas"]["CardDetails"];
+            /**
+             * @description Present on `failed` and `rejected` events. Sanitised to
+             *     avoid leaking fulfilment-pipeline internals.
+             */
             error?: string;
+            /**
+             * @description Present on `expired` and `pending_payment` (approved)
+             *     events. Human-readable explanation of the transition.
+             */
+            note?: string;
         };
     };
     responses: {
