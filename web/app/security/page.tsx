@@ -53,8 +53,11 @@ const PILLARS = [
 ];
 
 const POSTURE = [
-  { label: 'TLS', value: 'TLS 1.3 minimum · HSTS preloaded' },
-  { label: 'Transport', value: 'Strict same-site cookies · CSRF on every mutation' },
+  { label: 'TLS', value: 'TLS 1.3 minimum · HSTS enabled · redirect from HTTP' },
+  {
+    label: 'Transport',
+    value: 'Strict same-site cookies · HttpOnly session · credentials not CORS',
+  },
   { label: 'Keys at rest', value: 'bcrypt · per-key salt · 12-char lookup index' },
   { label: 'Database', value: 'SQLite · WAL mode · scheduled snapshot backup' },
   { label: 'Agent keys', value: 'OWS encrypted vault file · 0600 · optional passphrase' },
