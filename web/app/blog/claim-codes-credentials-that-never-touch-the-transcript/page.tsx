@@ -9,7 +9,7 @@ const POST_DATE = '2026-04-14';
 export const metadata: Metadata = {
   title: 'Claim codes: credentials that never touch the transcript',
   description:
-    'Why Cards402 onboards agents with single-use claim codes instead of raw API keys, the threat model, and how the exchange flow avoids credential-in-prompt failure.',
+    'Why Cards402 onboards agents with single-use claim codes instead of raw API keys, and how the exchange flow avoids credential-in-prompt failure.',
   alternates: { canonical: POST_URL },
   openGraph: ogForPage({
     title: 'Claim codes: credentials that never touch the transcript — Cards402',
