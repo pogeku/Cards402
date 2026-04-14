@@ -82,7 +82,7 @@ const howToJsonLd = {
       '@type': 'HowToStep',
       position: 5,
       name: 'Wire it into your agent',
-      text: 'Add the Cards402 MCP server to your claude_desktop_config.json or other MCP host so the purchase_card tool is available to the LLM.',
+      text: 'Add the Cards402 MCP server to your claude_desktop_config.json or other MCP host so the purchase_vcc tool is available to the LLM.',
       url: 'https://cards402.com/docs/quickstart#wire-it-into-your-agent',
     },
   ],
@@ -240,8 +240,10 @@ console.log(card);
   }
 }`}</CodeBlock>
         <p>
-          Restart Claude Desktop and the <Code>purchase_card</Code> tool is now available. The LLM
-          can trigger an order, sign the Stellar payment, and get the card number in a single turn.
+          Restart Claude Desktop and the <Code>purchase_vcc</Code> tool is now available alongside{' '}
+          <Code>setup_wallet</Code>, <Code>check_order</Code>, and <Code>check_budget</Code>. The
+          LLM can trigger an order, sign the Stellar payment, and get the card number in a single
+          turn.
         </p>
       </>
     ),
