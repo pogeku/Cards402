@@ -22,6 +22,12 @@ export interface ChangelogEntry {
 export const CHANGELOG_ENTRIES: ChangelogEntry[] = [
   {
     date: '2026-04-14',
+    title: 'New post: non-custodial card issuance on Soroban',
+    tags: ['feature'],
+    body: "Architectural walk-through of the Cards402 receiver contract, the Soroban event watcher, and the refund story. Why agents pay a contract we can't drain, what we gave up on the latency side, and why the trade was worth it for a payment platform aimed at autonomous agents.",
+  },
+  {
+    date: '2026-04-14',
     title: 'First blog post: anatomy of a Cards402 order',
     tags: ['feature'],
     body: 'New /blog index plus the first real post — a walk-through of the median 33-second path from purchaseCardOWS() through Stellar, the watcher, Stage 1/2 fulfilment, and the SSE stream, with the P50 timings we see on mainnet today. Cross-posted to the changelog RSS feed.',

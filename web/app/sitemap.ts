@@ -23,6 +23,11 @@ const ROUTES: Array<{
     changeFrequency: 'monthly',
     priority: 0.7,
   },
+  {
+    path: '/blog/non-custodial-card-issuance-on-soroban',
+    changeFrequency: 'monthly',
+    priority: 0.7,
+  },
   { path: '/changelog', changeFrequency: 'weekly', priority: 0.7 },
   { path: '/company', changeFrequency: 'monthly', priority: 0.7 },
   { path: '/careers', changeFrequency: 'weekly', priority: 0.7 },

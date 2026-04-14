@@ -35,6 +35,14 @@ type Post = {
 const PUBLISHED: Post[] = [
   {
     date: '2026-04-14',
+    slug: 'non-custodial-card-issuance-on-soroban',
+    title: 'How we built non-custodial card issuance on Soroban',
+    excerpt:
+      'Why Cards402 agents pay the receiver contract directly on Stellar, and how the backend watches on-chain events instead of touching customer funds. The trade-offs we accepted and the ones we refused.',
+    tags: ['architecture', 'stellar'],
+  },
+  {
+    date: '2026-04-14',
     slug: 'anatomy-of-a-cards402-order',
     title: 'Anatomy of a Cards402 order',
     excerpt:
@@ -44,13 +52,6 @@ const PUBLISHED: Post[] = [
 ];
 
 const PIPELINE: Post[] = [
-  {
-    date: 'Coming soon',
-    title: 'How we built non-custodial card issuance on Soroban',
-    excerpt:
-      'Architecture walkthrough of the Cards402 receiver contract, the Stellar watcher, and the fulfilment pipeline. Why agents pay the contract directly and what it takes to keep the backend from ever touching a customer wallet.',
-    tags: ['architecture', 'stellar'],
-  },
   {
     date: 'Coming soon',
     title: 'Why SSE beats polling for agent-facing APIs',
