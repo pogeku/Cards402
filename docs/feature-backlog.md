@@ -194,6 +194,47 @@ this into a real roadmap later.
 - **Internationalisation.** English-only today. Spanish, Portuguese, and
   Japanese would cover most of the agent-developer demand we see.
 
+## Surfaces added during loop iteration 4 (backlog extensions)
+
+### SDK / docs sync
+
+- **Auto-generated SDK reference docs.** Loops 1–4 have caught four
+  separate drift bugs where the hand-written docs referenced
+  made-up or renamed SDK symbols (`npx cards402 revoke`,
+  `cards402-mcp`, `asset:` vs `paymentAsset`, `createWallet` vs
+  `createOWSWallet`). Wire a TypeDoc (or api-extractor) pass that
+  generates `/docs/sdk` from the SDK's TSDoc at build time. Once
+  `/docs/sdk` is the canonical reference, the hand-written pages
+  shrink to narrative guides that link into it — and drift stops
+  happening altogether.
+- **Integration test that scrapes the web app's code samples** and
+  `tsc`-compiles them against the real SDK types. Any hand-written
+  snippet that references an imported identifier the SDK doesn't
+  export would fail CI. Drop-in catch for every class of bug this
+  loop found.
+
+### Structured data audits
+
+- **Rich Results Test** run against the production deploy after
+  shipping the recent JSON-LD additions (Organization, WebSite,
+  SoftwareApplication, Product, FAQPage, JobPosting, BlogPosting,
+  ItemList, HowTo, BreadcrumbList). Google's validator is the
+  ground truth for "does the SERP actually render this".
+- **`schema-dts` typing on the JSON-LD objects.** Drop-in that
+  typechecks every structured-data object against the canonical
+  schema.org vocabulary. Catches "I spelled articleBody wrong"
+  at compile time rather than in a rich-results test.
+
+### Error surface
+
+- **`loading.tsx` for the marketing surface** — non-critical since
+  most routes are prerendered static, but the dashboard transitions
+  would benefit from a branded loading shimmer.
+- **Sentry / self-hosted reporter wired to app/error.tsx and
+  global-error.tsx.** Both surfaces currently `console.error` and
+  rely on the user emailing support with the digest. First real
+  telemetry hook into error events.
+
 ## Surfaces added during loop iteration 3 (backlog extensions)
 
 ### Blog
