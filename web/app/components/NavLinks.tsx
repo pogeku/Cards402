@@ -101,59 +101,70 @@ export function NavLinks() {
               role="menu"
               style={{
                 position: 'absolute',
-                top: 'calc(100% + 0.25rem)',
+                // Sit flush against the button with no gap, then use top
+                // padding to push the visible card down. The padding is
+                // still part of the element's hit area so the mouse never
+                // crosses an un-hovered region between the button and the
+                // dropdown — which is what was closing it prematurely.
+                top: '100%',
+                paddingTop: '0.5rem',
                 right: 0,
                 minWidth: 280,
-                background: 'var(--surface)',
-                border: '1px solid var(--border)',
-                borderRadius: 12,
-                boxShadow: 'var(--shadow-float)',
-                padding: '0.45rem',
                 zIndex: 60,
               }}
             >
-              {MORE.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  onClick={() => setMoreOpen(false)}
-                  style={{
-                    display: 'block',
-                    padding: '0.65rem 0.75rem',
-                    textDecoration: 'none',
-                    color: 'var(--fg)',
-                    borderRadius: 8,
-                    transition: 'background 0.2s var(--ease-out)',
-                  }}
-                  onMouseEnter={(e: MouseEvent<HTMLAnchorElement>) => {
-                    e.currentTarget.style.background = 'var(--surface-hover)';
-                  }}
-                  onMouseLeave={(e: MouseEvent<HTMLAnchorElement>) => {
-                    e.currentTarget.style.background = 'transparent';
-                  }}
-                >
-                  <div
+              <div
+                style={{
+                  background: 'var(--surface)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 12,
+                  boxShadow: 'var(--shadow-float)',
+                  padding: '0.45rem',
+                }}
+              >
+                {MORE.map((item) => (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={() => setMoreOpen(false)}
                     style={{
-                      fontFamily: 'var(--font-body)',
-                      fontSize: '0.85rem',
-                      fontWeight: 500,
+                      display: 'block',
+                      padding: '0.65rem 0.75rem',
+                      textDecoration: 'none',
                       color: 'var(--fg)',
-                      marginBottom: '0.15rem',
+                      borderRadius: 8,
+                      transition: 'background 0.2s var(--ease-out)',
+                    }}
+                    onMouseEnter={(e: MouseEvent<HTMLAnchorElement>) => {
+                      e.currentTarget.style.background = 'var(--surface-hover)';
+                    }}
+                    onMouseLeave={(e: MouseEvent<HTMLAnchorElement>) => {
+                      e.currentTarget.style.background = 'transparent';
                     }}
                   >
-                    {item.label}
-                  </div>
-                  <div
-                    style={{
-                      fontFamily: 'var(--font-body)',
-                      fontSize: '0.72rem',
-                      color: 'var(--fg-dim)',
-                    }}
-                  >
-                    {item.body}
-                  </div>
-                </Link>
-              ))}
+                    <div
+                      style={{
+                        fontFamily: 'var(--font-body)',
+                        fontSize: '0.85rem',
+                        fontWeight: 500,
+                        color: 'var(--fg)',
+                        marginBottom: '0.15rem',
+                      }}
+                    >
+                      {item.label}
+                    </div>
+                    <div
+                      style={{
+                        fontFamily: 'var(--font-body)',
+                        fontSize: '0.72rem',
+                        color: 'var(--fg-dim)',
+                      }}
+                    >
+                      {item.body}
+                    </div>
+                  </Link>
+                ))}
+              </div>
             </div>
           )}
         </div>
