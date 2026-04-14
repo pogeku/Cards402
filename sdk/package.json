@@ -1,17 +1,19 @@
 {
   "name": "cards402",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "Virtual Visa cards for AI agents — pay USDC or XLM on Stellar, get a card in ~60s",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.js"
     },
     "./mcp": {
+      "types": "./dist/mcp.d.ts",
       "import": "./dist/mcp.js",
-      "types": "./dist/mcp.d.ts"
+      "require": "./dist/mcp.js"
     }
   },
   "bin": {

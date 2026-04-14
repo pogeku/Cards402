@@ -22,6 +22,13 @@ export interface ChangelogEntry {
 export const CHANGELOG_ENTRIES: ChangelogEntry[] = [
   {
     date: '2026-04-14',
+    version: 'sdk@0.4.6',
+    title: 'SDK 0.4.6 — stop stranding agents on failed Soroban transactions',
+    tags: ['fix', 'api'],
+    body: 'Two bugs in the SDK\'s Soroban submit path were combining to leave agents polling forever on orders whose payment never actually landed. (1) FAILED statuses from getTransaction were swallowed by a catch-block intended for XDR version errors, so the poll loop ran to the 120s deadline. (2) The deadline-timeout branch attached a txHash to its error unconditionally, which purchaseCardOWS treated as "envelope may still land" — so transactions that had already failed on-chain or never made it into a ledger still triggered the waitForCard fall-through. Fixed by re-raising terminal throws out of the poll loop and only attaching txHash when Horizon itself is unreachable. Package exports now declare both `import` and `require` so CommonJS consumers don\'t trip on ERR_PACKAGE_PATH_NOT_EXPORTED. Upgrade with `npx -y cards402@latest` or `npm i cards402@latest`.',
+  },
+  {
+    date: '2026-04-14',
     title: 'New post: claim codes — credentials that never touch the transcript',
     tags: ['feature'],
     body: 'Security-architecture post on why Cards402 onboards agents with single-use claim codes instead of raw API keys. The failure mode (keys in LLM chat transcripts), the three options we considered (OAuth, env-only instructions, one-time exchange tokens), why we picked the last one, and what else building the primitive unlocked.',
