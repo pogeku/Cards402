@@ -231,9 +231,32 @@ async function enqueueWebhook(url, payload, webhookSecret) {
   }
 }
 
+// Validate that a decimal-string amount is a positive, non-zero, well-formed
+// number we can hand to the Stellar sender. Protects against corrupt order
+// rows (null, "", "0", "-5", "abc") making it into sendUsdc/sendXlm where
+// the error would only surface as a cryptic Horizon response.
+function isValidRefundAmount(amount) {
+  if (amount === null || amount === undefined || amount === '') return false;
+  const s = String(amount).trim();
+  if (!/^\d+(\.\d+)?$/.test(s)) return false;
+  // Stellar precision is 7 decimal places. Ensure at least one non-zero digit.
+  return parseFloat(s) > 0;
+}
+
 // Refund the payment for an order. Sends USDC or XLM back to the sender address.
 // Called on fulfillment failure (via VCC callback) and on order expiry.
 async function scheduleRefund(orderId) {
+  // Freeze-first: system-wide freeze must stop automatic treasury outflows
+  // before any state transition. Claiming refund_pending while frozen would
+  // otherwise commit the order to a drain path that only unfreeze-plus-
+  // manual-reconcile could reverse. Leave the order in whatever state it
+  // was in so ops can review on unfreeze.
+  if (isFrozen()) {
+    bizEvent('refund.skipped_frozen', { order_id: orderId });
+    console.log(`[refund] ${orderId}: system frozen — refund deferred for ops review`);
+    return;
+  }
+
   // Atomic claim: transitions to refund_pending only once.
   // Prevents double-refunds if called concurrently (admin endpoint + job race).
   const now = new Date().toISOString();
@@ -261,12 +284,28 @@ async function scheduleRefund(orderId) {
     return;
   }
 
-  const isXlm = order.payment_asset === 'xlm_soroban' || order.payment_asset === 'xlm';
+  // Explicit asset dispatch. The previous branching treated the USDC path
+  // as an else-default which meant any future or corrupt payment_asset
+  // value (e.g. null, 'btc', an accidental enum drift) would silently
+  // attempt a USDC refund. Now we require one of the known values and
+  // route anything else to manual ops review.
+  const asset = order.payment_asset;
+  const isXlm = asset === 'xlm_soroban' || asset === 'xlm';
+  const isUsdc = asset === 'usdc_soroban' || asset === 'usdc';
+  if (!isXlm && !isUsdc) {
+    bizEvent('refund.unknown_asset', { order_id: orderId, asset });
+    console.log(
+      `[refund] ${orderId}: unknown payment_asset '${asset}' — remains refund_pending for manual action`,
+    );
+    return;
+  }
 
   if (isXlm) {
     const xlmAmount = order.payment_xlm_amount;
-    if (!xlmAmount) {
-      console.log(`[refund] ${orderId}: no payment_xlm_amount — order remains refund_pending`);
+    if (!isValidRefundAmount(xlmAmount)) {
+      console.log(
+        `[refund] ${orderId}: invalid payment_xlm_amount '${xlmAmount}' — order remains refund_pending`,
+      );
       return;
     }
     try {
@@ -285,6 +324,12 @@ async function scheduleRefund(orderId) {
       );
     }
   } else {
+    if (!isValidRefundAmount(order.amount_usdc)) {
+      console.log(
+        `[refund] ${orderId}: invalid amount_usdc '${order.amount_usdc}' — order remains refund_pending`,
+      );
+      return;
+    }
     try {
       const txHash = await sendUsdc({
         destination: order.sender_address,
