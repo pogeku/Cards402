@@ -58,7 +58,7 @@ The fastest path for Claude-based agents. No code needed — just configure:
   "mcpServers": {
     "cards402": {
       "command": "npx",
-      "args": ["-y", "cards402/mcp"],
+      "args": ["-y", "cards402"],
       "env": {
         "CARDS402_API_KEY": "cards402_...",
         "OWS_WALLET_NAME": "my-agent"
@@ -67,6 +67,10 @@ The fastest path for Claude-based agents. No code needed — just configure:
   }
 }
 ```
+
+The `cards402` CLI defaults to the `mcp` subcommand when no other subcommand
+is passed, so `npx cards402` with no args runs the MCP server. `-y` is the
+standard npm auto-accept flag for the one-time install prompt.
 
 Then ask Claude: "Buy me a $10 virtual Visa card."
 
