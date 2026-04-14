@@ -88,11 +88,21 @@ async function sendUsdc({ destination, amount, memo }) {
   );
 }
 
+// Convert a Horizon asset record ({asset_type, asset_code, asset_issuer})
+// into a stellar-sdk Asset. Used to rehydrate the path[] returned by the
+// strict-receive probe so we can pin it on the actual submitted tx.
+function hydrateAsset(rec) {
+  if (!rec || rec.asset_type === 'native') return Asset.native();
+  return new Asset(rec.asset_code, rec.asset_issuer);
+}
+
 // Probe Horizon for a USDC→XLM strict-receive path to see what the DEX
 // would charge and whether a route exists. Returns the cheapest path's
-// source amount (USDC needed to buy `destXlm` XLM) plus an observability
-// payload. Failures are non-fatal — we fall through to letting Stellar
-// Core auto-route inside the tx itself.
+// source amount (USDC needed to buy `destXlm` XLM), the intermediate
+// assets, and an observability payload. The path is pinned on the real
+// submission so Core doesn't silently pick a more expensive route at
+// ledger-close time (audit: 2026-04-14 slippage bug where `path: []`
+// drifted away from the probe and burned `op_over_source_max`).
 async function probeUsdcToXlmPath(destXlm) {
   const USDC_ISSUER =
     process.env.STELLAR_USDC_ISSUER || 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
@@ -109,10 +119,12 @@ async function probeUsdcToXlmPath(destXlm) {
     if (!records.length) return { ok: false, reason: 'no_path' };
     // Horizon already returns records sorted by source_amount ascending.
     const best = records[0];
+    const pathAssets = (best.path || []).map(hydrateAsset);
     return {
       ok: true,
       sourceAmount: best.source_amount, // USDC required to buy destXlm
-      pathLength: (best.path || []).length,
+      path: pathAssets,
+      pathLength: pathAssets.length,
       candidateCount: records.length,
     };
   } catch (err) {
@@ -138,8 +150,10 @@ async function sendUsdcAsXlm({ destination, destXlm, maxUsdc, memo }) {
   const usdc = new Asset('USDC', USDC_ISSUER);
   const keypair = Keypair.fromSecret(secret);
 
-  // Non-fatal depth probe so we can see book health per order. The actual
-  // pathfinding happens inside the tx via sendMax + empty path[].
+  // Probe the DEX for book health AND the concrete path Horizon would use.
+  // We pin the returned path on the actual submission so Core's in-core
+  // pathfinder can't silently pick a more expensive route at ledger-close
+  // time (root cause of the 2026-04-14 op_over_source_max failures).
   const probe = await probeUsdcToXlmPath(destXlm);
   bizEvent('dex.usdc_xlm.probe', {
     dest_xlm: destXlm,
@@ -150,11 +164,23 @@ async function sendUsdcAsXlm({ destination, destXlm, maxUsdc, memo }) {
     reason: probe.ok ? null : probe.reason,
     max_usdc: maxUsdc,
   });
-  if (probe.ok && Number(probe.sourceAmount) > Number(maxUsdc)) {
+
+  // Business rule: accept up to 1% slippage above the order's face value.
+  // sendMax is the absolute ceiling on USDC spent by the treasury for this
+  // path payment, expressed in Stellar's 7-decimal precision.
+  const SLIPPAGE_FACTOR = 1.01;
+  const sendMaxLimit = (Number(maxUsdc) * SLIPPAGE_FACTOR).toFixed(7);
+  if (probe.ok && Number(probe.sourceAmount) > Number(sendMaxLimit)) {
     throw new Error(
-      `DEX quote ${probe.sourceAmount} USDC exceeds sendMax ${maxUsdc} — path payment would fail. Aborting without burning fees.`,
+      `DEX quote ${probe.sourceAmount} USDC exceeds 1% slippage budget ${sendMaxLimit} ` +
+        `(face value ${maxUsdc}) — path payment would fail. Aborting without burning fees.`,
     );
   }
+
+  // Pin the probe's path on the operation so the submission uses the same
+  // route the probe priced. Empty path only if the probe failed or reported
+  // a direct swap (no intermediate hops).
+  const path = probe.ok ? probe.path : [];
 
   return submitWithRetry(
     (account) =>
@@ -162,11 +188,11 @@ async function sendUsdcAsXlm({ destination, destXlm, maxUsdc, memo }) {
         .addOperation(
           Operation.pathPaymentStrictReceive({
             sendAsset: usdc,
-            sendMax: String(maxUsdc),
+            sendMax: sendMaxLimit,
             destination,
             destAsset: Asset.native(),
             destAmount: String(destXlm),
-            path: [], // let Stellar Core find the route
+            path,
           }),
         )
         .addMemo(Memo.text(memo))
