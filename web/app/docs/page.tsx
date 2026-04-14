@@ -228,6 +228,12 @@ const errors = [
   { code: 'missing_api_key', status: 401, meaning: 'X-Api-Key header not provided.' },
   { code: 'invalid_api_key', status: 401, meaning: 'API key not found or disabled.' },
   {
+    code: 'api_key_expired',
+    status: 401,
+    meaning:
+      'The API key reached its configured expires_at. Mint a new key from the dashboard and revoke the old one.',
+  },
+  {
     code: 'invalid_amount',
     status: 400,
     meaning:

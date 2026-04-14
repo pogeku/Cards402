@@ -194,10 +194,10 @@ export default function PrivacyPage() {
             body: (
               <>
                 <p>
-                  API keys are stored as salted SHA-256 hashes — we can verify a key on request but
-                  we cannot recover one. The database is encrypted at rest. HTTPS is enforced on
-                  every endpoint with a 90-day certificate rotation. More detail on our security
-                  posture is on the <Link href="/security">Security</Link> page.
+                  API keys are stored as bcrypt hashes with per-key salt — we can verify a key on
+                  request but we cannot recover one. The database is encrypted at rest. HTTPS is
+                  enforced on every endpoint with a 90-day certificate rotation. More detail on our
+                  security posture is on the <Link href="/security">Security</Link> page.
                 </p>
               </>
             ),

@@ -28,7 +28,7 @@ const PILLARS = [
   {
     eyebrow: 'Keys',
     title: 'Hashed at rest. Scoped at the edge.',
-    body: 'API keys are SHA-256 hashed with a random salt before they touch the database. We can verify a key against the hash; we cannot recover the plaintext. Keys are scoped to USDC spend limits and can be revoked in one click from the dashboard.',
+    body: 'API keys are bcrypt-hashed with per-key salt before they touch the database. We can verify a key against the hash on request; we cannot recover the plaintext. A short key prefix is stored alongside the hash as an O(1) lookup index, so auth stays constant-time under load. Keys are scoped to USDC spend limits and can be revoked in one click from the dashboard.',
   },
   {
     eyebrow: 'Onboarding',
@@ -55,7 +55,7 @@ const PILLARS = [
 const POSTURE = [
   { label: 'TLS', value: 'TLS 1.3 minimum · HSTS preloaded' },
   { label: 'Transport', value: 'Strict same-site cookies · CSRF on every mutation' },
-  { label: 'Keys at rest', value: 'Salted SHA-256 · 32-byte random salt' },
+  { label: 'Keys at rest', value: 'bcrypt · per-key salt · 12-char lookup index' },
   { label: 'Database', value: 'SQLite · WAL replication · encrypted at rest' },
   { label: 'Secrets', value: 'Sealed in the OS keyring · never in env files' },
   { label: 'Stellar signer', value: 'Hardware wallet only for treasury ops' },
