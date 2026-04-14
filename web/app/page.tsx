@@ -49,7 +49,7 @@ const FLOW = [
   {
     num: '04',
     title: 'Real Visa card',
-    body: 'PAN / CVV / expiry stream back over the original HTTP connection. One SSE stream, no webhooks to host, no polling required.',
+    body: 'Number / CVV / expiry stream back over the original HTTP connection. One SSE stream, no webhooks to host, no polling required.',
   },
 ];
 
@@ -206,8 +206,7 @@ export default function Home() {
               }}
             >
               One Stellar transaction in, one real card number out. Agents pay in USDC or XLM and
-              get a usable PAN in about sixty seconds — no signup, no KYC, no custody, no human in
-              the loop.
+              get a usable card in about sixty seconds.
             </p>
 
             <div
