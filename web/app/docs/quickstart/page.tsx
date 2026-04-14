@@ -156,19 +156,32 @@ const STEPS = [
     body: (
       <>
         <p>
-          Your agent pays the receiver contract directly, so it needs a Stellar wallet with either
-          USDC + a USDC trustline, or just XLM. The SDK can create and manage one for you:
+          Your agent pays the receiver contract directly, so it needs a Stellar wallet with at least
+          2 XLM (for the native account reserve) plus a USDC trustline if you plan to settle in
+          USDC. The SDK creates and manages one for you, stored encrypted in an OWS vault:
         </p>
-        <CodeBlock label="TypeScript">{`import { createWallet, setupUSDCTrustline } from 'cards402';
+        <CodeBlock label="TypeScript">{`import {
+  createOWSWallet,
+  addUsdcTrustlineOWS,
+  getOWSBalance,
+} from 'cards402';
 
-const wallet = await createWallet('my-agent');
-// { publicKey, secret (kept in OS keyring), network }
+// Creates or loads a vault entry for 'my-agent'. Idempotent.
+const { walletId, publicKey } = createOWSWallet('my-agent');
+console.log('Send at least 2 XLM to', publicKey);
 
-// Fund the wallet with XLM, then add a USDC trustline:
-await setupUSDCTrustline(wallet);`}</CodeBlock>
+// Once the account is activated on-chain, add the USDC trustline.
+// Skip this if you only plan to pay in XLM.
+const txHash = await addUsdcTrustlineOWS({
+  walletName: 'my-agent',
+});
+
+// Check the balance whenever you need to.
+const { xlm, usdc } = await getOWSBalance('my-agent');`}</CodeBlock>
         <p>
-          Cards402 never sees or touches the secret key — it&apos;s stored in the OS keyring on the
-          machine running the SDK (via the same mechanism Apple uses for Keychain on macOS).
+          Cards402 never sees or touches the secret key — it lives in an encrypted OWS vault on the
+          machine running the SDK, protected by an optional passphrase. The same vault is what the
+          MCP server uses, so Claude Desktop and your TypeScript code share one wallet identity.
         </p>
       </>
     ),
