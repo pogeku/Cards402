@@ -394,6 +394,18 @@ async function retryWebhooks() {
         `,
           ).run(nextAttempts, err.message, now, row.id);
           log(`  webhook ${row.id.slice(0, 8)} failed permanently: ${err.message}`);
+          // Surface abandoned deliveries via bizEvent + /status metric.
+          // Before this, a permanently failed webhook was visible only by
+          // querying webhook_queue directly — which is how we found the
+          // outbound-TLS bug the hard way. Now ops see the count on the
+          // public status endpoint and can alert on it.
+          const { event: bizEvent } = require('./lib/logger');
+          bizEvent('webhook.failed_permanently', {
+            id: row.id,
+            url: row.url,
+            attempts: nextAttempts,
+            last_error: err.message,
+          });
         } else {
           const nextAttempt = new Date(Date.now() + delayMs).toISOString();
           db.prepare(

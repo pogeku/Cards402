@@ -19,6 +19,7 @@ const dashboardRouter = require('./api/dashboard');
 const authRouter = require('./api/auth');
 const internalRouter = require('./api/internal');
 const vccCallbackRouter = require('./api/vcc-callback');
+const { MAX_WEBHOOK_ATTEMPTS: MAX_WEBHOOK_ATTEMPTS_FOR_STATUS } = require('./fulfillment');
 
 const app = express();
 
@@ -314,8 +315,40 @@ app.get('/status', (req, res) => {
     ? Math.round((Date.now() - new Date(lastLedgerAt).getTime()) / 1000)
     : null;
 
+  // Silent-failure visibility counters (audit topic: observability).
+  //
+  // stellar_dead_letter: on-chain events the watcher couldn't parse.
+  // Non-zero means the watcher saw an event that won't match any
+  // pending order — someone (ops) needs to investigate the raw_event
+  // rows and either reconcile manually or refund.
+  //
+  // webhooks_failed_permanently: rows left in webhook_queue with
+  // attempts >= MAX_WEBHOOK_ATTEMPTS and delivered = 0. Before the
+  // /status surface, these accumulated silently and only surfaced
+  // when ops happened to query the table by hand (which is how the
+  // outbound-TLS bug was found). Now it's a first-class health signal.
+  const stellarDeadLetter24h =
+    /** @type {any} */ (
+      db
+        .prepare(`SELECT COUNT(*) AS n FROM stellar_dead_letter WHERE created_at >= ?`)
+        .get(since24h)
+    )?.n ?? 0;
+  const webhooksFailedPermanent24h =
+    /** @type {any} */ (
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM webhook_queue
+           WHERE delivered = 0 AND attempts >= ? AND created_at >= ?`,
+        )
+        .get(MAX_WEBHOOK_ATTEMPTS_FOR_STATUS, since24h)
+    )?.n ?? 0;
+
   res.json({
-    ok: !frozen && consecutiveFailures < 3,
+    ok:
+      !frozen &&
+      consecutiveFailures < 3 &&
+      stellarDeadLetter24h === 0 &&
+      webhooksFailedPermanent24h < 5,
     frozen,
     consecutive_failures: consecutiveFailures,
     orders: {
@@ -335,6 +368,10 @@ app.get('/status', (req, res) => {
       last_ledger: lastLedger || null,
       last_ledger_at: lastLedgerAt,
       age_seconds: lastLedgerAgeSeconds,
+      dead_letter_24h: stellarDeadLetter24h,
+    },
+    webhooks: {
+      failed_permanent_24h: webhooksFailedPermanent24h,
     },
     process: {
       uptime_seconds: Math.round((Date.now() - PROCESS_STARTED_AT) / 1000),

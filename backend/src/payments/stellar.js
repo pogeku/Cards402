@@ -110,6 +110,10 @@ async function poll(onPayment, log) {
   } catch (err) {
     const POLL_MS = parseInt(process.env.WATCHER_POLL_INTERVAL_MS || '1500', 10);
     log(`[stellar] poll error: ${err.message} — retrying in ${POLL_MS * 4}ms`);
+    // Emit a bizEvent so RPC flakiness and rethrown dispatch failures are
+    // visible in the metrics pipeline, not just stderr. Cheap because poll
+    // errors are rare — the hot path is success, which doesn't emit this.
+    bizEvent('stellar.poll_error', { error: err.message });
     setTimeout(() => poll(onPayment, log), POLL_MS * 4);
   }
 }
@@ -121,7 +125,36 @@ function stroopsToDecimal(i128) {
   return `${whole}.${frac}`;
 }
 
+// Serialise an arbitrary Soroban event for the dead-letter table. Events
+// contain BigInts (the XDR decoder hands them back for i128 slots) which
+// JSON.stringify refuses by default; coerce them to strings so the dead
+// letter row is diffable and can be replayed by an operator.
+function serialiseEventForDeadLetter(event) {
+  try {
+    return JSON.stringify(event, (_, v) => (typeof v === 'bigint' ? String(v) : v));
+  } catch (e) {
+    return `serialisation_failed: ${e.message}`;
+  }
+}
+
 async function handlePaymentEvent(event, onPayment, log) {
+  // Two-phase split:
+  //   1. Parse — pulling fields out of the event XDR. Failures here are
+  //      permanent (a malformed event will never parse cleanly) so we
+  //      dead-letter for forensic recovery and return, letting the
+  //      caller advance the cursor past this ledger.
+  //   2. Dispatch — passing the parsed payload to onPayment. Failures
+  //      here are likely transient (DB hiccup, lock contention, disk
+  //      full) so we rethrow and let the outer poll() catch back off
+  //      and retry the whole batch. index.js's global txid dedupe makes
+  //      the retry idempotent.
+  //
+  // Before this split, both cases were caught and swallowed, so a
+  // transient DB error during onPayment silently advanced the cursor
+  // past a real payment — losing the event forever with no trace. See
+  // db.js migration 23.
+
+  let parsed;
   try {
     if (event.topic.length < 3) return;
 
@@ -137,48 +170,71 @@ async function handlePaymentEvent(event, onPayment, log) {
     const amountI128 = BigInt(scValToNative(event.value));
     const amountDecimal = stroopsToDecimal(amountI128);
 
-    if (eventSymbol === 'pay_usdc') {
-      log(
-        `[stellar] pay_usdc: $${amountDecimal} USDC, order=${orderId}, from=${senderAddress}, tx=${event.txHash}`,
-      );
-      bizEvent('payment.received', {
-        asset: 'usdc',
-        amount: amountDecimal,
-        order_id: orderId,
-        txid: event.txHash,
-      });
-      await onPayment({
-        txid: event.txHash,
-        paymentAsset: 'usdc_soroban',
-        amountUsdc: amountDecimal,
-        amountXlm: null,
-        senderAddress,
-        orderId,
-      });
-    } else if (eventSymbol === 'pay_xlm') {
-      log(
-        `[stellar] pay_xlm: ${amountDecimal} XLM, order=${orderId}, from=${senderAddress}, tx=${event.txHash}`,
-      );
-      bizEvent('payment.received', {
-        asset: 'xlm',
-        amount: amountDecimal,
-        order_id: orderId,
-        txid: event.txHash,
-      });
-      await onPayment({
-        txid: event.txHash,
-        paymentAsset: 'xlm_soroban',
-        amountUsdc: null,
-        amountXlm: amountDecimal,
-        senderAddress,
-        orderId,
-      });
-    } else {
-      log(`[stellar] unknown event symbol: ${eventSymbol}`);
-    }
+    parsed = { eventSymbol, orderId, senderAddress, amountDecimal };
   } catch (err) {
-    log(`[stellar] error handling event: ${err.message}`);
+    log(`[stellar] event parse error at ledger ${event.ledger} tx=${event.txHash}: ${err.message}`);
+    bizEvent('stellar.event_parse_error', {
+      ledger: event.ledger,
+      tx_hash: event.txHash,
+      error: err.message,
+    });
+    try {
+      db.prepare(
+        `INSERT OR IGNORE INTO stellar_dead_letter (tx_hash, ledger, raw_event, error)
+         VALUES (?, ?, ?, ?)`,
+      ).run(event.txHash, event.ledger, serialiseEventForDeadLetter(event), err.message);
+    } catch (dbErr) {
+      log(`[stellar] dead-letter insert failed for ${event.txHash}: ${dbErr.message}`);
+    }
+    return;
+  }
+
+  const { eventSymbol, orderId, senderAddress, amountDecimal } = parsed;
+
+  if (eventSymbol === 'pay_usdc') {
+    log(
+      `[stellar] pay_usdc: $${amountDecimal} USDC, order=${orderId}, from=${senderAddress}, tx=${event.txHash}`,
+    );
+    bizEvent('payment.received', {
+      asset: 'usdc',
+      amount: amountDecimal,
+      order_id: orderId,
+      txid: event.txHash,
+    });
+    await onPayment({
+      txid: event.txHash,
+      paymentAsset: 'usdc_soroban',
+      amountUsdc: amountDecimal,
+      amountXlm: null,
+      senderAddress,
+      orderId,
+    });
+  } else if (eventSymbol === 'pay_xlm') {
+    log(
+      `[stellar] pay_xlm: ${amountDecimal} XLM, order=${orderId}, from=${senderAddress}, tx=${event.txHash}`,
+    );
+    bizEvent('payment.received', {
+      asset: 'xlm',
+      amount: amountDecimal,
+      order_id: orderId,
+      txid: event.txHash,
+    });
+    await onPayment({
+      txid: event.txHash,
+      paymentAsset: 'xlm_soroban',
+      amountUsdc: null,
+      amountXlm: amountDecimal,
+      senderAddress,
+      orderId,
+    });
+  } else {
+    log(`[stellar] unknown event symbol: ${eventSymbol} tx=${event.txHash}`);
+    bizEvent('stellar.unknown_event_symbol', {
+      ledger: event.ledger,
+      tx_hash: event.txHash,
+      symbol: String(eventSymbol),
+    });
   }
 }
 
-module.exports = { startWatcher };
+module.exports = { startWatcher, handlePaymentEvent };

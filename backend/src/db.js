@@ -673,6 +673,32 @@ applyMigration(22, () => {
   }
 });
 
+// Migration 23: stellar watcher dead-letter table. Before this, any
+// exception thrown inside handlePaymentEvent (malformed XDR, bad topic,
+// BigInt coercion crash) was caught and logged to stderr only — the
+// watcher then advanced its cursor past the offending ledger and the
+// payment was lost forever with no audit trail. Now parse failures are
+// persisted here for forensic recovery, emitted as a bizEvent for the
+// metrics pipeline, and surfaced on /status so ops can see the count
+// without SSHing the box.
+//
+// Dispatch failures (onPayment throws) are handled separately — they
+// rethrow out of handlePaymentEvent so the outer poll() loop backs off
+// and retries the batch, letting transient DB errors self-heal.
+applyMigration(23, () => {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS stellar_dead_letter (
+      tx_hash     TEXT PRIMARY KEY,
+      ledger      INTEGER NOT NULL,
+      raw_event   TEXT NOT NULL,
+      error       TEXT NOT NULL,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_stellar_dead_letter_created_at
+      ON stellar_dead_letter(created_at);
+  `);
+});
+
 // Audit A-5: post-migration sanity check. If a newer release has rolled
 // through here and bumped the on-disk schema beyond what this binary
 // knows about, fail hard instead of running against a schema we don't
@@ -683,7 +709,7 @@ applyMigration(22, () => {
 //
 // EXPECTED_SCHEMA_VERSION must match the last `applyMigration(N)` call
 // above. Bump it in lock-step with any new migration.
-const EXPECTED_SCHEMA_VERSION = 22;
+const EXPECTED_SCHEMA_VERSION = 23;
 const actualVersion = getSchemaVersion();
 if (actualVersion > EXPECTED_SCHEMA_VERSION) {
   console.error(
