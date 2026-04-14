@@ -8,7 +8,7 @@ const POST_DATE = '2026-04-14';
 export const metadata: Metadata = {
   title: 'Anatomy of a Cards402 order',
   description:
-    'Every millisecond of the 33-second path from agent.purchaseCard() to PAN-in-hand. Payment confirmation, Stage 1 scrape, Stage 2 fulfilment, SSE stream, and the failure modes we found along the way.',
+    'Every millisecond of the 33-second path from purchaseCardOWS() to PAN in hand: payment, watcher, Stage 1 + 2 fulfilment, SSE event.',
   alternates: { canonical: POST_URL },
   openGraph: ogForPage({
     title: 'Anatomy of a Cards402 order — Cards402',

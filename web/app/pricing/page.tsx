@@ -4,7 +4,7 @@ import { PageHero, PageSection } from '@/app/components/MarketingPage';
 import { ogForPage, twitterForPage } from '@/app/lib/seo';
 
 const DESCRIPTION =
-  'Cards402 sells Visa reward cards at face value. No signup fee, no markup. Issuer-imposed fees are $2.00 + 2% on foreign transactions, $5.95 for replacement, and $2.50/month after six months.';
+  'Cards402 sells Visa reward cards at face value — no signup fee, no markup. Only the standard issuer fees apply, listed in full on the page.';
 
 export const metadata: Metadata = {
   title: 'Pricing',

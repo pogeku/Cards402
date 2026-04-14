@@ -37,8 +37,10 @@ const monoFont = IBM_Plex_Mono({
 
 const SITE_URL = 'https://cards402.com';
 const SITE_NAME = 'Cards402';
+// Kept under Google's 160-char SERP truncation limit so the whole
+// description renders without a trailing ellipsis.
 const SITE_DESCRIPTION =
-  'Virtual Visa cards, issued to AI agents. One Stellar transaction in, one real Visa card out. Pay in USDC or XLM, get a PAN in ~60 seconds. No custody, no signup, no KYC.';
+  'Virtual Visa cards for AI agents. Pay with USDC or XLM on Stellar and get a real card in ~60 seconds. Non-custodial, no signup, no KYC.';
 
 export const metadata: Metadata = {
   // Default title that's used unless a page overrides it. The
