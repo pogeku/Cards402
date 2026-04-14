@@ -194,6 +194,67 @@ this into a real roadmap later.
 - **Internationalisation.** English-only today. Spanish, Portuguese, and
   Japanese would cover most of the agent-developer demand we see.
 
+## Surfaces added during loop iteration 2 (backlog extensions)
+
+### Docs
+
+- **ToC on /docs** like the one on the legal pages. 10 code blocks
+  deserves section navigation.
+- **Interactive API explorer.** Hit `POST /v1/orders` from the page
+  itself with a real key. Similar to Stripe's docs.
+- **Dark ↔ light toggle on marketing surface.** The dashboard has one;
+  marketing pages currently force dark. Honour `prefers-color-scheme`
+  and let visitors flip it.
+- **Search.** Pagefind (static index) or Algolia DocSearch for the
+  docs and blog once content exists.
+- **Command palette on marketing pages.** The dashboard already has
+  a `⌘K` palette; extend it to marketing with shortcuts to the key
+  routes.
+
+### Content
+
+- **Comparison pages.** `/compare/ramp`, `/compare/lithic`,
+  `/compare/privacy-com`. Honest tables of where we win / lose
+  per use case.
+- **Integration gallery.** `/built-with` showcasing agents built on
+  Cards402 with real screenshots and code snippets.
+- **A real blog post.** Ship one under /blog to validate the pipeline
+  end-to-end before accumulating drafts.
+
+### Social / distribution
+
+- **Announcement banner.** Component with dismissible state (saved
+  to localStorage) for launches and incidents. Uses a top-of-nav slot.
+- **"Powered by Cards402" badge** that third-party integrators can
+  drop into their own UIs, with a UTM-tagged backlink.
+- **Changelog email digest.** Weekly summary to a mailing list of
+  subscribed operators — opt-in via the dashboard.
+
+### Engineering ergonomics
+
+- **Preview deploys per PR.** Vercel-style preview URLs that Turbopack
+  builds on every push. Currently we go straight to prod.
+- **Visual regression tests.** Playwright snapshot tests for every
+  top-level marketing route across three viewports. Guards the
+  editorial design against random content edits.
+- **Bundle analyzer.** Next.js has `@next/bundle-analyzer` — wire it
+  into a CI check and alert if the client bundle crosses 200kb gzip.
+- **Error reporter.** The new `app/error.tsx` logs to the console.
+  Pipe into a real telemetry backend (self-hosted GlitchTip?) so
+  route-level errors reach an oncall inbox.
+
+### Site trust
+
+- **Public live metrics on the homepage.** "X cards issued, Y USDC
+  moved" pulled from the backend in real time. Strong credibility
+  signal.
+- **Proof-of-reserves dashboard.** Surface the on-chain treasury
+  balance publicly so anyone can verify Cards402 is solvent. Pairs
+  with the non-custodial architecture story.
+- **Per-page OG images** using `opengraph-image.tsx` at each segment,
+  with the page title rendered in a base64-embedded Fraunces so the
+  social card doesn't fall back to Georgia.
+
 ## Speculative / far-future
 
 - **Programmable card lifecycle via Soroban contract.** Let an operator
