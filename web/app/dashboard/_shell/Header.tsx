@@ -129,6 +129,7 @@ export function Header() {
       <button
         onClick={cycleTheme}
         title={`Theme: ${theme}`}
+        aria-label={`Switch theme (current: ${theme})`}
         className="dashboard-header-theme"
         style={{
           width: 32,
@@ -405,6 +406,9 @@ export function Header() {
       <div style={{ position: 'relative', flexShrink: 0 }}>
         <button
           onClick={() => setAvatarOpen((v) => !v)}
+          aria-label={user?.email ? `Account menu for ${user.email}` : 'Account menu'}
+          aria-haspopup="true"
+          aria-expanded={avatarOpen}
           style={{
             width: 32,
             height: 32,
