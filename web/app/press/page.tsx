@@ -20,7 +20,7 @@ export const metadata: Metadata = {
 
 const FACTS = [
   { label: 'Founded', value: '2026' },
-  { label: 'Headquarters', value: 'Remote · London' },
+  { label: 'Headquarters', value: 'Remote · London · Vancouver' },
   { label: 'Category', value: 'Agent infrastructure' },
   { label: 'Settlement', value: 'Stellar mainnet' },
   { label: 'Issuer', value: 'Pathward, N.A.' },

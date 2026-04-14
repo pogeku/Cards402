@@ -52,8 +52,8 @@ const MILESTONES = [
   },
   {
     date: 'Q3 2026',
-    title: 'Multi-merchant routing + physical cards',
-    body: 'Expand beyond the initial reward-card supplier. Add physical Visa cards with agent-addressable shipping.',
+    title: 'Multi-merchant routing',
+    body: 'Expand beyond the initial reward-card supplier so agents can pick the best card for each use case.',
     status: 'In progress',
   },
   {
