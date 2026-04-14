@@ -211,7 +211,7 @@ const orderStatuses = [
   {
     status: 'refunded',
     meaning:
-      'Payment refunded to your sender address. The refund_stellar_txid field has the transaction hash.',
+      'Payment refunded to your sender address. The response carries a refund.stellar_txid field with the on-chain transaction hash.',
   },
   {
     status: 'rejected',
@@ -822,6 +822,27 @@ def wait_for_card(api_url: str, order_id: str, key: str):
   "updated_at": "2026-04-08T12:03:15.000Z"
 }`}
           </CodeBlock>
+
+          <CodeBlock label="Response — refunded">
+            {`{
+  "order_id": "a3f7c2d1-4e8b-4f0a-9c2d-1b3e5a7f9c0e",
+  "status": "refunded",
+  "phase": "refunded",
+  "amount_usdc": "25.00",
+  "error": "Stage 1 scrape timed out after 3 retries.",
+  "refund": {
+    "stellar_txid": "e4f5a1b2c3d4...9e0f"
+  },
+  "created_at": "2026-04-08T12:00:00.000Z",
+  "updated_at": "2026-04-08T12:05:27.000Z"
+}`}
+          </CodeBlock>
+
+          <Para style={{ color: 'var(--fg-dim)', fontSize: '0.85rem' }}>
+            Any <Code>metadata</Code> object you passed at <Code>POST /orders</Code> creation time
+            is echoed back in every subsequent <Code>GET /orders/:id</Code> response (and SSE
+            event). Use it as the join key between Cards402 orders and your own internal records.
+          </Para>
 
           <SubTitle>List orders (recovery / reconciliation)</SubTitle>
           <Para>
