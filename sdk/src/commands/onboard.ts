@@ -11,7 +11,7 @@
 //    "Awaiting deposit" in their dashboard immediately.
 // 5. Print the Stellar address + next steps.
 
-import { loadCards402Config, saveCards402Config } from '../config';
+import { assertSafeBaseUrl, loadCards402Config, saveCards402Config } from '../config';
 import { createOWSWallet, getOWSBalance } from '../ows';
 import { Cards402Client } from '../client';
 
@@ -136,7 +136,18 @@ export async function onboardCommand(argv: string[]): Promise<number> {
     return 2;
   }
 
-  const apiBase = args.apiBase || process.env.CARDS402_BASE_URL || 'https://api.cards402.com/v1';
+  let apiBase = args.apiBase || process.env.CARDS402_BASE_URL || 'https://api.cards402.com/v1';
+  // Refuse a non-HTTPS base URL unless the local-dev escape hatch is
+  // set. Without this, an attacker who tricks the user into passing
+  // --api-base http://evil/ sees the claim code AND the returned api
+  // key in plaintext. The escape hatch (CARDS402_ALLOW_INSECURE_BASE_URL=1)
+  // exists only for onboarding against a local backend.
+  try {
+    apiBase = assertSafeBaseUrl(apiBase, { context: '--api-base / CARDS402_BASE_URL' });
+  } catch (err) {
+    process.stderr.write(`error: ${err instanceof Error ? err.message : String(err)}\n`);
+    return 2;
+  }
 
   // If the machine already has a Cards402 config, warn before
   // overwriting. A re-onboard is legitimate (rotated key, replaced
@@ -201,6 +212,47 @@ export async function onboardCommand(argv: string[]): Promise<number> {
         'error: claim response missing api_key_id — aborting. Report to api@cards402.com.\n',
       );
       return 1;
+    }
+    // If the backend returns an api_url in the claim response, it
+    // MUST be (a) HTTPS, and (b) the same origin as the URL we posted
+    // the claim to. Without this check, a MITM or a compromised
+    // backend instance could overwrite api_url with an attacker
+    // target, and every subsequent SDK call (including /v1/orders,
+    // which carries the api key in the Authorization header) would
+    // go to the attacker. Persisting the poisoned url to ~/.cards402/
+    // config.json turns a transient MITM into a permanent compromise.
+    if (data.api_url !== undefined && data.api_url !== null) {
+      if (typeof data.api_url !== 'string') {
+        process.stderr.write(
+          `error: claim response api_url is not a string (got: ${typeof data.api_url}) — aborting.\n`,
+        );
+        return 1;
+      }
+      let claimUrl: URL;
+      let baseUrlParsed: URL;
+      try {
+        claimUrl = new URL(data.api_url);
+        baseUrlParsed = new URL(apiBase);
+      } catch {
+        process.stderr.write(
+          `error: claim response api_url (${data.api_url}) is not a valid URL — aborting.\n`,
+        );
+        return 1;
+      }
+      if (claimUrl.protocol !== 'https:' && process.env.CARDS402_ALLOW_INSECURE_BASE_URL !== '1') {
+        process.stderr.write(
+          `error: claim response api_url uses ${claimUrl.protocol} — refusing to persist a non-HTTPS api_url.\n`,
+        );
+        return 1;
+      }
+      if (claimUrl.origin !== baseUrlParsed.origin) {
+        process.stderr.write(
+          `error: claim response api_url origin (${claimUrl.origin}) does not match the onboarding origin (${baseUrlParsed.origin}). ` +
+            'This can indicate a man-in-the-middle or a misconfigured backend. Aborting.\n' +
+            'If you intentionally want to switch origins, re-run onboard with --api-base pointing at the new origin.\n',
+        );
+        return 1;
+      }
     }
     claimResponse = data as unknown as typeof claimResponse;
   } catch (err) {

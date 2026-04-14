@@ -41,16 +41,81 @@ function defaultConfigPath(): string {
 /**
  * Load the agent's on-disk config, or return null if it doesn't exist.
  * Never throws on missing file — only on corrupt JSON.
+ *
+ * On load we also tighten the file mode to 0600 if it's been loosened
+ * since the write (e.g. a bug in an older SDK version that wrote with
+ * default permissions, or an attacker pre-creating the file
+ * world-readable to farm credentials off the next onboarding). We
+ * warn rather than refuse the load, so operators with an existing
+ * loose config aren't hard-broken, but the mode is normalised
+ * immediately.
  */
 export function loadCards402Config(configPath?: string): Cards402Config | null {
   const p = configPath || defaultConfigPath();
   try {
+    // Check permissions before the read so we can fail fast on obvious
+    // tampering and warn on merely-loose files. On Windows, file mode
+    // bits are simulated and may not be meaningful — skip the check
+    // there to avoid spurious warnings.
+    if (process.platform !== 'win32') {
+      try {
+        const stat = fs.statSync(p);
+        // World- or group-readable bits set → tighten and warn
+        if ((stat.mode & 0o077) !== 0) {
+          try {
+            fs.chmodSync(p, 0o600);
+            process.stderr.write(
+              `⚠ cards402 config at ${p} had loose permissions (${(stat.mode & 0o777).toString(8)}) — tightened to 600.\n` +
+                '   If this is unexpected, rotate your api key via the dashboard.\n',
+            );
+          } catch {
+            /* non-fatal — we at least tried */
+          }
+        }
+      } catch {
+        /* stat failed for some reason — fall through to the read */
+      }
+    }
     const raw = fs.readFileSync(p, 'utf8');
     return JSON.parse(raw) as Cards402Config;
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw err;
   }
+}
+
+/**
+ * Validate a base URL for safety before storing it in the config or
+ * using it for API calls. Rejects everything that isn't HTTPS unless
+ * the explicit CARDS402_ALLOW_INSECURE_BASE_URL escape hatch is set,
+ * which only exists so local dev against http://localhost:4000 still
+ * works. Returns the parsed URL.string() on success, throws on reject.
+ *
+ * Called from:
+ *   - onboard, when persisting the api_url returned by the claim
+ *     endpoint (defends against a MITM or compromised backend that
+ *     injects http:// or a foreign origin into the response)
+ *   - resolveCredentials, when an env-var override is used for
+ *     baseUrl (defends against a user being tricked into setting
+ *     CARDS402_BASE_URL to an attacker target)
+ */
+export function assertSafeBaseUrl(url: string, opts: { context?: string } = {}): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid base URL: ${url}`);
+  }
+  if (parsed.protocol !== 'https:') {
+    if (process.env.CARDS402_ALLOW_INSECURE_BASE_URL === '1') {
+      return parsed.toString();
+    }
+    throw new Error(
+      `Refusing to use non-HTTPS base URL (${url})${opts.context ? ` for ${opts.context}` : ''}. ` +
+        `Set CARDS402_ALLOW_INSECURE_BASE_URL=1 to override for local development.`,
+    );
+  }
+  return parsed.toString();
 }
 
 /**
@@ -128,6 +193,16 @@ export function resolveCredentials(
       if (!apiKey) apiKey = cfg.api_key;
       if (!baseUrl) baseUrl = cfg.api_url;
     }
+  }
+
+  // Refuse any non-HTTPS baseUrl (env, opts, or config) unless the
+  // explicit local-dev escape hatch is set. Without this, an attacker
+  // who tricks the user into setting CARDS402_BASE_URL=http://evil/
+  // sees the api key in every request's Authorization header. The
+  // assertSafeBaseUrl helper throws on reject — we let it propagate
+  // rather than silently continue with an insecure URL.
+  if (baseUrl) {
+    baseUrl = assertSafeBaseUrl(baseUrl, { context: 'resolveCredentials' });
   }
 
   return { apiKey, baseUrl };
