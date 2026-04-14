@@ -133,10 +133,16 @@ async function probeUsdcToXlmPath(destXlm) {
 }
 
 // Atomic USDC→XLM swap + send to a specific XLM destination. One Stellar
-// tx: PathPaymentStrictReceive pulls USDC from the treasury, routes
-// through the DEX, and delivers exactly `destXlm` XLM to `destination`.
-// Caps the USDC spent at `maxUsdc` — if slippage would push the cost
-// past that, the tx fails atomically (no partial spend, no stuck state).
+// tx: PathPaymentStrictSend pushes exactly `maxUsdc` of USDC from the
+// treasury through the DEX and delivers the resulting XLM to `destination`.
+//
+// Strict-SEND semantics (chosen after the 2026-04-14 op_over_source_max
+// failures): cards402 only ever spends exactly the USDC the agent paid in;
+// any DEX slippage is absorbed on the XLM side by delivering slightly less
+// XLM than the invoice quoted. `destMin` is the floor — up to 1% below the
+// invoice is tolerated. If the market has moved enough that even the face
+// value can't buy 99% of the invoice XLM, the tx fails atomically (no
+// partial spend, no stuck state) and the order is refunded.
 async function sendUsdcAsXlm({ destination, destXlm, maxUsdc, memo }) {
   const secret = process.env.STELLAR_XLM_SECRET;
   if (!secret) throw new Error('STELLAR_XLM_SECRET not set');
@@ -153,7 +159,7 @@ async function sendUsdcAsXlm({ destination, destXlm, maxUsdc, memo }) {
   // Probe the DEX for book health AND the concrete path Horizon would use.
   // We pin the returned path on the actual submission so Core's in-core
   // pathfinder can't silently pick a more expensive route at ledger-close
-  // time (root cause of the 2026-04-14 op_over_source_max failures).
+  // time.
   const probe = await probeUsdcToXlmPath(destXlm);
   bizEvent('dex.usdc_xlm.probe', {
     dest_xlm: destXlm,
@@ -165,16 +171,26 @@ async function sendUsdcAsXlm({ destination, destXlm, maxUsdc, memo }) {
     max_usdc: maxUsdc,
   });
 
-  // Business rule: accept up to 1% slippage above the order's face value.
-  // sendMax is the absolute ceiling on USDC spent by the treasury for this
-  // path payment, expressed in Stellar's 7-decimal precision.
-  const SLIPPAGE_FACTOR = 1.01;
-  const sendMaxLimit = (Number(maxUsdc) * SLIPPAGE_FACTOR).toFixed(7);
-  if (probe.ok && Number(probe.sourceAmount) > Number(sendMaxLimit)) {
-    throw new Error(
-      `DEX quote ${probe.sourceAmount} USDC exceeds 1% slippage budget ${sendMaxLimit} ` +
-        `(face value ${maxUsdc}) — path payment would fail. Aborting without burning fees.`,
-    );
+  // Business rule: we accept up to 1% slippage by delivering slightly less
+  // XLM to CTX, never by spending more USDC than the agent gave us. The
+  // agent's USDC is the sendAmount ceiling and the floor on delivered XLM
+  // is invoice * 0.99. Format to Stellar's 7-decimal precision.
+  const SLIPPAGE_FLOOR = 0.99;
+  const sendAmount = Number(maxUsdc).toFixed(7);
+  const destMin = (Number(destXlm) * SLIPPAGE_FLOOR).toFixed(7);
+
+  // Early-abort check: if the probe already tells us that face-value USDC
+  // can't buy even 99% of the invoice XLM at current market rates, the tx
+  // will fail with op_under_dest_min. Abort now so we don't burn fees.
+  if (probe.ok) {
+    const quoteUsdcPerXlm = Number(probe.sourceAmount) / Number(destXlm);
+    const xlmAtSendAmount = Number(sendAmount) / quoteUsdcPerXlm;
+    if (xlmAtSendAmount < Number(destMin)) {
+      throw new Error(
+        `DEX would only deliver ${xlmAtSendAmount.toFixed(7)} XLM for ${sendAmount} USDC, ` +
+          `below the 1% slippage floor of ${destMin} XLM (invoice ${destXlm}). Aborting.`,
+      );
+    }
   }
 
   // Pin the probe's path on the operation so the submission uses the same
@@ -186,12 +202,12 @@ async function sendUsdcAsXlm({ destination, destXlm, maxUsdc, memo }) {
     (account) =>
       new TransactionBuilder(account, { fee: '100000', networkPassphrase: NETWORK_PASSPHRASE })
         .addOperation(
-          Operation.pathPaymentStrictReceive({
+          Operation.pathPaymentStrictSend({
             sendAsset: usdc,
-            sendMax: sendMaxLimit,
+            sendAmount,
             destination,
             destAsset: Asset.native(),
-            destAmount: String(destXlm),
+            destMin,
             path,
           }),
         )
