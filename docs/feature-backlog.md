@@ -194,6 +194,51 @@ this into a real roadmap later.
 - **Internationalisation.** English-only today. Spanish, Portuguese, and
   Japanese would cover most of the agent-developer demand we see.
 
+## Surfaces added during loop iteration 5 (backlog extensions)
+
+### More auto-sync candidates
+
+The SDK/docs drift audit continues to find real bugs every
+iteration. Five more this loop alone (wrong param name, 1000
+ceiling missed, three missing error codes, wrong CLI default
+asset, two undocumented endpoints). Reinforces the need for:
+
+- **API source of truth as OpenAPI.** Generate both the
+  docs page's error/endpoint tables AND the SDK's type
+  definitions from a single OpenAPI file in the backend repo.
+  The web app can read the spec at build time and render it
+  into JSX. Nothing is typed twice.
+- **`spec/openapi.yaml` in the backend repo** — start hand-
+  written since it's smaller than the code, use it as
+  authority going forward.
+
+### Dashboard / operator ergonomics
+
+Unchecked items from prior iterations that are still worth
+doing:
+
+- **Budget bar** on dashboard pages that shows current
+  \`budget.remaining_usdc\` relative to \`budget.limit_usdc\`.
+  Uses the /v1/usage endpoint I just documented.
+- **Policy preview tool** that calls /v1/policy/check?amount=X
+  as the user types so they can see in real time whether an
+  order of $X would be allowed under the current spend policy.
+- **Order list page filter by \`status\`** — the list endpoint
+  already supports the query param, the dashboard's order table
+  just doesn't surface it yet.
+
+### Agent UX
+
+- **Delta polling** via \`since_updated_at\` (already supported
+  by the backend). Reference implementation snippet in the docs
+  showing an agent that rehydrates from the last seen
+  \`updated_at\` — better than polling a specific order id when
+  the agent is managing many orders.
+- **POST /v1/policy/check documentation** — it's a GET not a
+  POST, and I chose not to add it to /docs this iteration, but
+  it's useful for agents that want to pre-flight large
+  purchases without burning a rate-limit slot on a failed POST.
+
 ## Surfaces added during loop iteration 4 (backlog extensions)
 
 ### SDK / docs sync
