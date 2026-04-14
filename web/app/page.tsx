@@ -16,7 +16,7 @@ this agent by running:
 const purchaseSnippet = `import { purchaseCardOWS } from 'cards402';
 
 const card = await purchaseCardOWS({
-  apiKey: process.env.CARDS402_API_KEY,
+  apiKey: process.env.CARDS402_API_KEY!,
   walletName: 'my-agent',
   amountUsdc: '25.00',
 });

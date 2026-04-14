@@ -198,7 +198,7 @@ const { xlm, usdc } = await getOWSBalance('my-agent');`}</CodeBlock>
         <CodeBlock label="TypeScript">{`import { purchaseCardOWS } from 'cards402';
 
 const card = await purchaseCardOWS({
-  apiKey: process.env.CARDS402_API_KEY,
+  apiKey: process.env.CARDS402_API_KEY!,
   walletName: 'my-agent',
   amountUsdc: '25.00',
   paymentAsset: 'xlm',  // or 'usdc' (default)
