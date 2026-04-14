@@ -4,6 +4,36 @@ Unprioritised brain-dump of ideas that would be worth considering. Written after
 the phase 1–3 site build on 2026-04-14. Tagged by surface area so we can slice
 this into a real roadmap later.
 
+## Status at loop 13
+
+Items that have since shipped during the audit loops:
+
+- ✅ `/blog` pipeline — 4 real posts published, drafts pipeline emptied:
+  - How we built non-custodial card issuance on Soroban (10 min)
+  - Anatomy of a Cards402 order (8 min)
+  - Why SSE beats polling for agent-facing APIs (6 min)
+  - Claim codes: credentials that never touch the transcript (7 min)
+- ✅ `/changelog` with tagged entries + RSS + auto-discovery
+- ✅ SEO foundation: sitemap, robots, manifest, og image,
+  `llms.txt`, `security.txt`, `humans.txt`, `skill.md`, verification
+  metadata stub
+- ✅ Custom 404 + route error boundary + global-error boundary
+- ✅ All docs/content surfaces cross-checked against real SDK +
+  backend source (32 drift bugs caught across 13 loops)
+- ✅ Structured data: Organization, WebSite, SoftwareApplication,
+  Product, FAQPage, JobPosting, BlogPosting, ItemList, HowTo,
+  BreadcrumbList, TechArticle
+- ✅ Keyboard a11y: skip link, focus-visible, aria-label on icon
+  buttons
+- ✅ Three copy buttons on every code block, Python + curl siblings
+  next to TypeScript
+- ✅ SSE + polling fallback documented end-to-end
+- ✅ Every webhook event type documented with correct shapes
+- ✅ All error codes match real backend emit sites
+
+The iteration-by-iteration detail is in the commit history; this
+list is the summary for any future session picking up the project.
+
 ## Core product
 
 ### Cards
