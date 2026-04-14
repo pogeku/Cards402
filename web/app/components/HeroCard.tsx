@@ -68,45 +68,34 @@ function installTilt() {
   let pointerY = 0;
   let currentX = 0;
   let currentY = 0;
-  // Sheen-glare pointer position in percent. Tracked separately so
-  // both the tilt *and* the radial glare inherit the same lerp-toward-
-  // target behaviour.
+  // Sheen-glare pointer position in percent.
   let targetGlareX = 50;
   let targetGlareY = 50;
   let currentGlareX = 50;
   let currentGlareY = 50;
   let lastMove = performance.now();
 
-  // Cached root rect. Updated on scroll / resize (cheap) instead of
-  // every pointermove (layout-triggering). A stale rect only matters
-  // if the page reflows without a scroll/resize event, which is rare
-  // for a hero section. The tilt uses relative coordinates so a small
-  // drift on fast reflows is invisible.
-  let rootRect = root.getBoundingClientRect();
-  const updateRect = () => {
-    rootRect = root.getBoundingClientRect();
-  };
-  window.addEventListener('scroll', updateRect, { passive: true });
-  window.addEventListener('resize', updateRect, { passive: true });
-
-  // Last raw event coordinates — sampled once per frame by the rAF
-  // loop instead of re-read by every pointermove event. Before, the
-  // onMove handler ran on every raw event (hundreds per second on a
-  // high-DPI mouse) and called getBoundingClientRect() each time,
-  // which is a layout-triggering read. Now onMove just stashes the
-  // client coords; animate() consumes them at 60 Hz.
-  let rawX = 0;
-  let rawY = 0;
-  let rawDirty = false;
-
   function setVar(name: string, value: string) {
     root.style.setProperty(name, value);
   }
 
   function onMove(e: PointerEvent) {
-    rawX = e.clientX;
-    rawY = e.clientY;
-    rawDirty = true;
+    // Read the root rect fresh on each event. An earlier refactor
+    // tried to cache the rect and invalidate on scroll/resize — but
+    // documentElement's rect changes on scroll (its top becomes
+    // negative) and on any mid-page reflow, and the cache got stale
+    // enough to break the parallax math. getBoundingClientRect on
+    // documentElement is a few microseconds in practice — not worth
+    // the correctness risk.
+    const rect = root.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    const clampX = Math.max(0, Math.min(1, x));
+    const clampY = Math.max(0, Math.min(1, y));
+    pointerX = (clampX - 0.5) * 30;
+    pointerY = (clampY - 0.5) * 22;
+    targetGlareX = clampX * 100;
+    targetGlareY = clampY * 100;
     lastMove = performance.now();
   }
   function onLeave() {
@@ -117,19 +106,6 @@ function installTilt() {
   }
 
   function animate() {
-    // Consume the latest raw pointer coords once per frame.
-    if (rawDirty) {
-      rawDirty = false;
-      const x = (rawX - rootRect.left) / rootRect.width;
-      const y = (rawY - rootRect.top) / rootRect.height;
-      const clampX = Math.max(0, Math.min(1, x));
-      const clampY = Math.max(0, Math.min(1, y));
-      pointerX = (clampX - 0.5) * 30;
-      pointerY = (clampY - 0.5) * 22;
-      targetGlareX = clampX * 100;
-      targetGlareY = clampY * 100;
-    }
-
     // Dialled-down idle drift — original prototype was ±8/±6, too
     // busy for a financial surface. At ±2.5/±1.8 the card has a
     // gentle breath without bobbing.
