@@ -821,6 +821,105 @@ def wait_for_card(api_url: str, order_id: str, key: str):
   "updated_at": "2026-04-08T12:03:15.000Z"
 }`}
           </CodeBlock>
+
+          <SubTitle>List orders (recovery / reconciliation)</SubTitle>
+          <Para>
+            Agents that crash mid-flight can rehydrate state by listing the orders created under
+            their key. The response is an array of order summaries ordered by{' '}
+            <Code>created_at</Code> descending.
+          </Para>
+
+          <Endpoint method="GET" path="/orders" />
+
+          <Para>Optional query parameters:</Para>
+          <div style={{ margin: '0 0 1.5rem', overflowX: 'auto' }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Param</th>
+                  <th>Default</th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>
+                    <Code>limit</Code>
+                  </td>
+                  <td style={{ color: 'var(--fg-muted)' }}>20</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>
+                    Maximum number of results. Capped at 200.
+                  </td>
+                </tr>
+                <tr>
+                  <td>
+                    <Code>offset</Code>
+                  </td>
+                  <td style={{ color: 'var(--fg-muted)' }}>0</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>
+                    Pagination offset for walking historical orders.
+                  </td>
+                </tr>
+                <tr>
+                  <td>
+                    <Code>status</Code>
+                  </td>
+                  <td style={{ color: 'var(--fg-muted)' }}>any</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>
+                    Filter by internal status (e.g. <Code>pending_payment</Code>,{' '}
+                    <Code>delivered</Code>).
+                  </td>
+                </tr>
+                <tr>
+                  <td>
+                    <Code>since_created_at</Code>
+                  </td>
+                  <td style={{ color: 'var(--fg-muted)' }}>—</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>
+                    ISO timestamp — only orders created at or after this time.
+                  </td>
+                </tr>
+                <tr>
+                  <td>
+                    <Code>since_updated_at</Code>
+                  </td>
+                  <td style={{ color: 'var(--fg-muted)' }}>—</td>
+                  <td style={{ color: 'var(--fg-muted)' }}>
+                    ISO timestamp — only orders updated at or after this time. Useful for delta
+                    polling without re-fetching the full history.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <CodeBlock label="Response — array of order summaries">
+            {`[
+  {
+    "id": "a3f7c2d1-4e8b-4f0a-9c2d-1b3e5a7f9c0e",
+    "status": "delivered",
+    "amount_usdc": "25.00",
+    "payment_asset": "usdc_soroban",
+    "created_at": "2026-04-08T12:00:00.000Z",
+    "updated_at": "2026-04-08T12:01:02.000Z"
+  },
+  {
+    "id": "b9e1f3a2-7c4d-4b0e-8f1a-2c4e6a8b0d2f",
+    "status": "pending_payment",
+    "amount_usdc": "10.00",
+    "payment_asset": "usdc_soroban",
+    "created_at": "2026-04-08T11:59:12.000Z",
+    "updated_at": "2026-04-08T11:59:12.000Z"
+  }
+]`}
+          </CodeBlock>
+
+          <Para style={{ color: 'var(--fg-dim)', fontSize: '0.85rem' }}>
+            Note the key shape difference: list items use <Code>id</Code> (not <Code>order_id</Code>
+            ) and omit the <Code>phase</Code> field and the <Code>card</Code> object. To retrieve
+            card details for a delivered order in the list, call <Code>GET /orders/:id</Code> or use
+            the SDK&apos;s <Code>client.getOrder(id)</Code>.
+          </Para>
         </Section>
 
         {/* ── Order statuses ── */}
