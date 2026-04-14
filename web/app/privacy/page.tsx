@@ -129,8 +129,8 @@ export default function PrivacyPage() {
                     notifications). Receives your email address.
                   </li>
                   <li>
-                    <strong>Vultr</strong> — primary infrastructure provider (EU data centre).
-                    Cards402 operates on encrypted VPS instances under our own control.
+                    <strong>Hetzner Cloud</strong> — primary infrastructure provider (EU data
+                    centre). Cards402 operates on dedicated cloud instances under our own control.
                   </li>
                 </ul>
                 <p>
