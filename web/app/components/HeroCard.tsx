@@ -39,51 +39,77 @@ function installTilt() {
   tiltInstalled = true;
 
   const root = document.documentElement;
+
+  // Flip the load gate unconditionally so the sheen / grid / noise /
+  // orbs / rings finish their intro choreography even for users who
+  // opt out of motion. The rest of this function is the continuous
+  // rAF loop + pointer listener, which IS motion and should honour
+  // the reduced-motion preference.
+  requestAnimationFrame(() => root.style.setProperty('--load-progress', '1'));
+
+  // Bail out of the continuous render loop if the user prefers
+  // reduced motion. This also covers the "hardware acceleration is
+  // off" escape hatch — users on a browser with GPU compositing
+  // disabled can toggle the OS-level reduced-motion preference and
+  // immediately stop paying for (a) the 60 Hz rAF updating CSS vars,
+  // (b) the filter: blur(...) repaints on every transform tick,
+  // (c) the pointer listener doing getBoundingClientRect() reads on
+  // every raw pointermove event. The card stays at its CSS default
+  // tilt of rotateX(-8deg) rotateY(12deg) which is already baked in
+  // as the initial --rotate-x / --rotate-y values, so it still looks
+  // three-dimensional, just static.
+  if (typeof window.matchMedia === 'function') {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    if (mq.matches) return;
+  }
+
   // Tilt targets (pixels / degrees) + lerped current values
   let pointerX = 0;
   let pointerY = 0;
   let currentX = 0;
   let currentY = 0;
   // Sheen-glare pointer position in percent. Tracked separately so
-  // both the tilt *and* the radial glare inherit the same
-  // lerp-toward-target behaviour. Before, the glare was assigned
-  // directly on every pointermove event — which meant the first
-  // event after the cursor re-entered the window would jump the
-  // glare to the new position instantly. Now `animate()` eases
-  // currentGlareX/Y toward targetGlareX/Y every frame, so a cursor
-  // teleport becomes a ~200ms glide.
+  // both the tilt *and* the radial glare inherit the same lerp-toward-
+  // target behaviour.
   let targetGlareX = 50;
   let targetGlareY = 50;
   let currentGlareX = 50;
   let currentGlareY = 50;
   let lastMove = performance.now();
 
+  // Cached root rect. Updated on scroll / resize (cheap) instead of
+  // every pointermove (layout-triggering). A stale rect only matters
+  // if the page reflows without a scroll/resize event, which is rare
+  // for a hero section. The tilt uses relative coordinates so a small
+  // drift on fast reflows is invisible.
+  let rootRect = root.getBoundingClientRect();
+  const updateRect = () => {
+    rootRect = root.getBoundingClientRect();
+  };
+  window.addEventListener('scroll', updateRect, { passive: true });
+  window.addEventListener('resize', updateRect, { passive: true });
+
+  // Last raw event coordinates — sampled once per frame by the rAF
+  // loop instead of re-read by every pointermove event. Before, the
+  // onMove handler ran on every raw event (hundreds per second on a
+  // high-DPI mouse) and called getBoundingClientRect() each time,
+  // which is a layout-triggering read. Now onMove just stashes the
+  // client coords; animate() consumes them at 60 Hz.
+  let rawX = 0;
+  let rawY = 0;
+  let rawDirty = false;
+
   function setVar(name: string, value: string) {
     root.style.setProperty(name, value);
   }
 
-  // Kick the load-in progress variable to 1 on the first frame. Until
-  // this runs, elements that multiply their opacity by
-  // var(--load-progress) are fully hidden — so the sheen, grid texture,
-  // noise speckle, orb highlights and corner rings all gate-in behind
-  // the outline+shell intro instead of being visible from frame 1.
-  requestAnimationFrame(() => setVar('--load-progress', '1'));
-
   function onMove(e: PointerEvent) {
-    const rect = root.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = (e.clientY - rect.top) / rect.height;
-    const clampX = Math.max(0, Math.min(1, x));
-    const clampY = Math.max(0, Math.min(1, y));
-    pointerX = (clampX - 0.5) * 30;
-    pointerY = (clampY - 0.5) * 22;
-    targetGlareX = clampX * 100;
-    targetGlareY = clampY * 100;
+    rawX = e.clientX;
+    rawY = e.clientY;
+    rawDirty = true;
     lastMove = performance.now();
   }
   function onLeave() {
-    // Drift everything back to centre so the card settles instead of
-    // freezing wherever the cursor last was.
     pointerX = 0;
     pointerY = 0;
     targetGlareX = 50;
@@ -91,6 +117,19 @@ function installTilt() {
   }
 
   function animate() {
+    // Consume the latest raw pointer coords once per frame.
+    if (rawDirty) {
+      rawDirty = false;
+      const x = (rawX - rootRect.left) / rootRect.width;
+      const y = (rawY - rootRect.top) / rootRect.height;
+      const clampX = Math.max(0, Math.min(1, x));
+      const clampY = Math.max(0, Math.min(1, y));
+      pointerX = (clampX - 0.5) * 30;
+      pointerY = (clampY - 0.5) * 22;
+      targetGlareX = clampX * 100;
+      targetGlareY = clampY * 100;
+    }
+
     // Dialled-down idle drift — original prototype was ±8/±6, too
     // busy for a financial surface. At ±2.5/±1.8 the card has a
     // gentle breath without bobbing.
@@ -100,11 +139,8 @@ function installTilt() {
     const targetX = pointerX * 0.85 + driftX;
     const targetY = pointerY * 0.85 + driftY;
 
-    // Tilt lerp (existing behaviour)
     currentX += (targetX - currentX) * 0.08;
     currentY += (targetY - currentY) * 0.08;
-    // Glare lerp — same rate so card tilt and light source feel
-    // mechanically coupled.
     currentGlareX += (targetGlareX - currentGlareX) * 0.08;
     currentGlareY += (targetGlareY - currentGlareY) * 0.08;
 
@@ -263,19 +299,22 @@ function SceneStyles() {
         animation: hc-driftStars 32s linear infinite;
       }
       .hc-scene::after {
-        background: conic-gradient(
-          from 90deg at 62% 50%,
-          rgba(255, 207, 110, 0.07),
-          transparent 22%,
-          rgba(124, 245, 208, 0.07),
-          transparent 54%,
-          rgba(155, 209, 255, 0.07),
-          transparent 82%,
-          rgba(255, 125, 182, 0.07)
-        );
-        filter: blur(90px);
-        opacity: 0.6;
-        transform: translate3d(calc(var(--card-x) * -0.2), calc(var(--card-y) * -0.2), 0);
+        /* Previously a conic gradient with filter: blur(90px). That blur
+           was the single biggest perf cost on the homepage: when software
+           rendering is in use (GPU compositing disabled, common on
+           corporate Windows installs) the blur has to re-rasterize the
+           entire hero region on every frame, and the transform binding
+           on var(--card-x/y) meant every pointer move triggered that
+           re-rasterize. Replaced with a radial wash that composites as
+           a single background paint — no filter, no transform binding.
+           Visual difference is small: still a soft multi-colour glow
+           behind the card, just without the conic sweep. */
+        background:
+          radial-gradient(circle at 30% 30%, rgba(255, 207, 110, 0.08), transparent 55%),
+          radial-gradient(circle at 72% 40%, rgba(124, 245, 208, 0.07), transparent 58%),
+          radial-gradient(circle at 55% 80%, rgba(155, 209, 255, 0.08), transparent 60%),
+          radial-gradient(circle at 85% 70%, rgba(255, 125, 182, 0.06), transparent 45%);
+        opacity: 0.7;
       }
 
       .hc-halo {
@@ -286,14 +325,15 @@ function SceneStyles() {
         aspect-ratio: 1;
         border-radius: 999px;
         pointer-events: none;
-        background: radial-gradient(circle, rgba(255, 207, 110, 0.11), transparent 58%);
-        filter: blur(14px);
+        /* Softer radial stop gives the halo look without needing
+           filter: blur — the 58% transparent cutoff already produces
+           a diffuse edge. The previous version layered a 14px blur
+           on top AND re-rendered that blur on every pointer move
+           because of the var(--card-x/y) transform binding. Now the
+           halo is static. */
+        background: radial-gradient(circle, rgba(255, 207, 110, 0.14), transparent 62%);
         opacity: 0.85;
-        transform: translate3d(
-          calc(-50% + var(--card-x) * -0.1),
-          calc(-50% + var(--card-y) * -0.1),
-          0
-        );
+        transform: translate(-50%, -50%);
       }
       .hc-halo::before,
       .hc-halo::after {
@@ -353,11 +393,20 @@ function CardStyles() {
         bottom: -2rem;
         height: 3rem;
         border-radius: 50%;
-        background: radial-gradient(circle, rgba(255, 180, 70, 0.32), rgba(0, 0, 0, 0));
-        filter: blur(20px);
-        transform: translate3d(calc(var(--card-x) * 0.35), calc(var(--card-y) * 0.35), -80px)
-          scale(1.1);
-        opacity: 0.75;
+        /* Radial gradient alone produces a soft shadow without needing
+           filter blur. The previous version had filter blur 20px plus
+           a transform binding on var(--card-x/y), which forced a
+           software-mode re-rasterize of the blurred region on every
+           pointer move. Dropping both makes the shadow static but
+           identical-looking. */
+        background: radial-gradient(
+          ellipse at center,
+          rgba(255, 180, 70, 0.28),
+          rgba(255, 180, 70, 0.08) 48%,
+          rgba(0, 0, 0, 0) 72%
+        );
+        transform: translate3d(0, 0, -80px) scale(1.1);
+        opacity: 0.8;
         pointer-events: none;
       }
       .hc-card {
@@ -390,8 +439,11 @@ function CardStyles() {
         transform: translate3d(var(--card-x), var(--card-y), 0)
           rotateX(var(--rotate-x)) rotateY(var(--rotate-y));
         transition: transform 120ms ease-out;
-        /* Float loop is delayed so it doesn't fight the intro. */
-        animation: hc-floatCard 8s ease-in-out infinite 1500ms;
+        /* Hint the browser that this element will be transformed so
+           it gets its own paint layer even when GPU compositing is
+           off. In software mode this means we only re-rasterise the
+           card region on pointer move, not the whole hero section. */
+        will-change: transform;
         color: #f5f1e8;
         font-family: var(--font-body);
       }
@@ -403,17 +455,22 @@ function CardStyles() {
         pointer-events: none;
       }
       .hc-card::before {
+        /* The previous version used mix-blend-mode: screen to
+           brighten the card face where the cursor hovers. Blend modes
+           force a new compositing layer and re-composite on every
+           paint, which is extremely expensive under software
+           rendering. A straight rgba overlay looks ~identical on
+           a dark card without the blend-mode cost. */
         background:
-          linear-gradient(115deg, transparent 20%, rgba(255, 255, 255, 0.22) 45%, transparent 58%),
+          linear-gradient(115deg, transparent 20%, rgba(255, 255, 255, 0.18) 45%, transparent 58%),
           radial-gradient(
             circle at var(--pointer-x) var(--pointer-y),
             rgba(255, 255, 255, 0.22),
             transparent 28%
           );
-        mix-blend-mode: screen;
         /* Gated through load-progress so the sheen doesn't appear
            until the outline + shell have established the card. */
-        opacity: calc(0.9 * var(--load-progress));
+        opacity: calc(0.85 * var(--load-progress));
         transform: translateZ(60px);
       }
       .hc-card::after {
@@ -503,12 +560,15 @@ function CardStyles() {
       .hc-noise {
         position: absolute;
         inset: 0;
-        opacity: calc(0.08 * var(--load-progress));
+        /* mix-blend-mode: soft-light removed for the same perf reason
+           as the sheen above. At 8% opacity on a dark card the visual
+           result is close enough — a faint speckle — without paying
+           the always-on blend cost. */
+        opacity: calc(0.1 * var(--load-progress));
         background-image:
-          radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.8) 0 0.7px, transparent 0.8px),
-          radial-gradient(circle at 70% 55%, rgba(255, 255, 255, 0.8) 0 0.7px, transparent 0.8px);
+          radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.6) 0 0.7px, transparent 0.8px),
+          radial-gradient(circle at 70% 55%, rgba(255, 255, 255, 0.6) 0 0.7px, transparent 0.8px);
         background-size: 10px 10px, 13px 13px;
-        mix-blend-mode: soft-light;
       }
 
       .hc-rings {
@@ -692,10 +752,10 @@ function CardStyles() {
         letter-spacing: 0.2em;
       }
 
-      @keyframes hc-floatCard {
-        0%, 100% { filter: saturate(1) brightness(1); }
-        50% { filter: saturate(1.06) brightness(1.04); }
-      }
+      /* hc-floatCard (8s continuous filter loop cycling saturate +
+         brightness) removed 2026-04-14 — it was causing a full
+         card repaint every frame under software rendering, and the
+         visual delta at 1.06× saturate was imperceptible anyway. */
 
       /* Card-wrap lifts from 2rem below with a blur + scale and settles. */
       @keyframes hc-wrapEnter {
