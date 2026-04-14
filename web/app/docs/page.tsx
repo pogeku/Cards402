@@ -262,11 +262,6 @@ const errors = [
       'Too many orders (60/hour) or too many polls (600/minute). Back off and retry; the window is rolling.',
   },
   {
-    code: 'xlm_price_unavailable',
-    status: 503,
-    meaning: 'XLM price feed unavailable. Retry in a few seconds or use USDC instead.',
-  },
-  {
     code: 'service_temporarily_unavailable',
     status: 503,
     meaning: 'Circuit breaker tripped after repeated failures. Try again later.',
@@ -531,9 +526,12 @@ export default function DocsPage() {
 
           <Para>
             Asset choice happens at <strong>payment time</strong>, not order creation. The response
-            below always carries both a <Code>payment.usdc</Code> quote and a{' '}
-            <Code>payment.xlm</Code> quote — call <Code>pay_usdc()</Code> or <Code>pay_xlm()</Code>{' '}
-            on the Soroban contract with whichever asset you want to settle in.
+            carries a <Code>payment.usdc</Code> quote in every case and a <Code>payment.xlm</Code>{' '}
+            quote when the XLM price oracle is available — call <Code>pay_usdc()</Code> or{' '}
+            <Code>pay_xlm()</Code> on the Soroban contract with whichever asset you want to settle
+            in. If <Code>payment.xlm</Code> is absent from the response (oracle outage) the order
+            can still be paid in USDC; retry order creation a few seconds later if you need an XLM
+            quote.
           </Para>
 
           <CodeBlock label="Request">
@@ -1183,6 +1181,61 @@ def verify_webhook(raw_body: bytes, signature: str, timestamp: str, secret: str)
               </tbody>
             </table>
           </div>
+
+          <SubTitle>Handling errors by type (SDK)</SubTitle>
+          <Para>
+            The Cards402 SDK converts the <Code>error</Code> string from each response into a typed
+            subclass of <Code>Cards402Error</Code>, so agents can handle each case without
+            string-parsing:
+          </Para>
+
+          <CodeBlock label="TypeScript">
+            {`import {
+  Cards402Client,
+  SpendLimitError,
+  RateLimitError,
+  ServiceUnavailableError,
+  InvalidAmountError,
+  AuthError,
+  OrderFailedError,
+  WaitTimeoutError,
+  ResumableError,
+} from 'cards402';
+
+const client = new Cards402Client({ apiKey });
+
+try {
+  const card = await client.waitForCard(orderId);
+} catch (err) {
+  if (err instanceof SpendLimitError) {
+    // err.limit, err.spent — ask the operator to raise the cap
+  } else if (err instanceof RateLimitError) {
+    // back off before retrying
+  } else if (err instanceof ServiceUnavailableError) {
+    // circuit breaker tripped; retry in a few minutes
+  } else if (err instanceof OrderFailedError) {
+    // err.orderId, err.refund.stellar_txid — payment refunded
+  } else if (err instanceof WaitTimeoutError) {
+    // err.orderId — order may still complete; poll again later
+  } else if (err instanceof ResumableError) {
+    // err.orderId — resume with cards402 purchase --resume <id>
+  } else if (err instanceof AuthError) {
+    // key is missing or revoked
+  } else {
+    // Cards402Error base, or a non-cards402 error — rethrow
+    throw err;
+  }
+}`}
+          </CodeBlock>
+
+          <Para style={{ color: 'var(--fg-dim)', fontSize: '0.85rem' }}>
+            All typed errors extend <Code>Cards402Error</Code>, which carries <Code>code</Code>,{' '}
+            <Code>status</Code>, and <Code>raw</Code> (the original JSON body) for cases the SDK
+            doesn&apos;t have a dedicated subclass for. <Code>ResumableError</Code> is the one you
+            actually need for production — it wraps every non-terminal failure of{' '}
+            <Code>purchaseCardOWS()</Code> and hands you an
+            <Code>orderId</Code> you can pass to <Code>--resume</Code>.
+          </Para>
         </Section>
 
         {/* ── Rate limits ── */}
