@@ -523,3 +523,68 @@ doing:
 - **Merchant-side acceptance SDK.** The mirror of our current SDK — a drop-in
   that merchants embed to gate content/services behind an agent card
   payment. HTTP 402 going the other way.
+
+## Loop 19 additions
+
+### Nav + chrome
+
+- **Command palette on marketing pages too.** The dashboard already has
+  a Cmd+K palette via `_shell/CommandPalette.tsx`. Port a lightweight
+  version to the marketing chrome so visitors can jump between Pricing /
+  Docs / Compare without hunting the More menu. Seed it with every
+  route in the sitemap + every section anchor from /docs.
+- **Active-section highlight in the docs sidebar.** The docs page has
+  a sticky section list; hook it up to an IntersectionObserver so the
+  current heading is highlighted as the user scrolls. Same pattern
+  the legal ToC uses.
+- **Skip-to-content anchor on the dashboard.** We added a skip link
+  on the marketing chrome in loop 6; the dashboard layout doesn't
+  have one yet. Keyboard users tabbing through the sidebar have to
+  hit every nav item before reaching page content.
+
+### Docs polish
+
+- **Inline type definitions.** Clicking a type name in a code block
+  (`OrderOptions`, `CardDetails`) should pop a tooltip with the real
+  type from the SDK's `.d.ts`, not a separate reference page. Same
+  idea as shiki's TwoSlash — we'd render it at build time from the
+  published .d.ts so it stays current by construction.
+- **"Try it" panel next to each endpoint.** Clicking the `POST /v1/orders`
+  section should open a mini playground with the sample body and a
+  Send button that hits the real API with a dev key. Keep the key
+  scoped to the sandbox ledger so there's no risk.
+- **Per-endpoint SSE viewer.** A live log tail embedded in the docs
+  that shows an anonymised sample of real orders completing in real
+  time. Demonstrates the <60s claim without asking visitors to sign
+  up first.
+
+### Content
+
+- **Case study format.** One-page interview with an operator who
+  shipped a real agent on Cards402 — problem, solution, metrics. Lives
+  under `/case-studies/<slug>` and gets an Article JSON-LD with the
+  operator's logo as the `publisher.logo`.
+- **Calculator: "how much does this card cost me?"** Interactive
+  widget on /pricing that lets you set card amount, expected FX,
+  and months until spend, then tells you the true out-the-door
+  cost including Pathward's $2 + 2% FX and $2.50/month inactivity.
+  Saves every operator the same mental arithmetic.
+- **Glossary of agent payment terms.** `/docs/glossary` — SSE, OWS,
+  PAN, CVV, trustline, Soroban, Stellar memo, non-custodial, PSP,
+  BIN, claim code, webhook signature. Hashed anchor per term so docs
+  can link inline.
+
+### Dev-loop correctness
+
+- **Type tests for the SDK public surface.** `.tst.ts` files that
+  pin the shape of `purchaseCardOWS`, `createOrder`, `waitForCard`
+  against frozen expected types. Catches breaking-change accidents
+  in releases without having to run real calls.
+- **Playwright visual snapshots at 375 / 768 / 1280.** One test
+  per marketing route, takes a full-page screenshot, diffs against
+  main. Would have caught the loop-1 fix(web) iteration on the
+  hero card before it shipped.
+- **OpenAPI contract test.** Already in the backlog above but worth
+  repeating: run the spec against a dev backend in CI. Even a
+  single `for path in spec.paths: requests.request(method, dev_url+path)`
+  loop would catch most of the drift we've been manually chasing.
