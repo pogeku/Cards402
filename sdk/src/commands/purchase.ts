@@ -30,21 +30,34 @@ interface PurchaseArgs {
   help?: boolean;
 }
 
-function parseArgs(argv: string[]): PurchaseArgs {
-  const out: PurchaseArgs = {};
+interface PurchaseArgsParsed extends PurchaseArgs {
+  assetInvalid?: string;
+}
+
+function parseArgs(argv: string[]): PurchaseArgsParsed {
+  const out: PurchaseArgsParsed = {};
+  const takeAsset = (v: string | undefined): void => {
+    if (v === undefined) return;
+    if (v === 'xlm' || v === 'usdc') {
+      out.asset = v;
+    } else if (v === 'auto') {
+      // 'auto' is the default when --asset isn't passed; we accept it
+      // as an explicit flag too so help-reading users who type what
+      // they saw in the help text aren't surprised.
+      out.asset = undefined;
+    } else {
+      out.assetInvalid = v;
+    }
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === undefined) continue;
     if (arg === '-h' || arg === '--help') out.help = true;
     else if (arg === '-a' || arg === '--amount') out.amount = argv[++i];
     else if (arg.startsWith('--amount=')) out.amount = arg.slice('--amount='.length);
-    else if (arg === '--asset') {
-      const v = argv[++i];
-      if (v === 'xlm' || v === 'usdc') out.asset = v;
-    } else if (arg.startsWith('--asset=')) {
-      const v = arg.slice('--asset='.length);
-      if (v === 'xlm' || v === 'usdc') out.asset = v;
-    } else if (arg === '--wallet-name') out.walletName = argv[++i];
+    else if (arg === '--asset') takeAsset(argv[++i]);
+    else if (arg.startsWith('--asset=')) takeAsset(arg.slice('--asset='.length));
+    else if (arg === '--wallet-name') out.walletName = argv[++i];
     else if (arg.startsWith('--wallet-name=')) out.walletName = arg.slice('--wallet-name='.length);
     else if (arg === '--vault-path') out.vaultPath = argv[++i];
     else if (arg.startsWith('--vault-path=')) out.vaultPath = arg.slice('--vault-path='.length);
@@ -138,6 +151,15 @@ export async function purchaseCommand(argv: string[]): Promise<number> {
     return 0;
   }
 
+  // Reject unknown --asset values up front so `--asset usd` doesn't
+  // silently fall through to the auto-pick path.
+  if (args.assetInvalid) {
+    process.stderr.write(
+      `error: --asset must be 'xlm', 'usdc', or 'auto' (got: ${args.assetInvalid})\n`,
+    );
+    return 2;
+  }
+
   // --resume and --amount are mutually exclusive; --resume doesn't need --amount.
   if (args.resume && args.amount) {
     process.stderr.write('error: --resume and --amount cannot be used together\n');
@@ -148,9 +170,27 @@ export async function purchaseCommand(argv: string[]): Promise<number> {
     usage();
     return 2;
   }
-  if (args.amount && (!/^\d+(\.\d+)?$/.test(args.amount) || parseFloat(args.amount) <= 0)) {
-    process.stderr.write(`error: --amount must be a positive decimal (got: ${args.amount})\n`);
-    return 2;
+  if (args.amount) {
+    // Bounds mirror backend/src/api/orders.js and the MCP tool: decimal
+    // string with ≤7 fractional digits, min $0.01, max $10,000. Fail
+    // locally so the CLI gives a specific error instead of a backend 400.
+    if (!/^\d+(\.\d{1,7})?$/.test(args.amount)) {
+      process.stderr.write(
+        `error: --amount must be a decimal string with up to 7 decimal places (got: ${args.amount})\n`,
+      );
+      return 2;
+    }
+    const amt = parseFloat(args.amount);
+    if (amt < 0.01) {
+      process.stderr.write('error: --amount must be at least 0.01 (one US cent)\n');
+      return 2;
+    }
+    if (amt > 10000) {
+      process.stderr.write(
+        "error: --amount cannot exceed 10000 (Pathward's per-card balance ceiling). Issue multiple cards for larger spends.\n",
+      );
+      return 2;
+    }
   }
 
   const config = loadCards402Config();
@@ -165,7 +205,21 @@ Your operator can mint a claim code from https://cards402.com/dashboard.
     return 1;
   }
 
-  const walletName = args.walletName || config.wallet_name || 'cards402-agent';
+  // Resolve wallet name. The onboard command writes a unique wallet_name
+  // to config (derived from the claim code suffix) specifically to avoid
+  // cross-agent collisions. Falling back to a static default here would
+  // reintroduce the bug onboard.ts closed. If wallet_name is missing,
+  // the config is from an old onboarding or was hand-edited — either way
+  // we refuse to proceed rather than silently colliding.
+  const walletName = args.walletName || config.wallet_name;
+  if (!walletName) {
+    process.stderr.write(
+      'error: no wallet_name in ~/.cards402/config.json and no --wallet-name passed.\n' +
+        "Either pass --wallet-name <name>, or re-run 'cards402 onboard --claim <code>'\n" +
+        'to write a fresh config with a unique wallet name.\n',
+    );
+    return 1;
+  }
 
   // F12: vault_path and passphrase_env both come from config first, then
   // CLI overrides. The passphrase value is read from process.env at call
