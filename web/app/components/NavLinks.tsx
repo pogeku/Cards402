@@ -6,7 +6,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { MouseEvent } from 'react';
 
 const PRIMARY: { href: string; label: string }[] = [
@@ -28,6 +28,36 @@ export function NavLinks() {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const moreWrapRef = useRef<HTMLDivElement>(null);
+
+  // ESC closes the dropdown, and a click outside the wrapper closes
+  // it too so the menu doesn't stay pinned open when the user moves
+  // on. Only wired up while the menu is actually open.
+  useEffect(() => {
+    if (!moreOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMoreOpen(false);
+    };
+    const onClick = (e: globalThis.MouseEvent) => {
+      if (!moreWrapRef.current) return;
+      if (!moreWrapRef.current.contains(e.target as Node)) setMoreOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('mousedown', onClick);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('mousedown', onClick);
+    };
+  }, [moreOpen]);
+
+  // Also close the More menu whenever the route changes — otherwise
+  // clicking a link inside it leaves the menu pinned open after the
+  // new page has rendered (the onClick handler fires before the
+  // navigation, but the component re-renders with the same state).
+  useEffect(() => {
+    setMoreOpen(false);
+    setMobileOpen(false);
+  }, [pathname]);
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + '/');
 
@@ -56,6 +86,7 @@ export function NavLinks() {
 
         {/* More dropdown */}
         <div
+          ref={moreWrapRef}
           style={{ position: 'relative' }}
           onMouseEnter={() => setMoreOpen(true)}
           onMouseLeave={() => setMoreOpen(false)}
