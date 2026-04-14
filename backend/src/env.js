@@ -6,9 +6,27 @@ const { z } = require('zod');
 
 const EnvSchema = z
   .object({
-    // Server
-    PORT: z.string().default('4000'),
-    NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+    // Server. PORT validated as numeric so a typo ("abc") fails at
+    // boot instead of silently picking a random port via parseInt(NaN).
+    PORT: z
+      .string()
+      .regex(/^\d+$/, 'PORT must be a positive integer (e.g. "4000")')
+      .default('4000'),
+    // NODE_ENV is REQUIRED — no default. A missing NODE_ENV in
+    // production silently runs in dev mode, which skips the
+    // CARDS402_SECRET_BOX_KEY refinement below and lets the claim
+    // endpoint persist raw api keys as plaintext. Forcing an
+    // explicit value at boot makes that footgun impossible.
+    // Tests and dev workflows already set NODE_ENV explicitly
+    // (backend/test/helpers/env.js sets 'test'; dotenv + local
+    // .env files set 'development').
+    NODE_ENV: z.enum(['development', 'production', 'test'], {
+      errorMap: () => ({
+        message:
+          'NODE_ENV must be explicitly set to one of: development | production | test. ' +
+          'A production deploy with no NODE_ENV silently downgrades security — refusing to start.',
+      }),
+    }),
 
     // Database
     DB_PATH: z.string().default('./cards402.db'),
@@ -39,6 +57,19 @@ const EnvSchema = z
 
     // Bootstrap owner — if set, only this email can become the first owner account.
     OWNER_EMAIL: z
+      .string()
+      .email()
+      .optional()
+      .or(z.literal('').transform(() => undefined)),
+
+    // Platform owner — the email that gets is_platform_owner=true on
+    // /auth/me, which unlocks /dashboard/platform/* and the system-
+    // level alert rule kinds. Used by lib/platform.js::isPlatformOwner.
+    // Optional: if unset, no one is platform owner and the cross-tenant
+    // surface is unreachable. Validated here so a typo (missing @,
+    // trailing whitespace) fails at boot instead of silently locking
+    // the platform owner out.
+    CARDS402_PLATFORM_OWNER_EMAIL: z
       .string()
       .email()
       .optional()
@@ -108,6 +139,36 @@ const EnvSchema = z
         message: `SMTP is partially configured: missing ${missing.join(', ')}. Set all of SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_FROM together or none of them.`,
         path: ['SMTP_HOST'],
       });
+    }
+  })
+  .superRefine((val, ctx) => {
+    // "Looks like production but NODE_ENV isn't" guard. If the public
+    // base URL is HTTPS and points at a real (non-localhost) hostname,
+    // the deploy is almost certainly a production one and should have
+    // NODE_ENV=production set. Running in dev mode against a real
+    // host silently disables the CARDS402_SECRET_BOX_KEY requirement
+    // (so claim payloads get stored as plaintext) and loosens several
+    // other defensive checks. Fail loudly.
+    try {
+      const url = new URL(val.CARDS402_BASE_URL);
+      const isHttps = url.protocol === 'https:';
+      const isLocalHost =
+        url.hostname === 'localhost' ||
+        url.hostname === '127.0.0.1' ||
+        url.hostname.endsWith('.local');
+      if (isHttps && !isLocalHost && val.NODE_ENV !== 'production') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            `NODE_ENV is '${val.NODE_ENV}' but CARDS402_BASE_URL points at a non-local HTTPS host ` +
+            `(${url.hostname}). This looks like a production deploy with NODE_ENV misconfigured — ` +
+            `dev mode skips the CARDS402_SECRET_BOX_KEY requirement and stores claim payloads as ` +
+            `plaintext. Set NODE_ENV=production before restarting.`,
+          path: ['NODE_ENV'],
+        });
+      }
+    } catch {
+      // URL parse already caught by the base schema — ignore.
     }
   });
 
