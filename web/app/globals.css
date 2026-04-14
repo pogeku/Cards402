@@ -646,12 +646,6 @@ tr:hover td {
   }
 }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 /* ── Marketing link styles ─────────────────────────────────────────── */
 
 .link-subtle {
