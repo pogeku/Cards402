@@ -16,6 +16,7 @@ const requireAuth = require('../middleware/requireAuth');
 const requireDashboard = require('../middleware/requireDashboard');
 const { event: bizEvent } = require('../lib/logger');
 const { requirePermission } = require('../lib/permissions');
+const requirePlatformOwner = require('../middleware/requirePlatformOwner');
 const { recordAuditFromReq, listAudit } = require('../lib/audit');
 const alerts = require('../lib/alerts');
 const enabledMerchants = require('../lib/enabled-merchants');
@@ -318,7 +319,7 @@ function validateApiKeyFields({
 }
 
 // GET /dashboard/api-keys
-router.get('/api-keys', (req, res) => {
+router.get('/api-keys', requirePermission('agent:read'), (req, res) => {
   const { deriveAgentState } = require('../lib/agent-state');
   const rows = /** @type {any[]} */ (
     db
@@ -611,7 +612,7 @@ router.post('/api-keys/:id/unsuspend', requirePermission('agent:suspend'), (req,
 // ── Approval requests ─────────────────────────────────────────────────────────
 
 // GET /dashboard/approval-requests
-router.get('/approval-requests', (req, res) => {
+router.get('/approval-requests', requirePermission('approval:read'), (req, res) => {
   const { status = 'pending', limit = 100 } = /** @type {Record<string, any>} */ (req.query);
   const rows = db
     .prepare(
@@ -1008,7 +1009,7 @@ router.get('/audit-log', requirePermission('audit:read'), (req, res) => {
 // ── Policy audit log ──────────────────────────────────────────────────────────
 
 // GET /dashboard/policy-decisions
-router.get('/policy-decisions', (req, res) => {
+router.get('/policy-decisions', requirePermission('audit:read'), (req, res) => {
   const { api_key_id, decision, limit = 200 } = /** @type {Record<string, any>} */ (req.query);
   let query = `
     SELECT pd.id, pd.api_key_id, pd.order_id, pd.decision, pd.rule, pd.reason,
@@ -1039,10 +1040,7 @@ router.get('/policy-decisions', (req, res) => {
 // see treasury internals — only the email that runs the cards402 instance
 // can pull this. Balance is fetched client-side from Horizon so the
 // backend never has to touch the network on every poll.
-router.get('/platform-wallet', (req, res) => {
-  if (!req.user.is_platform_owner) {
-    return res.status(403).json({ error: 'forbidden', message: 'platform owner only' });
-  }
+router.get('/platform-wallet', requirePlatformOwner, (req, res) => {
   try {
     const { Keypair } = require('@stellar/stellar-sdk');
     const secret = process.env.STELLAR_XLM_SECRET;
