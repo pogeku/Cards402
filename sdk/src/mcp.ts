@@ -43,18 +43,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'purchase_vcc',
       description:
-        'Purchase a prepaid Visa virtual card. Pay with USDC or XLM on Stellar. Returns card number, CVV, and expiry. Requires OWS_WALLET_NAME — run setup_wallet to configure.',
+        'Purchase a prepaid Visa virtual card. Pay with USDC or XLM on Stellar. Returns card number, CVV, and expiry. Requires OWS_WALLET_NAME — run setup_wallet to configure. Minimum $0.01, maximum $10,000 per card.',
       inputSchema: {
         type: 'object',
         properties: {
           amount_usdc: {
             type: 'string',
-            description: "Card value in USD, e.g. '10.00'",
+            // Matches backend/src/api/orders.js — positive decimal string
+            // between 0.01 and 10000 inclusive.
+            pattern: '^\\d+(\\.\\d{1,7})?$',
+            description:
+              "Card value in USD as a decimal string, e.g. '10.00'. Minimum '0.01', maximum '10000.00'.",
           },
           payment_asset: {
             type: 'string',
-            enum: ['usdc', 'xlm'],
-            description: "Payment asset: 'usdc' (default) or 'xlm'",
+            enum: ['auto', 'usdc', 'xlm'],
+            description:
+              "Payment asset: 'auto' (default — picks USDC if the wallet has enough, else XLM), 'usdc', or 'xlm'.",
           },
         },
         required: ['amount_usdc'],
@@ -240,22 +245,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         lines.push('──────────────────────────────────────────────────────────────────');
         lines.push('');
         lines.push('Your AI agent has a Stellar wallet that needs funding before it can');
-        lines.push('purchase cards. Please send XLM to the address below.');
+        lines.push('purchase cards. Please send XLM (and optionally USDC) to the');
+        lines.push('address below.');
         lines.push('');
         lines.push(`  Wallet address:  ${publicKey}`);
         lines.push('  (copy the G... address exactly — it is case-sensitive)');
         lines.push('');
         lines.push('  How much to send:');
-        lines.push('    Recommended (for a $10 card, XLM payment):  ~72 XLM');
-        lines.push('      ↳ 2 XLM  — activates the account (required minimum)');
-        lines.push('      ↳ ~70 XLM — covers a $10 card at current rates (~$0.14/XLM)');
-        lines.push('    Recommended (for a $10 card, USDC payment): 2 XLM + $10 USDC');
-        lines.push('      ↳ Send 2 XLM first to activate, then send USDC separately');
+        lines.push('    • At least 2 XLM to activate the account and cover reserves.');
+        lines.push('    • For XLM-funded purchases: enough XLM to cover the card');
+        lines.push('      face value at the current XLM/USD rate. The exact amount');
+        lines.push('      is quoted when the order is created; top up with a safety');
+        lines.push('      margin because the rate moves.');
+        lines.push('    • For USDC-funded purchases: 2 XLM + the USDC face value.');
+        lines.push('      The SDK adds the USDC trustline on the first purchase.');
         lines.push('');
-        lines.push('  Where to get XLM:');
-        lines.push('    Coinbase: coinbase.com → Buy XLM → Send → paste address above');
-        lines.push('    Lobstr:   lobstr.co → Buy XLM → Send → paste address above');
-        lines.push('    Kraken:   kraken.com → Buy XLM → Withdraw (Stellar) → paste address');
+        lines.push('  Where to get XLM / USDC:');
+        lines.push('    Coinbase: coinbase.com → Buy XLM or USDC → Send → paste address');
+        lines.push('    Lobstr:   lobstr.co → Buy XLM or USDC → Send → paste address');
+        lines.push('    Kraken:   kraken.com → Buy → Withdraw (Stellar) → paste address');
         lines.push('');
         lines.push('  After sending: tell your agent to run setup_wallet again to confirm.');
         lines.push('──────────────────────────────────────────────────────────────────');
@@ -267,8 +275,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         lines.push('');
         lines.push(`  Wallet address:  ${publicKey}`);
         lines.push('');
-        lines.push('  Send at least 2 XLM total to cover Stellar reserves and fees.');
-        lines.push('  For a $10 card with XLM payment, send ~72 XLM total.');
+        lines.push('  Send more XLM to cover the Stellar account reserve, a USDC');
+        lines.push('  trustline entry, and transaction fees — at least 2 XLM total.');
+        lines.push('  For XLM-funded purchases, also send enough XLM to cover the');
+        lines.push('  card face value at the current XLM/USD rate (topped up with a');
+        lines.push('  safety margin because the rate moves).');
         lines.push('──────────────────────────────────────────────────────────────────');
       } else if (accountStatus === 'ready_no_usdc') {
         lines.push('');
@@ -282,6 +293,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         lines.push('  To pay with USDC:');
         lines.push('    Send USDC to the address above (trustline is already set up), then call:');
         lines.push('    purchase_vcc { amount_usdc: "10.00", payment_asset: "usdc" }');
+      } else if (accountStatus === 'funded_no_trustline') {
+        // Wallet has enough XLM but the USDC trustline add attempt failed
+        // (usually because the wallet XLM balance dropped below 2 just as
+        // we tried, or Horizon flaked). Agents can retry or pay in XLM.
+        lines.push('');
+        lines.push('──────────────────────────────────────────────────────────────────');
+        lines.push('USDC trustline could not be added automatically');
+        lines.push('──────────────────────────────────────────────────────────────────');
+        lines.push('');
+        lines.push(`  Wallet address: ${publicKey}`);
+        lines.push('');
+        lines.push('  Options:');
+        lines.push('    1. Run setup_wallet again — the retry often succeeds.');
+        lines.push('    2. Top up the wallet with a bit more XLM (you need 2 XLM');
+        lines.push('       minimum: 1 for the account reserve + 1 for the trustline');
+        lines.push('       entry + fees).');
+        lines.push('    3. Pay with XLM instead of USDC — no trustline required:');
+        lines.push('       purchase_vcc { amount_usdc: "10.00", payment_asset: "xlm" }');
       }
 
       return {
@@ -324,32 +353,79 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // Validate and extract args explicitly — never trust MCP client types
     const rawArgs = args as Record<string, unknown>;
     const amount_usdc = String(rawArgs.amount_usdc ?? '').trim();
-    const raw_asset = String(rawArgs.payment_asset ?? 'usdc').toLowerCase();
+    const raw_asset = String(rawArgs.payment_asset ?? 'auto').toLowerCase();
 
-    if (!/^\d+(\.\d{1,8})?$/.test(amount_usdc) || parseFloat(amount_usdc) <= 0) {
+    // Amount validation — mirrors backend/src/api/orders.js bounds so the
+    // agent gets a specific error here instead of a generic 400 from the
+    // backend. Min $0.01, max $10,000, decimal string, ≤7 decimal places.
+    if (!/^\d+(\.\d{1,7})?$/.test(amount_usdc)) {
       return {
         content: [
-          { type: 'text', text: 'Error: amount_usdc must be a positive number, e.g. "10.00"' },
+          {
+            type: 'text',
+            text: 'Error: amount_usdc must be a decimal string, e.g. "10.00" or "25.5"',
+          },
         ],
         isError: true,
       };
     }
-    if (raw_asset !== 'usdc' && raw_asset !== 'xlm') {
+    const amountNum = parseFloat(amount_usdc);
+    if (amountNum < 0.01) {
       return {
-        content: [{ type: 'text', text: 'Error: payment_asset must be "usdc" or "xlm"' }],
+        content: [{ type: 'text', text: 'Error: amount_usdc must be at least 0.01 (one US cent)' }],
         isError: true,
       };
     }
-    const payment_asset = raw_asset as 'usdc' | 'xlm';
+    if (amountNum > 10000) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: "Error: amount_usdc cannot exceed 10000.00 (Pathward's per-card balance ceiling). For larger aggregate spend, issue multiple cards.",
+          },
+        ],
+        isError: true,
+      };
+    }
 
-    // Pre-purchase balance check — give a specific, actionable error before
-    // attempting the payment so the agent isn't left guessing.
+    if (raw_asset !== 'usdc' && raw_asset !== 'xlm' && raw_asset !== 'auto') {
+      return {
+        content: [{ type: 'text', text: 'Error: payment_asset must be "auto", "usdc", or "xlm"' }],
+        isError: true,
+      };
+    }
+
+    // Pre-purchase balance check. Also resolves payment_asset when the
+    // caller asked for 'auto': pick USDC if the wallet holds enough,
+    // else fall back to XLM. Matches the CLI's `purchase --asset auto`
+    // behaviour at sdk/src/commands/purchase.ts:184 so agents see the
+    // same resolution logic regardless of which surface they use.
+    let payment_asset: 'usdc' | 'xlm';
+    const autoPickNotes: string[] = [];
+
     try {
       const balance = await getOWSBalance(OWS_WALLET_NAME, OWS_VAULT_PATH);
       const publicKey = getOWSPublicKey(OWS_WALLET_NAME, OWS_VAULT_PATH);
       const xlmNum = parseFloat(balance.xlm);
       const usdcNum = parseFloat(balance.usdc);
-      const amountNum = parseFloat(amount_usdc);
+
+      if (raw_asset === 'auto') {
+        if (usdcNum >= amountNum && amountNum > 0) {
+          payment_asset = 'usdc';
+          autoPickNotes.push(
+            `Auto-picked USDC (wallet has ${usdcNum.toFixed(2)} USDC; covers $${amount_usdc}).`,
+          );
+        } else {
+          payment_asset = 'xlm';
+          autoPickNotes.push(
+            usdcNum > 0
+              ? `Auto-picked XLM (wallet has only ${usdcNum.toFixed(2)} USDC; needs $${amount_usdc}).`
+              : 'Auto-picked XLM (no USDC in wallet).',
+          );
+        }
+      } else {
+        payment_asset = raw_asset as 'usdc' | 'xlm';
+      }
 
       if (payment_asset === 'usdc') {
         if (usdcNum < amountNum) {
@@ -377,9 +453,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
       } else {
-        // XLM: we do not know the exact rate yet (quote comes from the order),
-        // but we can gate on a hard floor of 3 XLM (2 reserve + 1 margin) to
-        // catch obviously-unfunded wallets before hitting the API.
+        // XLM: we don't know the exact rate until the order is created, but
+        // we can gate on a hard floor of 3 XLM (~1.5 XLM for reserves + a
+        // trustline entry + comfortable headroom for fees) to catch
+        // obviously-unfunded wallets before hitting the API.
         if (xlmNum < 3) {
           return {
             content: [
@@ -389,10 +466,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   'XLM balance is too low to purchase a card.',
                   '',
                   `  You have:  ${balance.xlm} XLM`,
-                  `  Minimum:   3 XLM (for Stellar reserves and fees alone)`,
-                  `  Typical:   ~${Math.ceil(amountNum / 0.14 + 2)} XLM for a $${amount_usdc} card at ~$0.14/XLM`,
+                  `  Minimum:   3 XLM (Stellar base reserve + trustline + fee headroom)`,
                   '',
-                  'The exact XLM amount is quoted when the order is created.',
+                  'The exact XLM amount for this order is quoted by the backend',
+                  'when the order is created. Top up with extra for safety.',
                   '',
                   `Send XLM to your wallet address:`,
                   `  ${publicKey}`,
@@ -410,8 +487,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
       }
     } catch {
-      // Could not fetch balance (wallet not activated, network error, etc.) —
-      // let purchaseCardOWS proceed and surface the error with full context.
+      // Could not fetch balance (wallet not activated, Horizon outage, etc.).
+      // Fall through to the purchase call with a sensible default — XLM, since
+      // it doesn't need a trustline so it has the lowest chance of an
+      // immediate error. The real error will surface out of purchaseCardOWS.
+      payment_asset = raw_asset === 'auto' ? 'xlm' : (raw_asset as 'usdc' | 'xlm');
+      if (raw_asset === 'auto') {
+        autoPickNotes.push(
+          'Could not read wallet balance — auto-picked XLM as the no-trustline-required fallback.',
+        );
+      }
     }
 
     try {
@@ -431,6 +516,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             type: 'text',
             text: [
               'Virtual Visa Card Ready',
+              ...(autoPickNotes.length ? ['', ...autoPickNotes] : []),
               '',
               `Number: ${card.number}`,
               `CVV:    ${card.cvv}`,
@@ -504,7 +590,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         content: [{ type: 'text', text: lines.join('\n') }],
       };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      // Match purchase_vcc's sanitization: typed API errors through,
+      // everything else truncated so we don't leak stack frames or
+      // internal URLs into the MCP transcript.
+      const message =
+        err instanceof Error && err.constructor.name.endsWith('Error') && 'status' in err
+          ? err.message
+          : err instanceof Error
+            ? err.message.slice(0, 200)
+            : 'Check order failed';
       return {
         content: [{ type: 'text', text: `Error checking order: ${message}` }],
         isError: true,
@@ -530,7 +624,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       ];
       return { content: [{ type: 'text', text: lines.join('\n') }] };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message =
+        err instanceof Error && err.constructor.name.endsWith('Error') && 'status' in err
+          ? err.message
+          : err instanceof Error
+            ? err.message.slice(0, 200)
+            : 'Check budget failed';
       return {
         content: [{ type: 'text', text: `Error checking budget: ${message}` }],
         isError: true,
