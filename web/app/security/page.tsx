@@ -47,7 +47,7 @@ const PILLARS = [
   },
   {
     eyebrow: 'Infrastructure',
-    title: 'One region. Audited root access.',
+    title: 'Audited access at every level.',
     body: 'SSH keys are hardware-backed. The database is SQLite in WAL journal mode for crash-consistent durability, and snapshot backups are taken on a scheduled cadence. Every root-shell session is recorded and reviewed.',
   },
 ];
