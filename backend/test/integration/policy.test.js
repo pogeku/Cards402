@@ -224,3 +224,106 @@ describe('checkPolicy — key_not_found', () => {
     assert.equal(result.rule, 'key_not_found');
   });
 });
+
+// ── amount input validation ─────────────────────────────────────────────────
+//
+// Regression guard for the 2026-04-14 audit. checkPolicy used to trust its
+// amount argument blindly: NaN made every numeric comparison false and the
+// request was silently approved; negative amounts passed every `> cap`
+// check because negatives are always less than positive caps; non-string
+// inputs were coerced to NaN by parseFloat with the same outcome.
+// orders.js validates before calling, so these bypasses were latent, but
+// the function is also exported for direct use (tests, admin tools, future
+// callers) and the contract should be fail-closed.
+
+describe('checkPolicy — invalid_amount input validation', () => {
+  before(() => resetDb());
+
+  it('blocks a NaN amount with invalid_amount', async () => {
+    const { id } = await createTestKey({ label: 'nan-amt' });
+    const result = checkPolicy(id, 'not-a-number');
+    assert.equal(result.decision, 'blocked');
+    assert.equal(result.rule, 'invalid_amount');
+  });
+
+  it('blocks a negative amount with invalid_amount', async () => {
+    const { id } = await createTestKey({ label: 'neg-amt' });
+    const result = checkPolicy(id, '-50.00');
+    assert.equal(result.decision, 'blocked');
+    assert.equal(result.rule, 'invalid_amount');
+  });
+
+  it('blocks zero with invalid_amount', async () => {
+    const { id } = await createTestKey({ label: 'zero-amt' });
+    const result = checkPolicy(id, '0');
+    assert.equal(result.decision, 'blocked');
+    assert.equal(result.rule, 'invalid_amount');
+  });
+
+  it('blocks an empty string with invalid_amount', async () => {
+    const { id } = await createTestKey({ label: 'empty-amt' });
+    const result = checkPolicy(id, '');
+    assert.equal(result.decision, 'blocked');
+    assert.equal(result.rule, 'invalid_amount');
+  });
+
+  it('blocks Infinity with invalid_amount', async () => {
+    const { id } = await createTestKey({ label: 'inf-amt' });
+    const result = checkPolicy(id, 'Infinity');
+    assert.equal(result.decision, 'blocked');
+    assert.equal(result.rule, 'invalid_amount');
+  });
+});
+
+// ── corrupt numeric policy columns ──────────────────────────────────────────
+//
+// policy_single_tx_limit_usdc, policy_daily_limit_usdc and
+// policy_require_approval_above_usdc are all stored as text. If one ends
+// up non-numeric (bad migration, hand-edited DB, etc.) the previous code
+// did `amount > parseFloat('abc')` which is always false → rule skipped
+// → request silently approved past a limit that the operator had
+// configured. Every corrupt-column branch now fails closed with a
+// specific policy_corrupt_* rule, matching the existing
+// policy_corrupt_hours / _days handling that predates this audit.
+
+describe('checkPolicy — corrupt numeric policy columns', () => {
+  before(() => resetDb());
+
+  it('fails closed on a corrupt policy_single_tx_limit_usdc', async () => {
+    const { id } = await createTestKey({ label: 'corrupt-cap' });
+    db.prepare(`UPDATE api_keys SET policy_single_tx_limit_usdc = ? WHERE id = ?`).run(
+      'not-a-number',
+      id,
+    );
+    const result = checkPolicy(id, '10.00');
+    assert.equal(result.decision, 'blocked');
+    assert.equal(result.rule, 'policy_corrupt_single_tx');
+  });
+
+  it('fails closed on a corrupt policy_daily_limit_usdc', async () => {
+    const { id } = await createTestKey({ label: 'corrupt-daily' });
+    db.prepare(`UPDATE api_keys SET policy_daily_limit_usdc = ? WHERE id = ?`).run('abc', id);
+    const result = checkPolicy(id, '10.00');
+    assert.equal(result.decision, 'blocked');
+    assert.equal(result.rule, 'policy_corrupt_daily');
+  });
+
+  it('fails closed on a corrupt policy_require_approval_above_usdc', async () => {
+    const { id } = await createTestKey({ label: 'corrupt-approval' });
+    db.prepare(`UPDATE api_keys SET policy_require_approval_above_usdc = ? WHERE id = ?`).run(
+      'not-a-number',
+      id,
+    );
+    const result = checkPolicy(id, '10.00');
+    assert.equal(result.decision, 'blocked');
+    assert.equal(result.rule, 'policy_corrupt_approval');
+  });
+
+  it('fails closed on a negative policy_single_tx_limit_usdc', async () => {
+    const { id } = await createTestKey({ label: 'neg-cap' });
+    db.prepare(`UPDATE api_keys SET policy_single_tx_limit_usdc = ? WHERE id = ?`).run('-5.00', id);
+    const result = checkPolicy(id, '1.00');
+    assert.equal(result.decision, 'blocked');
+    assert.equal(result.rule, 'policy_corrupt_single_tx');
+  });
+});

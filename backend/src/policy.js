@@ -31,7 +31,23 @@ function checkPolicy(apiKeyId, amountUsdc) {
   if (!key)
     return _decide(apiKeyId, null, amountUsdc, 'blocked', 'key_not_found', 'API key not found');
 
+  // Defensive input validation. orders.js already rejects invalid amounts
+  // before calling this, but checkPolicy is also exported for direct use
+  // (tests, internal admin tools, future callers) and silent NaN / negative
+  // handling bypasses every numeric rule below — NaN comparisons are always
+  // false, so `amount > cap` returns false and the request is approved.
+  // Fail-closed here so checkPolicy's contract doesn't depend on its callers.
   const amount = parseFloat(amountUsdc);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return _decide(
+      apiKeyId,
+      null,
+      amountUsdc,
+      'blocked',
+      'invalid_amount',
+      `Amount must be a positive finite number (got: ${amountUsdc}).`,
+    );
+  }
 
   // ── 1. Suspension (immediate hard block) ────────────────────────────────────
   if (key.suspended) {
@@ -48,6 +64,23 @@ function checkPolicy(apiKeyId, amountUsdc) {
   // ── 2. Single-transaction hard cap ──────────────────────────────────────────
   if (key.policy_single_tx_limit_usdc !== null && key.policy_single_tx_limit_usdc !== undefined) {
     const cap = parseFloat(key.policy_single_tx_limit_usdc);
+    if (!Number.isFinite(cap) || cap < 0) {
+      // Corrupt stored limit → fail closed. Same rationale as
+      // policy_allowed_hours / policy_allowed_days below.
+      bizEvent('policy.corrupt', {
+        api_key_id: apiKeyId,
+        field: 'policy_single_tx_limit_usdc',
+        stored: String(key.policy_single_tx_limit_usdc),
+      });
+      return _decide(
+        apiKeyId,
+        null,
+        amountUsdc,
+        'blocked',
+        'policy_corrupt_single_tx',
+        'Account policy (per-transaction limit) is misconfigured — contact support.',
+      );
+    }
     if (amount > cap) {
       return _decide(
         apiKeyId,
@@ -151,6 +184,21 @@ function checkPolicy(apiKeyId, amountUsdc) {
   // ── 5. Daily spend limit ─────────────────────────────────────────────────────
   if (key.policy_daily_limit_usdc !== null && key.policy_daily_limit_usdc !== undefined) {
     const dailyLimit = parseFloat(key.policy_daily_limit_usdc);
+    if (!Number.isFinite(dailyLimit) || dailyLimit < 0) {
+      bizEvent('policy.corrupt', {
+        api_key_id: apiKeyId,
+        field: 'policy_daily_limit_usdc',
+        stored: String(key.policy_daily_limit_usdc),
+      });
+      return _decide(
+        apiKeyId,
+        null,
+        amountUsdc,
+        'blocked',
+        'policy_corrupt_daily',
+        'Account policy (daily limit) is misconfigured — contact support.',
+      );
+    }
     // Count all orders created today except those that never received payment
     // ('expired' = payment window closed without payment, 'rejected' = blocked by policy).
     // Counting 'pending_payment' prevents TOCTOU races where concurrent orders
@@ -188,6 +236,21 @@ function checkPolicy(apiKeyId, amountUsdc) {
     key.policy_require_approval_above_usdc !== undefined
   ) {
     const threshold = parseFloat(key.policy_require_approval_above_usdc);
+    if (!Number.isFinite(threshold) || threshold < 0) {
+      bizEvent('policy.corrupt', {
+        api_key_id: apiKeyId,
+        field: 'policy_require_approval_above_usdc',
+        stored: String(key.policy_require_approval_above_usdc),
+      });
+      return _decide(
+        apiKeyId,
+        null,
+        amountUsdc,
+        'blocked',
+        'policy_corrupt_approval',
+        'Account policy (approval threshold) is misconfigured — contact support.',
+      );
+    }
     if (amount > threshold) {
       // Don't log yet — caller will create the approval_request and log it
       return {
