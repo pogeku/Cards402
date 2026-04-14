@@ -1,4 +1,4 @@
-// No-op middleware.
+// No-op proxy.
 //
 // Both /dashboard and /admin render their own client-side login walls
 // (email → OTP → session cookie), so server-side redirects on missing
@@ -7,10 +7,15 @@
 // /admin's login wall. Real auth is enforced by the backend API and
 // the /api/admin-proxy + /api/auth route handlers, which read and
 // verify the HMAC-signed cookie themselves.
+//
+// File is named `proxy.ts` per the Next.js 16 convention — the old
+// `middleware.ts` name is deprecated (the dev server logged a
+// migration notice on every startup under the old name). Same
+// runtime, same semantics, new filename and function export.
 
 import { NextResponse } from 'next/server';
 
-export function middleware() {
+export function proxy() {
   return NextResponse.next();
 }
 
