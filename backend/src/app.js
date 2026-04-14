@@ -235,13 +235,29 @@ app.post('/v1/agent/claim', claimLimiter, (req, res) => {
   });
 });
 
+// ── Public /status endpoint ───────────────────────────────────────────────────
+//
+// Powers both the dashboard banner and the public status page at
+// cards402.com/status (and status.cards402.com via the proxy rewrite).
+// Aims to be cheap enough to hit every 10–30s without load concerns:
+// all queries are indexed and bounded to time windows.
+
+const PROCESS_STARTED_AT = Date.now();
+
+/** Read a system_state row by key, parse as int, default to 0. */
+function sysStateInt(key) {
+  const row = /** @type {any} */ (
+    db.prepare(`SELECT value FROM system_state WHERE key = ?`).get(key)
+  );
+  return parseInt(row?.value || '0', 10) || 0;
+}
+
 app.get('/status', (req, res) => {
   const frozen =
     /** @type {any} */ (db.prepare(`SELECT value FROM system_state WHERE key = 'frozen'`).get())
       ?.value === '1';
-  const failures = /** @type {any} */ (
-    db.prepare(`SELECT value FROM system_state WHERE key = 'consecutive_failures'`).get()
-  )?.value;
+  const consecutiveFailures = sysStateInt('consecutive_failures');
+
   const pendingCount =
     /** @type {any} */ (
       db.prepare(`SELECT COUNT(*) as n FROM orders WHERE status = 'pending_payment'`).get()
@@ -254,12 +270,81 @@ app.get('/status', (req, res) => {
         )
         .get()
     )?.n ?? 0;
+  const refundPendingCount =
+    /** @type {any} */ (
+      db.prepare(`SELECT COUNT(*) as n FROM orders WHERE status = 'refund_pending'`).get()
+    )?.n ?? 0;
+
+  // Rolling 24h counts by terminal state. Indexed on created_at so this
+  // is a range scan of the last day's rows — typically a few hundred.
+  const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const last24hRow = /** @type {any} */ (
+    db
+      .prepare(
+        `
+      SELECT
+        SUM(CASE WHEN status = 'delivered'      THEN 1 ELSE 0 END) AS delivered,
+        SUM(CASE WHEN status = 'failed'         THEN 1 ELSE 0 END) AS failed,
+        SUM(CASE WHEN status = 'refunded'       THEN 1 ELSE 0 END) AS refunded,
+        SUM(CASE WHEN status = 'refund_pending' THEN 1 ELSE 0 END) AS refund_pending,
+        SUM(CASE WHEN status = 'expired'        THEN 1 ELSE 0 END) AS expired,
+        COUNT(*) AS total
+      FROM orders
+      WHERE created_at >= ?
+    `,
+      )
+      .get(since24h)
+  );
+  const delivered24h = last24hRow?.delivered ?? 0;
+  const failed24h = last24hRow?.failed ?? 0;
+  const refunded24h = last24hRow?.refunded ?? 0;
+  const expired24h = last24hRow?.expired ?? 0;
+  const total24h = last24hRow?.total ?? 0;
+  // Success rate: delivered over (delivered + failed + refunded). Excludes
+  // expired orders (agent abandoned) and pending rows (not yet terminal).
+  const terminal24h = delivered24h + failed24h + refunded24h;
+  const successRate24h = terminal24h > 0 ? delivered24h / terminal24h : null;
+
+  // Stellar watcher freshness. `stellar_start_ledger` advances as the
+  // watcher persists its cursor; `stellar_start_ledger_at` captures the
+  // wall clock of that update. If the age exceeds ~60s we consider the
+  // watcher stalled. Both rows are upserted together in saveStartLedger.
+  const lastLedger = sysStateInt('stellar_start_ledger');
+  const lastLedgerAtRow = /** @type {any} */ (
+    db.prepare(`SELECT value FROM system_state WHERE key = 'stellar_start_ledger_at'`).get()
+  );
+  const lastLedgerAt = lastLedgerAtRow?.value || null;
+  const lastLedgerAgeSeconds = lastLedgerAt
+    ? Math.round((Date.now() - new Date(lastLedgerAt).getTime()) / 1000)
+    : null;
 
   res.json({
-    ok: !frozen,
+    ok: !frozen && consecutiveFailures < 3,
     frozen,
-    consecutive_failures: parseInt(failures || '0'),
-    orders: { pending_payment: pendingCount, in_progress: inProgressCount },
+    consecutive_failures: consecutiveFailures,
+    orders: {
+      pending_payment: pendingCount,
+      in_progress: inProgressCount,
+      refund_pending: refundPendingCount,
+    },
+    last_24h: {
+      total: total24h,
+      delivered: delivered24h,
+      failed: failed24h,
+      refunded: refunded24h,
+      expired: expired24h,
+      success_rate: successRate24h, // 0..1 or null if no terminal orders
+    },
+    stellar_watcher: {
+      last_ledger: lastLedger || null,
+      last_ledger_at: lastLedgerAt,
+      age_seconds: lastLedgerAgeSeconds,
+    },
+    process: {
+      uptime_seconds: Math.round((Date.now() - PROCESS_STARTED_AT) / 1000),
+      started_at: new Date(PROCESS_STARTED_AT).toISOString(),
+    },
+    generated_at: new Date().toISOString(),
   });
 });
 

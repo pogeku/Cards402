@@ -38,6 +38,12 @@ function saveStartLedger(ledger) {
   db.prepare(
     `INSERT OR REPLACE INTO system_state (key, value) VALUES ('stellar_start_ledger', ?)`,
   ).run(String(ledger));
+  // Track the wall-clock of each cursor advance so /status can tell
+  // whether the watcher is still making progress. Stored as a separate
+  // key (system_state is (key, value) only — no per-row updated_at).
+  db.prepare(
+    `INSERT OR REPLACE INTO system_state (key, value) VALUES ('stellar_start_ledger_at', ?)`,
+  ).run(new Date().toISOString());
   // Audit A-12: nudge the WAL to the main db file so a hard-crash doesn't
   // lose the cursor. PASSIVE is non-blocking and cheap; we're only
   // advancing the cursor a few times per second. The global txid dedupe
