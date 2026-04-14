@@ -447,11 +447,24 @@ app.use('/auth', authLimiter, authRouter);
 app.use('/dashboard', adminLimiter, dashboardRouter);
 app.use('/internal', adminLimiter, internalRouter);
 // VCC callback — HMAC-authenticated, no session required.
-// Rate-limited generously to handle bursts while blocking floods.
+//
+// Bucket by client IP (the default keyGenerator) rather than a single
+// global key. The earlier version used `() => 'vcc-callback'` which
+// collapsed every caller into one shared counter — an attacker flooding
+// the endpoint would exhaust the limit and lock out legitimate VCC
+// fulfillment callbacks from the real service. `trust proxy` is set to
+// 1 above, so req.ip resolves to the real client IP via X-Forwarded-For
+// and legitimate traffic from the VCC service (one origin) stays well
+// under the ceiling while single-IP floods get rate-limited on their
+// own counter instead of starving everyone else.
+//
+// 120/min per IP = 2/sec, comfortably above the steady-state rate of
+// legitimate callbacks (one per order, bursting rarely past a handful
+// per minute) and tight enough that a single attacker can't saturate
+// the endpoint's CPU.
 const vccCallbackLimiter = rateLimit({
   windowMs: 60 * 1000,
-  limit: 500,
-  keyGenerator: () => 'vcc-callback',
+  limit: 120,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   handler: (_, res) => res.status(429).json({ error: 'too_many_requests' }),
