@@ -40,28 +40,24 @@ function installTilt() {
 
   const root = document.documentElement;
 
-  // Flip the load gate unconditionally so the sheen / grid / noise /
-  // orbs / rings finish their intro choreography even for users who
-  // opt out of motion. The rest of this function is the continuous
-  // rAF loop + pointer listener, which IS motion and should honour
-  // the reduced-motion preference.
+  // Kick the load-in progress variable to 1 on the first frame. Until
+  // this runs, elements that multiply their opacity by
+  // var(--load-progress) are fully hidden — so the sheen, grid texture,
+  // noise speckle, orb highlights and corner rings all gate-in behind
+  // the outline + shell intro instead of being visible from frame 1.
   requestAnimationFrame(() => root.style.setProperty('--load-progress', '1'));
 
-  // Bail out of the continuous render loop if the user prefers
-  // reduced motion. This also covers the "hardware acceleration is
-  // off" escape hatch — users on a browser with GPU compositing
-  // disabled can toggle the OS-level reduced-motion preference and
-  // immediately stop paying for (a) the 60 Hz rAF updating CSS vars,
-  // (b) the filter: blur(...) repaints on every transform tick,
-  // (c) the pointer listener doing getBoundingClientRect() reads on
-  // every raw pointermove event. The card stays at its CSS default
-  // tilt of rotateX(-8deg) rotateY(12deg) which is already baked in
-  // as the initial --rotate-x / --rotate-y values, so it still looks
-  // three-dimensional, just static.
-  if (typeof window.matchMedia === 'function') {
-    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
-    if (mq.matches) return;
-  }
+  // Note: the tilt / parallax loop does NOT gate on
+  // prefers-reduced-motion. An earlier commit did, but Windows
+  // users who toggle "Show animations in Windows" off (a common
+  // setting for perceived perf) end up with prefers-reduced-motion:
+  // reduce set, and they didn't expect parallax to disappear as a
+  // side effect. The real perf cost was never the pointer tilt loop
+  // — it was the filter: blur(...) on pointer-bound backgrounds
+  // (scene, halo, card-shadow) and the continuous hc-floatCard filter
+  // animation. Those were removed in 4845dcc, so this rAF is cheap
+  // enough to run unconditionally: six CSS variable writes per
+  // frame driving composite-only transforms.
 
   // Tilt targets (pixels / degrees) + lerped current values
   let pointerX = 0;
