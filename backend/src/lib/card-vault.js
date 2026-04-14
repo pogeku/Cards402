@@ -37,6 +37,12 @@ function sealCard(card) {
  * column shape (`{ card_number, card_cvv, card_expiry, card_brand }`) and
  * the agent-facing camel shape so callers don't have to remap.
  *
+ * If any field's decryption fails (GCM tag mismatch, truncated blob,
+ * key mismatch after a rotation), the error is re-thrown with the
+ * field name prefixed so ops can pinpoint which field of which order
+ * is broken — the underlying GCM error is generic ("unable to
+ * authenticate data") and without context is painful to triage.
+ *
  * @param {Record<string, any>} row
  */
 function openCard(row) {
@@ -46,11 +52,27 @@ function openCard(row) {
   const expiry = row.card_expiry ?? row.expiry ?? null;
   const brand = row.card_brand ?? row.brand ?? null;
   return {
-    number: number ? open(number) : null,
-    cvv: cvv ? open(cvv) : null,
-    expiry: expiry ? open(expiry) : null,
+    number: safeOpen('card_number', number),
+    cvv: safeOpen('card_cvv', cvv),
+    expiry: safeOpen('card_expiry', expiry),
     brand,
   };
+}
+
+function safeOpen(fieldName, value) {
+  if (!value) return null;
+  try {
+    return open(value);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const wrapped = new Error(`card-vault: failed to open ${fieldName}: ${msg}`);
+    // Preserve the original for ops traceability without exposing it
+    // to agents — callers that JSON-serialise the error get the
+    // prefixed message, not the raw GCM noise.
+    /** @type {any} */ (wrapped).cause = err;
+    /** @type {any} */ (wrapped).field = fieldName;
+    throw wrapped;
+  }
 }
 
 module.exports = { sealCard, openCard, vaultEnabled: hasKey };

@@ -74,7 +74,10 @@ function seal(plaintext) {
 /**
  * Open a sealed secret. Returns the plaintext. Pass-through for
  * non-sealed values (so old plaintext rows on upgrade still work).
- * Throws on tampered ciphertext via the GCM tag check.
+ * Throws on tampered ciphertext via the GCM tag check, and on
+ * malformed stored blobs before reaching the crypto layer so the
+ * caller sees a clear "malformed sealed blob" error instead of a
+ * generic `Buffer.from: first argument must be of type string`.
  * @param {string} stored
  */
 function open(stored) {
@@ -86,7 +89,27 @@ function open(stored) {
       'secret-box: CARDS402_SECRET_BOX_KEY not set, cannot decrypt. Generate one with `openssl rand -hex 32` and set it in the environment.',
     );
   }
-  const [, ivHex, tagHex, ctHex] = stored.split(':');
+  // Expected format: enc:<iv_hex>:<tag_hex>:<ct_hex> — exactly four
+  // colon-separated parts, each the middle three being pure hex. A
+  // truncated row (common failure mode for a half-written UPDATE or a
+  // partial restore) used to land in Buffer.from(undefined, 'hex') and
+  // throw an opaque TypeError; validate the shape here so the caller
+  // sees a specific "malformed sealed blob" error and can handle it
+  // (log the row, surface a 500 with context, skip the row, etc.).
+  const parts = stored.split(':');
+  if (parts.length !== 4) {
+    throw new Error(
+      `secret-box: malformed sealed blob (expected 4 colon-separated parts, got ${parts.length})`,
+    );
+  }
+  const [, ivHex, tagHex, ctHex] = parts;
+  if (!/^[0-9a-f]+$/i.test(ivHex) || !/^[0-9a-f]+$/i.test(tagHex) || !/^[0-9a-f]*$/i.test(ctHex)) {
+    throw new Error('secret-box: malformed sealed blob (non-hex characters in iv/tag/ciphertext)');
+  }
+  // Crypto layer enforces IV length (12 bytes = 24 hex) and tag length
+  // (16 bytes = 32 hex) so we don't need to pre-check those; they'll
+  // surface as InvalidArgument / InvalidTagLength errors which are
+  // distinguishable in ops logs from the shape-mismatch case above.
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivHex, 'hex'), {
     authTagLength: 16,
   });
