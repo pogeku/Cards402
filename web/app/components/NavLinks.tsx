@@ -50,6 +50,16 @@ export function NavLinks() {
     };
   }, [moreOpen]);
 
+  // ESC closes the mobile sheet too. Only while it's open.
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMobileOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [mobileOpen]);
+
   // Also close the More menu whenever the route changes — otherwise
   // clicking a link inside it leaves the menu pinned open after the
   // new page has rendered (the onClick handler fires before the
