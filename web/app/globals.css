@@ -181,12 +181,6 @@ body {
   font-weight: 400;
 }
 
-.type-mono-small {
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  letter-spacing: -0.01em;
-}
-
 /* ── Texture + surface primitives ──────────────────────────────────── */
 
 /* Fine grain overlay. SVG noise encoded as a data URI so no extra HTTP.
@@ -231,17 +225,6 @@ html[data-theme='light'] .dot-grid {
   background: radial-gradient(ellipse 50% 40% at 50% 40%, var(--green-glow), transparent 70%);
   opacity: 0.35;
   filter: blur(60px);
-}
-
-.radial-ink-glow {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: radial-gradient(
-    ellipse 60% 50% at 50% 35%,
-    rgba(255, 255, 255, 0.04),
-    transparent 70%
-  );
 }
 
 /* ── Scrollbar ─────────────────────────────────────────────────────── */
@@ -328,26 +311,6 @@ pre {
 
 /* ── Animations ────────────────────────────────────────────────────── */
 
-@keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(16px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
 @keyframes pulse-green {
   0%,
   100% {
@@ -355,15 +318,6 @@ pre {
   }
   50% {
     opacity: 0.4;
-  }
-}
-
-@keyframes shimmer {
-  0% {
-    background-position: -200% center;
-  }
-  100% {
-    background-position: 200% center;
   }
 }
 
@@ -378,42 +332,6 @@ pre {
     transform: translateY(0);
     filter: blur(0);
   }
-}
-
-@keyframes draw-stroke {
-  to {
-    stroke-dashoffset: 0;
-  }
-}
-
-@keyframes float-card {
-  0%,
-  100% {
-    transform: translateY(0) rotate(-3deg);
-  }
-  50% {
-    transform: translateY(-10px) rotate(-2.6deg);
-  }
-}
-
-@keyframes breathe {
-  0%,
-  100% {
-    opacity: 0.85;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.02);
-  }
-}
-
-.animate-fade-in-up {
-  animation: fadeInUp 0.5s var(--ease-out) forwards;
-}
-
-.animate-fade-in {
-  animation: fadeIn 0.4s var(--ease-out) forwards;
 }
 
 .animate-reveal {
