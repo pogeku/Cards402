@@ -59,6 +59,66 @@ function isUserKind(kind) {
   return USER_KINDS.has(kind);
 }
 
+// Config schemas per rule kind. Each entry names the expected numeric
+// fields with their min/max bounds; unknown keys are silently ignored
+// (operators can stash debug notes alongside real config without the
+// whole rule being rejected). Missing keys use the evaluator's default.
+//
+// Before this validation existed, createRule accepted any blob and the
+// evaluators silently fell back to defaults via `Number(undefined) || X`
+// — so bad config was indistinguishable from no config and the operator
+// never got an error. A rule could be stored with config={"thresholdPct":
+// "Infinity"} or {"windowMinutes": -999} and just quietly do the wrong
+// thing. Now the validator fails loudly at create/update time.
+const CONFIG_SCHEMAS = /** @type {Record<string, Record<string, {min: number, max: number}>>} */ ({
+  failure_rate_high: {
+    windowMinutes: { min: 1, max: 10080 }, // 1 min – 7 days
+    thresholdPct: { min: 1, max: 100 },
+  },
+  spend_over: {
+    windowMinutes: { min: 1, max: 10080 },
+    thresholdUsd: { min: 0.01, max: 1_000_000 },
+  },
+  agent_balance_low: {
+    thresholdRemainingUsd: { min: 0.01, max: 1_000_000 },
+  },
+  // System kinds have no configurable shape yet.
+  ctx_auth_dead: {},
+  circuit_breaker_frozen: {},
+});
+
+/**
+ * Validate a config object against the schema for its rule kind.
+ * Throws on any issue so createRule/updateRule fail loudly instead of
+ * silently dropping to defaults at evaluation time.
+ *
+ * @param {string} kind
+ * @param {unknown} config
+ */
+function validateConfigForKind(kind, config) {
+  if (config === undefined || config === null) return;
+  if (typeof config !== 'object' || Array.isArray(config)) {
+    throw new Error(`config must be a plain object (got: ${typeof config})`);
+  }
+  const schema = CONFIG_SCHEMAS[kind];
+  if (!schema) {
+    // Unknown kind is caught separately by isSystemKind / isUserKind —
+    // if we get here the caller already validated.
+    return;
+  }
+  const cfg = /** @type {Record<string, unknown>} */ (config);
+  for (const [key, { min, max }] of Object.entries(schema)) {
+    if (cfg[key] === undefined) continue;
+    const n = Number(cfg[key]);
+    if (!Number.isFinite(n)) {
+      throw new Error(`config.${key} must be a finite number (got: ${String(cfg[key])})`);
+    }
+    if (n < min || n > max) {
+      throw new Error(`config.${key} must be between ${min} and ${max} (got: ${String(cfg[key])})`);
+    }
+  }
+}
+
 /**
  * Filter a rule list by what the caller is allowed to see. Non-platform
  * owners only get USER kinds; platform owners see everything in their
@@ -123,6 +183,7 @@ function createRule(input) {
   if (isSystemKind(input.kind) && !input.isPlatformOwner) {
     throw new Error(`System alert rules can only be created by the platform owner`);
   }
+  validateConfigForKind(input.kind, input.config);
   const id = uuidv4();
   db.prepare(
     `INSERT INTO alert_rules
@@ -174,6 +235,7 @@ function updateRule(dashboardId, id, patch, opts = {}) {
     params.name = patch.name;
   }
   if (patch.config !== undefined) {
+    validateConfigForKind(existing.kind, patch.config);
     fields.push('config = @config');
     params.config = JSON.stringify(patch.config);
   }
