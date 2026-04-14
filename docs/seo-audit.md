@@ -4,32 +4,47 @@ Audit performed after the phase 1–3 site build. Scope is technical SEO and
 on-page SEO for marketing routes; product analytics and content strategy are
 out of scope.
 
-**Updated during loop iteration 2** — items marked 🟢 have landed since
-the initial audit. See the bottom of this doc for the delta.
+**Latest refresh: loop 15.** The table below is the current state (not a
+historical snapshot). The loop-delta sections at the bottom track what
+changed when. Loop iteration 2's 🟢 delta section is retained for context
+but a lot of its gap items have since shipped too.
 
 ## Score summary
 
-| Area                           | Status | Notes                                                                     |
-| ------------------------------ | :----: | ------------------------------------------------------------------------- |
-| Crawlability (robots/sitemap)  |   ✅   | `sitemap.ts` + `robots.ts` live, 13 URLs                                  |
-| Canonical URLs                 |   ✅   | Every new page sets `alternates.canonical`                                |
-| Title uniqueness               |   ✅   | Each page has a distinct `<title>` via template                           |
-| Meta descriptions              |   ✅   | Hand-written, ≤ 160 chars, per page                                       |
-| H1 hierarchy                   |   ✅   | Exactly one H1 per page, verified via curl                                |
-| OG / Twitter cards             |   ✅   | Per-page overrides via `ogForPage()` helper                               |
-| OG image                       |   ✅   | Dynamic 1200×630 via `opengraph-image.tsx`                                |
-| Structured data (Organization) |   ✅   | JSON-LD on every page via layout                                          |
-| Structured data (WebSite)      |   ✅   | Ditto                                                                     |
-| Structured data (FAQPage)      |   ✅   | `/pricing`                                                                |
-| Structured data (Product)      |   ✅   | `/pricing`                                                                |
-| Structured data (JobPosting)   |   ✅   | `/careers` (one entry per role)                                           |
-| Structured data (Breadcrumb)   |   ⚠️   | Not yet — see gap list                                                    |
-| `hreflang`                     |   ⚠️   | English-only; no alt-lang tags                                            |
-| Page performance               |   ⚠️   | Not measured yet — need to run Lighthouse against prod                    |
-| Mobile viewport                |   ✅   | All pages have working responsive layouts                                 |
-| Internal link structure        |   ✅   | Footer links every new route; nav dropdown surfaces them all              |
-| `rel="noopener"` on externals  |   ✅   | All external links use `rel="noreferrer"` or `noopener`                   |
-| Semantic HTML                  |   ✅   | `<header>`, `<section>`, `<article>`, `<time>`, `<dl>` used appropriately |
+| Area                                  | Status | Notes                                                                 |
+| ------------------------------------- | :----: | --------------------------------------------------------------------- |
+| Crawlability (robots/sitemap)         |   ✅   | `sitemap.ts` + `robots.ts`, 18 URLs (grew with /blog + /compare)      |
+| Canonical URLs                        |   ✅   | Every page sets `alternates.canonical`                                |
+| Title uniqueness                      |   ✅   | Each page has a distinct `<title>` via template                       |
+| Title length ≤ 60 chars               |   ✅   | Programmatic sweep (loop 9)                                           |
+| Meta descriptions ≤ 160 chars         |   ✅   | Programmatic sweeps (loops 9, 14)                                     |
+| H1 hierarchy                          |   ✅   | Exactly one H1 per page, verified via curl                            |
+| OG / Twitter cards                    |   ✅   | Per-page `ogForPage()` / `twitterForPage()` helpers                   |
+| OG image                              |   ✅   | Dynamic 1200×630 via `opengraph-image.tsx`, absolute URL in helper    |
+| Structured data (Organization)        |   ✅   | On every page via layout                                              |
+| Structured data (WebSite)             |   ✅   | On every page via layout                                              |
+| Structured data (SoftwareApplication) |   ✅   | Landing page (loop 7)                                                 |
+| Structured data (FAQPage)             |   ✅   | `/pricing` — 7 questions                                              |
+| Structured data (Product)             |   ✅   | `/pricing`                                                            |
+| Structured data (JobPosting)          |   ✅   | `/careers` × 4 roles                                                  |
+| Structured data (HowTo)               |   ✅   | `/docs/quickstart` — 5 steps with anchor URLs (loop 7)                |
+| Structured data (TechArticle)         |   ✅   | `/docs` (loop 11)                                                     |
+| Structured data (BlogPosting)         |   ✅   | Per-post + ItemList on `/changelog` (loops 3, 10, 12, 13)             |
+| Structured data (BreadcrumbList)      |   ✅   | `/docs/quickstart`, `/legal/cardholder-agreement`, every `/blog/*`    |
+| `hreflang`                            |   ✅   | `en-GB` + `x-default` via `alternates.languages` (loop 1)             |
+| Page performance                      |   ⚠️   | Not measured on prod yet — still need a Lighthouse run post-deploy    |
+| Mobile viewport                       |   ✅   | All pages responsive                                                  |
+| Internal link structure               |   ✅   | Footer + nav dropdown surface every route                             |
+| `rel="noopener"` on externals         |   ✅   | Every `target="_blank"` has a `rel=` attribute (multiline sweep, L6)  |
+| Semantic HTML                         |   ✅   | `<header>`, `<section>`, `<article>`, `<time>`, `<dl>` appropriate    |
+| Keyboard a11y                         |   ✅   | Skip link + `:focus-visible` + aria-label on icon buttons (loop 6)    |
+| Custom 404 + error boundary           |   ✅   | `not-found.tsx` + `error.tsx` + `global-error.tsx` (loop 1 + 7)       |
+| `security.txt`                        |   ✅   | `/.well-known/security.txt`                                           |
+| `llms.txt`                            |   ✅   | `/llms.txt` per the draft spec (loop 2)                               |
+| `humans.txt`                          |   ✅   | `/humans.txt` (loop 2)                                                |
+| RSS feed                              |   ✅   | `/changelog/feed.xml` with `alternates.types` auto-discovery (loop 3) |
+| Sticky section ToC on long pages      |   ✅   | `LegalBody` on /privacy, /terms, /legal/cardholder-agreement (loop 2) |
+| Copy-to-clipboard on code blocks      |   ✅   | `/docs` + `/docs/quickstart` (loop 2)                                 |
 
 ## What's live now
 
