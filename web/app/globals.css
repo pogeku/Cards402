@@ -442,6 +442,49 @@ pre {
   border-color: var(--yellow-border);
 }
 
+/* ── Public OrderPhase pills (docs page) ──────────────────────────
+   These match the agent-facing `phase` values documented at
+   /docs#order-statuses. The internal pipeline statuses above are
+   dashboard-only; these are what integrators see. Keep the palette
+   consistent so the tag column on /docs reads the same as the
+   phase column in the dashboard tables. */
+
+.status-awaiting_approval {
+  color: var(--purple);
+  background: var(--purple-muted);
+  border-color: var(--purple-border);
+}
+.status-awaiting_payment {
+  color: var(--yellow);
+  background: var(--yellow-muted);
+  border-color: var(--yellow-border);
+}
+.status-processing {
+  color: var(--blue);
+  background: var(--blue-muted);
+  border-color: var(--blue-border);
+}
+.status-ready {
+  color: var(--green);
+  background: var(--green-muted);
+  border-color: var(--green-border);
+}
+.status-refunded {
+  color: var(--yellow);
+  background: var(--yellow-muted);
+  border-color: var(--yellow-border);
+}
+.status-rejected {
+  color: var(--red);
+  background: var(--red-muted);
+  border-color: var(--red-border);
+}
+.status-expired {
+  color: var(--fg-dim);
+  background: var(--surface);
+  border-color: var(--border-strong);
+}
+
 /* ── Dashboard responsive (unchanged from before) ─────────────────── */
 
 @media (max-width: 640px) {

@@ -182,11 +182,18 @@ const navSections = [
   },
 ];
 
-// Stable agent-facing phases (internal pipeline statuses are implementation detail)
+// Stable agent-facing phases. Mirrors `OrderPhase` in the SDK
+// (sdk/src/client.ts) — keep in sync when adding new phases.
 const orderStatuses = [
   {
+    status: 'awaiting_approval',
+    meaning:
+      'Order is held for owner approval because the key has a spend policy that requires it. No payment instructions yet — poll approval_request_id for a decision. Expires after 2 hours.',
+  },
+  {
     status: 'awaiting_payment',
-    meaning: 'Order created, waiting for your Stellar payment to confirm on-chain.',
+    meaning:
+      'Approved (or no approval needed). Waiting for your Stellar payment to confirm on-chain.',
   },
   {
     status: 'processing',
@@ -205,6 +212,11 @@ const orderStatuses = [
     status: 'refunded',
     meaning:
       'Payment refunded to your sender address. The refund_stellar_txid field has the transaction hash.',
+  },
+  {
+    status: 'rejected',
+    meaning:
+      'Owner rejected the approval request. The error field contains the decision note. No payment was taken.',
   },
   {
     status: 'expired',
@@ -832,10 +844,17 @@ def wait_for_card(api_url: str, order_id: str, key: str):
           </div>
 
           <Para>
-            Phase flow: <Code>awaiting_payment</Code> → <Code>processing</Code> → <Code>ready</Code>
+            Happy path: <Code>awaiting_payment</Code> → <Code>processing</Code> → <Code>ready</Code>
+          </Para>
+          <Para>
+            With approval gate: <Code>awaiting_approval</Code> → <Code>awaiting_payment</Code> →{' '}
+            <Code>processing</Code> → <Code>ready</Code>
           </Para>
           <Para>
             Failure path: <Code>processing</Code> → <Code>failed</Code> → <Code>refunded</Code>
+          </Para>
+          <Para>
+            Approval rejected: <Code>awaiting_approval</Code> → <Code>rejected</Code>
           </Para>
           <Para>
             No payment within 2 hours: <Code>awaiting_payment</Code> → <Code>expired</Code>
