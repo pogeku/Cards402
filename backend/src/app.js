@@ -18,6 +18,7 @@ const { buildBudget, policyCheck, orderPollLimiter } = require('./api/orders');
 const dashboardRouter = require('./api/dashboard');
 const authRouter = require('./api/auth');
 const internalRouter = require('./api/internal');
+const platformRouter = require('./api/platform');
 const vccCallbackRouter = require('./api/vcc-callback');
 const { MAX_WEBHOOK_ATTEMPTS: MAX_WEBHOOK_ATTEMPTS_FOR_STATUS } = require('./fulfillment');
 
@@ -537,6 +538,11 @@ app.get('/v1/usage', orderPollLimiter, (req, res) => {
 });
 
 app.use('/auth', authRouter);
+// Platform-owner cross-tenant surface. Mounted BEFORE /dashboard so its
+// prefix catches /dashboard/platform/* before the tenant-scoped
+// dashboard router sees it. Gated by requirePlatformOwner inside the
+// router so only the deployment's platform owner can hit these routes.
+app.use('/dashboard/platform', adminLimiter, platformRouter);
 app.use('/dashboard', adminLimiter, dashboardRouter);
 app.use('/internal', adminLimiter, internalRouter);
 // VCC callback — HMAC-authenticated, no session required.
