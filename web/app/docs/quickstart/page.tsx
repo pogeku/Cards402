@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { CopyCodeBlock } from '@/app/components/CopyCodeBlock';
 
 export const metadata: Metadata = {
   title: 'Quickstart',
@@ -47,23 +48,10 @@ function Code({ children }: { children: string }) {
   );
 }
 
-function CodeBlock({ label, children }: { label?: string; children: string }) {
-  return (
-    <div style={{ margin: '0 0 1.35rem' }}>
-      {label && (
-        <div
-          className="type-eyebrow"
-          style={{ fontSize: '0.6rem', marginBottom: '0.5rem', color: 'var(--fg-dim)' }}
-        >
-          {label}
-        </div>
-      )}
-      <pre style={{ margin: 0, fontSize: '0.78rem', lineHeight: 1.7 }}>
-        <code>{children}</code>
-      </pre>
-    </div>
-  );
-}
+// Alias the shared component to the local name the STEPS array
+// expects. Keeps the diff tight — every <CodeBlock> inside STEPS
+// now renders with a copy-to-clipboard button in the corner.
+const CodeBlock = CopyCodeBlock;
 
 const STEPS = [
   {

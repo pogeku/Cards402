@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { CopyCodeBlock } from '@/app/components/CopyCodeBlock';
 
 export const metadata: Metadata = {
   title: 'API reference',
@@ -100,27 +101,10 @@ function Para({ children, style }: { children: React.ReactNode; style?: React.CS
   );
 }
 
-function CodeBlock({ label, children }: { label?: string; children: string }) {
-  return (
-    <div style={{ margin: '0 0 1.5rem' }}>
-      {label && (
-        <div
-          className="type-eyebrow"
-          style={{
-            fontSize: '0.6rem',
-            marginBottom: '0.55rem',
-            color: 'var(--fg-dim)',
-          }}
-        >
-          {label}
-        </div>
-      )}
-      <pre style={{ margin: 0, fontSize: '0.78rem', lineHeight: 1.7 }}>
-        <code>{children}</code>
-      </pre>
-    </div>
-  );
-}
+// Local name reused throughout the STEPS/sections below. The shared
+// client component handles the copy-to-clipboard affordance without
+// the docs page itself having to become a client component.
+const CodeBlock = CopyCodeBlock;
 
 function Endpoint({ method, path }: { method: 'GET' | 'POST'; path: string }) {
   const colors: Record<'GET' | 'POST', { fg: string; border: string; bg: string }> = {
