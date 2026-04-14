@@ -1395,8 +1395,8 @@ try {
               api@cards402.com
             </a>
           </p>
-          <Link href="/agents.txt" className="link-arrow" style={{ fontSize: '0.72rem' }}>
-            Read /agents.txt
+          <Link href="/skill.md" className="link-arrow" style={{ fontSize: '0.72rem' }}>
+            Read /skill.md
           </Link>
         </div>
       </div>

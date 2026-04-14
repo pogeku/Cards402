@@ -141,7 +141,8 @@ try {
 
 - [cards402.com](https://cards402.com) — dashboard and docs
 - [cards402.com/docs](https://cards402.com/docs) — full API reference
-- [cards402.com/agents.txt](https://cards402.com/agents.txt) — machine-readable agent integration guide
+- [cards402.com/skill.md](https://cards402.com/skill.md) — drop-in agent onboarding brief
+- [cards402.com/llms.txt](https://cards402.com/llms.txt) — LLM-index of every docs surface
 - [github.com/CTX-com/Cards402](https://github.com/CTX-com/Cards402) — source
 
 ## License

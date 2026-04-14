@@ -146,8 +146,8 @@ export function MarketingChrome({ children }: { children: ReactNode }) {
               <FooterLink href="https://github.com/CTX-com/Cards402" external>
                 GitHub
               </FooterLink>
-              <FooterLink href="/agents.txt">agents.txt</FooterLink>
               <FooterLink href="/skill.md">skill.md</FooterLink>
+              <FooterLink href="/llms.txt">llms.txt</FooterLink>
             </FooterCol>
 
             <FooterCol title="Legal">
