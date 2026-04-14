@@ -45,7 +45,20 @@ export async function walletCommand(argv: string[]): Promise<number> {
     );
     return 1;
   }
-  const walletName = parseFlag(rest, '--name') || config.wallet_name || 'cards402-agent';
+
+  // Resolve wallet name. Onboard writes a unique wallet_name per claim
+  // to prevent cross-agent collision; a static fallback here would
+  // reintroduce that bug (see onboard.ts:deriveDefaultWalletName). If
+  // neither config nor --name provides one, refuse to guess.
+  const walletName = parseFlag(rest, '--name') || config.wallet_name;
+  if (!walletName) {
+    process.stderr.write(
+      'error: no wallet_name in ~/.cards402/config.json and no --name passed.\n' +
+        "Either pass --name <walletname>, or re-run 'cards402 onboard --claim <code>'\n" +
+        'to write a fresh config with a unique wallet name.\n',
+    );
+    return 1;
+  }
   // F12: vault_path comes from config first, CLI flag overrides.
   const vaultPath = parseFlag(rest, '--vault-path') || config.vault_path;
 
@@ -79,7 +92,11 @@ export async function walletCommand(argv: string[]): Promise<number> {
         try {
           const publicKey = getOWSPublicKey(walletName, vaultPath);
           process.stdout.write(`address: ${publicKey}\n`);
-          process.stdout.write(`xlm:     0 (unactivated — send >= 1 XLM)\n`);
+          // Send at least 2 XLM — 1 for the Stellar base reserve plus
+          // 1 for a future USDC trustline entry. Matches the onboard
+          // command's funding instructions, the MCP setup_wallet tool,
+          // and the quickstart docs on cards402.com.
+          process.stdout.write(`xlm:     0 (unactivated — send at least 2 XLM to activate)\n`);
           process.stdout.write(`usdc:    0\n`);
           return 0;
         } catch {
