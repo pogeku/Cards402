@@ -194,6 +194,7 @@ router.get('/stats', (req, res) => {
 
 // GET /dashboard/orders
 router.get('/orders', (req, res) => {
+  const { normalizeCardBrand } = require('../lib/normalize-card');
   const { status, limit = 50, api_key_id } = /** @type {Record<string, any>} */ (req.query);
   let query = `
     SELECT o.id, o.status, o.amount_usdc, o.payment_asset, o.stellar_txid,
@@ -219,7 +220,16 @@ router.get('/orders', (req, res) => {
   }
   query += ` ORDER BY o.created_at DESC LIMIT ?`;
   params.push(/** @type {any} */ (Math.min(parseInt(String(limit)) || 50, 500)));
-  res.json(db.prepare(query).all(...params));
+  const rows = /** @type {any[]} */ (db.prepare(query).all(...params));
+  // Normalize the upstream catalog string before it reaches a human
+  // surface. The DB intentionally keeps the raw value for ops forensics
+  // (per vcc-callback.js), but dashboard consumers should always see
+  // the stable label — otherwise old rows render "Visa® Reward Card,
+  // 6-Month Expiration [ITNL] eGift Card" in the UI.
+  for (const row of rows) {
+    row.card_brand = normalizeCardBrand(row.card_brand);
+  }
+  res.json(rows);
 });
 
 // ── API Keys ──────────────────────────────────────────────────────────────────
