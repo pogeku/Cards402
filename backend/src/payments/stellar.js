@@ -121,6 +121,30 @@ async function poll(onPayment, log) {
       // Advance past the last processed event's ledger. All events in a batch
       // share the same or increasing ledger numbers. Re-processing the same tx
       // is safe — index.js has a global txid duplicate guard.
+      //
+      // F3 batch-saturation warning. If a single ledger has more events
+      // on our contract than the batch limit (200), we currently advance
+      // past that ledger and lose events 201+ in it because the getEvents
+      // call here doesn't use the response cursor for intra-ledger
+      // pagination. At cards402 scale this should never happen (a
+      // handful of payments per ledger at most), so we emit a loud
+      // bizEvent + log so the operator can correlate it with any
+      // missing-payment investigation. Proper cursor-based pagination
+      // is tracked as a follow-up — this at least surfaces the edge
+      // case instead of silently dropping events.
+      if (events.length >= 200) {
+        const firstLedger = events[0].ledger;
+        const lastLedger = events[events.length - 1].ledger;
+        if (firstLedger === lastLedger) {
+          log(
+            `[stellar] WARN batch saturated at 200 events in single ledger ${lastLedger} — events 201+ in that ledger may be lost`,
+          );
+          bizEvent('stellar.batch_saturated_single_ledger', {
+            ledger: lastLedger,
+            batch_size: events.length,
+          });
+        }
+      }
       saveStartLedger(events[events.length - 1].ledger + 1);
     } else if (result.latestLedger) {
       saveStartLedger(result.latestLedger);
@@ -193,8 +217,16 @@ async function poll(onPayment, log) {
   }
 }
 
-// Convert a 7-decimal-place i128 (USDC micro-units or XLM stroops) to a decimal string.
+// Convert a non-negative 7-decimal-place i128 (USDC micro-units or XLM
+// stroops) to a decimal string. Asserts non-negative input because the
+// formatter's modulus math produces nonsense strings on negative BigInts
+// (e.g. -5_000_000n → "0.-5000000"), and the only path that could feed
+// a negative i128 here is a malformed/hostile contract event which is
+// already being rejected upstream at parse time. Keeping the assertion
+// as belt-and-braces for any future caller.
 function stroopsToDecimal(i128) {
+  if (typeof i128 !== 'bigint') throw new Error('stroopsToDecimal: expected bigint');
+  if (i128 < 0n) throw new Error('stroopsToDecimal: negative amount');
   const whole = i128 / 10_000_000n;
   const frac = String(i128 % 10_000_000n).padStart(7, '0');
   return `${whole}.${frac}`;
@@ -238,11 +270,34 @@ async function handlePaymentEvent(event, onPayment, log) {
     // topic[2] = Address(from)
     // value    = i128 amount (micro-USDC or stroops)
     const eventSymbol = scValToNative(event.topic[0]); // 'pay_usdc' or 'pay_xlm'
+
+    // F2: cap the orderId bytes length before the Buffer allocation.
+    // A malformed/hostile contract event with a 10KB orderId would
+    // otherwise bloat logs, dead-letter rows, and the downstream SQL
+    // parameter. UUIDs are 36 chars and our short-ids top out well
+    // below 64; anything larger is definitionally invalid.
     const orderIdBytes = scValToNative(event.topic[1]);
+    if (!orderIdBytes || orderIdBytes.length === 0 || orderIdBytes.length > 64) {
+      throw new Error(`orderId bytes length out of range: ${orderIdBytes?.length}`);
+    }
     const orderId = Buffer.from(orderIdBytes).toString('utf-8');
+    // Reject non-printable / control bytes — a well-formed order id is
+    // ASCII hex with dashes. Anything else is an attempt to smuggle
+    // control chars into log lines or the SQL parameter.
+    if (!/^[\x20-\x7e]+$/.test(orderId)) {
+      throw new Error('orderId contains non-printable bytes');
+    }
+
     const senderAddress = Address.fromScVal(event.topic[2]).toString();
 
+    // F1 + F4: enforce non-negative, non-zero amount at parse time.
+    // A zero event is a no-op that shouldn't traverse the pipeline,
+    // and a negative one is either a bug or an attack. Either way it
+    // belongs in the dead-letter table, not dispatched to onPayment.
     const amountI128 = BigInt(scValToNative(event.value));
+    if (amountI128 <= 0n) {
+      throw new Error(`non-positive amount i128: ${amountI128}`);
+    }
     const amountDecimal = stroopsToDecimal(amountI128);
 
     parsed = { eventSymbol, orderId, senderAddress, amountDecimal };
