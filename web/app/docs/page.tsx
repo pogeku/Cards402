@@ -1152,6 +1152,39 @@ def verify_webhook(raw_body: bytes, signature: str, timestamp: str, secret: str)
             orders and returns <Code>503 service_temporarily_unavailable</Code> until an admin
             manually unfreezes the system.
           </Para>
+
+          <SubTitle>Check your current usage</SubTitle>
+          <Para>
+            Call <Code>GET /usage</Code> to get the current budget and order counts for your key.
+            The SDK exposes this as <Code>client.getUsage()</Code>.
+          </Para>
+
+          <Endpoint method="GET" path="/usage" />
+
+          <CodeBlock label="Response">
+            {`{
+  "api_key_id": "ak_a3f7c2d1",
+  "label": "production-agent",
+  "budget": {
+    "spent_usdc": "15.00",
+    "limit_usdc": "100.00",
+    "remaining_usdc": "85.00"
+  },
+  "orders": {
+    "total": 3,
+    "delivered": 2,
+    "failed": 0,
+    "refunded": 1,
+    "in_progress": 0
+  }
+}`}
+          </CodeBlock>
+
+          <Para>
+            The <Code>budget.limit_usdc</Code> field is <Code>null</Code> for keys without a spend
+            limit configured; in that case <Code>remaining_usdc</Code> is also <Code>null</Code> and
+            only the global 60 orders/hour rate limit applies.
+          </Para>
         </Section>
 
         {/* ── Footer tail ── */}
