@@ -204,10 +204,18 @@ async function sendLoginCode(email, code) {
     </table>
     <p style="margin:24px 0 0 0;color:${COLOR.faint};font-size:13px;line-height:1.55;">This code expires in 15 minutes. If you didn't request it, you can safely ignore this email — nobody is waiting on the other end.</p>
   `;
+  // Subject is deliberately code-less. Email subjects appear in
+  // provider logs, compliance archives, and the email client sidebar
+  // long after the code has been used and invalidated — keeping the
+  // code in the body only shrinks the accidental-exposure surface.
+  // The HTML preheader still carries the code so it's the first thing
+  // the recipient sees on a mobile client without the subject leaking
+  // the value upstream.
+  const subject = 'Your Cards402 login code';
   await getTransporter().sendMail({
     from: from(),
     to: email,
-    subject: `${code} is your Cards402 login code`,
+    subject,
     text: [
       `Your Cards402 login code:`,
       ``,
@@ -217,7 +225,7 @@ async function sendLoginCode(email, code) {
       ``,
       `— cards402.com`,
     ].join('\n'),
-    html: wrap(`${code} is your Cards402 login code`, body),
+    html: wrap(subject, body),
   });
 }
 
