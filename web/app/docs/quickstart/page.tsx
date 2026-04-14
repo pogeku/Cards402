@@ -30,6 +30,64 @@ const breadcrumbJsonLd = {
   ],
 };
 
+// HowTo JSON-LD — the quickstart is a literal 5-step guide, which
+// is the exact shape Google renders as a numbered rich result on
+// developer search queries. Keep the step names in sync with the
+// STEPS array below if it's ever renumbered.
+const howToJsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'HowTo',
+  name: 'Issue your first Cards402 card in five minutes',
+  description:
+    'Install the Cards402 SDK, claim an API key, fund a Stellar wallet, purchase a card, and wire it into an agent runtime.',
+  totalTime: 'PT5M',
+  supply: [
+    { '@type': 'HowToSupply', name: 'A Cards402 claim code from an operator' },
+    { '@type': 'HowToSupply', name: 'Stellar wallet with USDC or XLM' },
+  ],
+  tool: [
+    { '@type': 'HowToTool', name: 'Node.js 18+' },
+    { '@type': 'HowToTool', name: 'npm, pnpm, or bun' },
+  ],
+  step: [
+    {
+      '@type': 'HowToStep',
+      position: 1,
+      name: 'Install the SDK',
+      text: 'Run npm install cards402 — the single package ships the TypeScript SDK, the CLI, and the MCP server.',
+      url: 'https://cards402.com/docs/quickstart#install-the-sdk',
+    },
+    {
+      '@type': 'HowToStep',
+      position: 2,
+      name: 'Claim your first API key',
+      text: 'Exchange a single-use claim code for an API key via npx cards402 onboard --claim c402_<code>.',
+      url: 'https://cards402.com/docs/quickstart#claim-your-first-api-key',
+    },
+    {
+      '@type': 'HowToStep',
+      position: 3,
+      name: 'Fund a wallet',
+      text: 'Create a Stellar wallet via createWallet() and fund it with XLM plus an optional USDC trustline.',
+      url: 'https://cards402.com/docs/quickstart#fund-a-wallet',
+    },
+    {
+      '@type': 'HowToStep',
+      position: 4,
+      name: 'Purchase your first card',
+      text: 'Call purchaseCardOWS() with the API key, wallet name, and USD amount. The SDK creates the order, signs the Soroban payment, and resolves with the card PAN, CVV, and expiry.',
+      url: 'https://cards402.com/docs/quickstart#purchase-your-first-card',
+    },
+    {
+      '@type': 'HowToStep',
+      position: 5,
+      name: 'Wire it into your agent',
+      text: 'Add the Cards402 MCP server to your claude_desktop_config.json or other MCP host so the purchase_card tool is available to the LLM.',
+      url: 'https://cards402.com/docs/quickstart#wire-it-into-your-agent',
+    },
+  ],
+};
+
 function Code({ children }: { children: string }) {
   return (
     <code
@@ -188,7 +246,9 @@ export default function QuickstartPage() {
     >
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbJsonLd) }}
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify([breadcrumbJsonLd, howToJsonLd]),
+        }}
       />
       <div className="type-eyebrow" style={{ color: 'var(--green)', marginBottom: '1.1rem' }}>
         Docs · Quickstart · 5 minutes
@@ -229,11 +289,16 @@ export default function QuickstartPage() {
 
       {STEPS.map((s, i) => (
         <section
+          id={s.title
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-|-$/g, '')}
           key={s.n}
           style={{
             paddingTop: i === 0 ? '2.5rem' : '3rem',
             marginTop: i === 0 ? '1rem' : 0,
             borderTop: '1px solid var(--border)',
+            scrollMarginTop: 96,
           }}
         >
           <div

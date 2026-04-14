@@ -76,9 +76,50 @@ const FEATURES = [
   },
 ];
 
+// SoftwareApplication JSON-LD. Cards402 is a dev-tool rather than a
+// consumer app but the SoftwareApplication type is what Google uses
+// to render price + rating + category chips next to dev-tool results
+// in the SERP. offers.price = "0" matches the face-value pricing
+// model; aggregateRating is intentionally absent until we have real
+// reviews to cite.
+const softwareAppJsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  '@id': 'https://cards402.com#software',
+  name: 'Cards402',
+  applicationCategory: 'DeveloperApplication',
+  applicationSubCategory: 'Payment API',
+  operatingSystem: 'Any',
+  url: 'https://cards402.com',
+  description:
+    'Virtual Visa cards for AI agents. One Stellar transaction in, one real Visa card out. Non-custodial, USDC or XLM, ~60 seconds from pay to PAN.',
+  offers: {
+    '@type': 'Offer',
+    price: '0',
+    priceCurrency: 'USD',
+    priceValidUntil: '2099-12-31',
+    availability: 'https://schema.org/InStock',
+  },
+  publisher: { '@id': 'https://cards402.com#organization' },
+  softwareVersion: '1.2.0',
+  releaseNotes: 'https://cards402.com/changelog',
+  featureList: [
+    'Non-custodial card issuance on Stellar',
+    'USDC and XLM payment rails',
+    'Single-call SDK (purchaseCardOWS)',
+    'Server-Sent Events order streaming',
+    'MCP server for Claude Desktop and other hosts',
+    'Claim-code onboarding for agent credentials',
+  ],
+};
+
 export default function Home() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(softwareAppJsonLd) }}
+      />
       {/* ── Hero ─────────────────────────────────────────────────── */}
       <section
         style={{
