@@ -696,7 +696,7 @@ Content-Type: application/json
             over polling for anything that runs as a long-lived process.
           </Para>
 
-          <Endpoint method="GET" path="/orders/:id/stream" />
+          <Endpoint method="GET" path="/v1/orders/:id/stream" />
 
           <Para>
             Each event carries the full order state (same JSON shape as <Code>GET /orders/:id</Code>
@@ -798,7 +798,7 @@ def wait_for_card(api_url: str, order_id: str, key: str):
             <Code>data:</Code> payload.
           </Para>
 
-          <Endpoint method="GET" path="/orders/:id" />
+          <Endpoint method="GET" path="/v1/orders/:id" />
 
           <Para>Suggested poll interval: every 5 seconds for the first 2 minutes.</Para>
 
@@ -871,7 +871,7 @@ def wait_for_card(api_url: str, order_id: str, key: str):
             <Code>created_at</Code> descending.
           </Para>
 
-          <Endpoint method="GET" path="/orders" />
+          <Endpoint method="GET" path="/v1/orders" />
 
           <Para>Optional query parameters:</Para>
           <div style={{ margin: '0 0 1.5rem', overflowX: 'auto' }}>
@@ -1301,7 +1301,7 @@ try {
             The SDK exposes this as <Code>client.getUsage()</Code>.
           </Para>
 
-          <Endpoint method="GET" path="/usage" />
+          <Endpoint method="GET" path="/v1/usage" />
 
           <CodeBlock label="Response">
             {`{
