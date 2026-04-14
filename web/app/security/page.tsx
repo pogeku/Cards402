@@ -58,7 +58,7 @@ const POSTURE = [
   { label: 'Keys at rest', value: 'bcrypt · per-key salt · 12-char lookup index' },
   { label: 'Database', value: 'SQLite · WAL mode · scheduled snapshot backup' },
   { label: 'Agent keys', value: 'OWS encrypted vault file · 0600 · optional passphrase' },
-  { label: 'Stellar signer', value: 'Hardware wallet only for treasury ops' },
+  { label: 'Treasury signer', value: 'Env-loaded secret · out-of-band rotation · audited spend' },
 ];
 
 export default function SecurityPage() {
