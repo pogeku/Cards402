@@ -71,7 +71,7 @@ const FAQ = [
   },
   {
     q: 'Do I pay Stellar network fees?',
-    a: 'Yes — Stellar charges a baseline fee of 0.00001 XLM (roughly a hundredth of a cent) per transaction. Your agent wallet pays it directly. Cards402 never touches it.',
+    a: 'Yes. Each card purchase triggers a Soroban contract call from your agent wallet, which costs roughly 0.005–0.02 XLM (a fraction of a cent) in network fees depending on execution cost. Your wallet pays it directly — Cards402 never touches it.',
   },
   {
     q: 'What does "$2.00 + 2%" actually look like?',
