@@ -15,7 +15,7 @@ import { SpendChart } from '../_ui/SpendChart';
 import { OrderStatusPill } from '../_ui/OrderStatusPill';
 import { PageContainer } from '../_ui/PageContainer';
 import { PageHeader } from '../_ui/PageHeader';
-import { formatUsd, timeAgo, bucketSpendByDay } from '../_lib/format';
+import { formatUsd, parseTimestamp, timeAgo, bucketSpendByDay } from '../_lib/format';
 import { IN_FLIGHT_ORDER_STATUSES } from '../_lib/constants';
 
 export default function OverviewPage() {
@@ -25,8 +25,8 @@ export default function OverviewPage() {
   const stats = useMemo(() => {
     const now = Date.now();
     const DAY = 86_400_000;
-    const in24h = orders.filter((o) => now - Date.parse(o.created_at) < DAY);
-    const in7d = orders.filter((o) => now - Date.parse(o.created_at) < 7 * DAY);
+    const in24h = orders.filter((o) => now - parseTimestamp(o.created_at) < DAY);
+    const in7d = orders.filter((o) => now - parseTimestamp(o.created_at) < 7 * DAY);
     const delivered7d = in7d.filter((o) => o.status === 'delivered');
     const failed7d = in7d.filter((o) => o.status === 'failed' || o.status === 'refunded');
     const spend24h = in24h
@@ -94,7 +94,7 @@ export default function OverviewPage() {
         <KpiTile
           label="Spend 7d"
           value={formatUsd(stats.spend7d)}
-          hint={`${orders.filter((o) => Date.parse(o.created_at) > Date.now() - 7 * 86400000).length} orders`}
+          hint={`${orders.filter((o) => parseTimestamp(o.created_at) > Date.now() - 7 * 86400000).length} orders`}
         />
         <KpiTile
           label="Success rate 7d"

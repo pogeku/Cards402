@@ -14,7 +14,7 @@ import { FilterChip } from '../_ui/FilterChip';
 import { PageContainer } from '../_ui/PageContainer';
 import { PageHeader } from '../_ui/PageHeader';
 import { EmptyState } from '../_ui/EmptyState';
-import { formatUsd, bucketSpendByDay } from '../_lib/format';
+import { formatUsd, parseTimestamp, bucketSpendByDay } from '../_lib/format';
 import { spendByAgent, latencyStats, errorBreakdown, marginSummary } from '../_lib/analytics';
 
 const WINDOWS: Record<string, { label: string; days: number }> = {
@@ -31,7 +31,7 @@ export default function AnalyticsPage() {
   const windowMs = windowDays * 86_400_000;
 
   const windowOrders = useMemo(
-    () => orders.filter((o) => Date.now() - Date.parse(o.created_at) < windowMs),
+    () => orders.filter((o) => Date.now() - parseTimestamp(o.created_at) < windowMs),
     [orders, windowMs],
   );
 

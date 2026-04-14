@@ -15,7 +15,7 @@ import { PageHeader } from '../_ui/PageHeader';
 import { useToast } from '../_ui/Toast';
 import { fetchAuditLog } from '../_lib/api';
 import type { AuditLogEntry } from '../_lib/types';
-import { timeAgo } from '../_lib/format';
+import { parseTimestamp, timeAgo } from '../_lib/format';
 
 const ACTION_TONE: Record<string, 'green' | 'red' | 'yellow' | 'blue' | 'purple' | 'neutral'> = {
   'agent.create': 'green',
@@ -166,7 +166,9 @@ export default function AuditLogPage() {
       {selected && (
         <Drawer open={true} onClose={() => setSelected(null)} title={selected.action} width={520}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-            <DetailRow label="When">{new Date(selected.created_at).toLocaleString()}</DetailRow>
+            <DetailRow label="When">
+              {new Date(parseTimestamp(selected.created_at)).toLocaleString()}
+            </DetailRow>
             <DetailRow label="Actor">{selected.actor_email}</DetailRow>
             <DetailRow label="Role">
               <Pill tone="neutral">{selected.actor_role}</Pill>

@@ -13,7 +13,7 @@ import { OrderStatusPill } from '../_ui/OrderStatusPill';
 import { FilterChip } from '../_ui/FilterChip';
 import { PageContainer } from '../_ui/PageContainer';
 import { PageHeader } from '../_ui/PageHeader';
-import { formatUsd, timeAgo } from '../_lib/format';
+import { formatUsd, parseTimestamp, timeAgo } from '../_lib/format';
 import { IN_FLIGHT_ORDER_STATUSES } from '../_lib/constants';
 import type { Order } from '../_lib/types';
 
@@ -31,14 +31,16 @@ export default function OrdersPage() {
     let list = orders;
     switch (preset) {
       case 'failed_today':
-        list = list.filter((o) => o.status === 'failed' && now - Date.parse(o.created_at) < DAY);
+        list = list.filter(
+          (o) => o.status === 'failed' && now - parseTimestamp(o.created_at) < DAY,
+        );
         break;
       case 'in_flight':
         list = list.filter((o) => IN_FLIGHT_ORDER_STATUSES.has(o.status));
         break;
       case 'delivered_7d':
         list = list.filter(
-          (o) => o.status === 'delivered' && now - Date.parse(o.created_at) < 7 * DAY,
+          (o) => o.status === 'delivered' && now - parseTimestamp(o.created_at) < 7 * DAY,
         );
         break;
       case 'refunded':
@@ -64,11 +66,11 @@ export default function OrdersPage() {
     return {
       all: orders.length,
       failed_today: orders.filter(
-        (o) => o.status === 'failed' && now - Date.parse(o.created_at) < DAY,
+        (o) => o.status === 'failed' && now - parseTimestamp(o.created_at) < DAY,
       ).length,
       in_flight: orders.filter((o) => IN_FLIGHT_ORDER_STATUSES.has(o.status)).length,
       delivered_7d: orders.filter(
-        (o) => o.status === 'delivered' && now - Date.parse(o.created_at) < 7 * DAY,
+        (o) => o.status === 'delivered' && now - parseTimestamp(o.created_at) < 7 * DAY,
       ).length,
       refunded: orders.filter((o) => o.status === 'refunded' || o.status === 'refund_pending')
         .length,
@@ -274,9 +276,9 @@ function OrderDrawer({
             color: 'var(--fg-dim)',
           }}
         >
-          Created: {new Date(order.created_at).toLocaleString()}
+          Created: {new Date(parseTimestamp(order.created_at)).toLocaleString()}
           <br />
-          Updated: {new Date(order.updated_at).toLocaleString()}
+          Updated: {new Date(parseTimestamp(order.updated_at)).toLocaleString()}
         </div>
       </div>
     </Drawer>

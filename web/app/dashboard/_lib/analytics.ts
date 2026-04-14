@@ -4,6 +4,7 @@
 // rendering in the page component.
 
 import type { ApiKey, Order } from './types';
+import { parseTimestamp } from './format';
 
 export interface SpendByAgent {
   apiKeyId: string;
@@ -32,7 +33,7 @@ export function spendByAgent(orders: Order[], agents: ApiKey[], windowMs: number
   const delivered = new Map<string, number>();
   const failed = new Map<string, number>();
   for (const o of orders) {
-    if (Date.parse(o.created_at) < cutoff) continue;
+    if (parseTimestamp(o.created_at) < cutoff) continue;
     const bucket = byId.get(o.api_key_id);
     if (!bucket) continue;
     bucket.count += 1;
@@ -73,8 +74,8 @@ export function latencyStats(orders: Order[]): LatencyStats {
   const samples: number[] = [];
   for (const o of orders) {
     if (o.status !== 'delivered') continue;
-    const start = Date.parse(o.created_at);
-    const end = Date.parse(o.updated_at);
+    const start = parseTimestamp(o.created_at);
+    const end = parseTimestamp(o.updated_at);
     if (!isFinite(start) || !isFinite(end)) continue;
     const secs = (end - start) / 1000;
     if (secs <= 0 || secs > 3600) continue;

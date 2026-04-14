@@ -37,7 +37,7 @@ import {
   type SystemAlertKind,
   type UserAlertKind,
 } from '../_lib/types';
-import { timeAgo } from '../_lib/format';
+import { parseTimestamp, timeAgo } from '../_lib/format';
 
 const KIND_META: Record<AlertKind, { title: string; blurb: string; scope: 'system' | 'user' }> = {
   ctx_auth_dead: {
@@ -379,7 +379,7 @@ function RuleRow({
             ) : (
               <Pill tone="neutral">Disabled</Pill>
             )}
-            {rule.snoozed_until && Date.parse(rule.snoozed_until) > Date.now() && (
+            {rule.snoozed_until && parseTimestamp(rule.snoozed_until) > Date.now() && (
               <Pill tone="blue">Snoozed</Pill>
             )}
           </div>

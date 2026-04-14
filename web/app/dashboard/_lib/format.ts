@@ -1,6 +1,34 @@
 // Display formatters shared across pages. Kept stringly-typed because
 // the backend returns money as decimal strings.
 
+// Parse a backend-supplied timestamp into a real UTC ms-since-epoch.
+//
+// The cards402 backend mixes two timestamp formats in its responses:
+//
+//   1. SQLite defaults via `datetime('now')` →  "2026-04-14 14:30:35"
+//      (space delimiter, no Z, no fractional seconds)
+//   2. JS-written via `new Date().toISOString()` →  "2026-04-14T14:30:35.123Z"
+//
+// Both are UTC, but JavaScript's `Date.parse()` reads the first format as
+// **local time** (the spec says space-delimited values are
+// implementation-defined, and every major engine treats them as local).
+// For a user in UTC+8 that puts every server-rendered timestamp 8 hours
+// behind real UTC, so "5 minutes ago" displays as "8 hours ago".
+//
+// Normalise both forms by appending a Z when the string clearly has no
+// timezone marker. Idempotent for ISO Z strings, fixes the SQLite ones.
+export function parseTimestamp(iso: string | null | undefined): number {
+  if (!iso) return NaN;
+  const s = iso.trim();
+  // Already has a TZ marker (Z or ±HH[:MM])? Parse as-is.
+  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(s)) return Date.parse(s);
+  // Convert "YYYY-MM-DD HH:MM:SS[.fff]" → "YYYY-MM-DDTHH:MM:SS[.fff]Z".
+  // The space → T swap is needed because Date.parse is more reliable on
+  // ISO-style strings, and the trailing Z forces UTC interpretation.
+  const isoLike = s.includes(' ') ? s.replace(' ', 'T') : s;
+  return Date.parse(isoLike + 'Z');
+}
+
 export function formatUsd(value: string | number, decimals = 2): string {
   const n = typeof value === 'string' ? parseFloat(value) : value;
   if (!isFinite(n)) return '$0.00';
@@ -20,7 +48,7 @@ export function formatAmountShort(value: string | number): string {
 
 export function timeAgo(iso: string | null | undefined): string {
   if (!iso) return '—';
-  const t = Date.parse(iso);
+  const t = parseTimestamp(iso);
   if (!isFinite(t)) return '—';
   const seconds = Math.floor((Date.now() - t) / 1000);
   if (seconds < 10) return 'just now';

@@ -15,7 +15,7 @@ import { AgentStatePill } from '../_ui/AgentStatePill';
 import { FilterChip } from '../_ui/FilterChip';
 import { PageContainer } from '../_ui/PageContainer';
 import { PageHeader } from '../_ui/PageHeader';
-import { formatUsd, timeAgo, truncateAddress } from '../_lib/format';
+import { formatUsd, parseTimestamp, timeAgo, truncateAddress } from '../_lib/format';
 import { AGENT_STATE_LABEL, AGENT_STATE_TONE } from '../_lib/constants';
 import type { ApiKey, AgentStateName } from '../_lib/types';
 import { CreateAgentDrawer } from '../_shell/CreateAgentDrawer';
@@ -47,7 +47,7 @@ export default function AgentsPage() {
     const map = new Map<string, number>();
     for (const o of orders) {
       if (o.status !== 'delivered') continue;
-      if (Date.parse(o.created_at) < cutoff) continue;
+      if (parseTimestamp(o.created_at) < cutoff) continue;
       map.set(o.api_key_id, (map.get(o.api_key_id) || 0) + parseFloat(o.amount_usdc));
     }
     return map;
