@@ -49,16 +49,17 @@ const PUBLISHED: Post[] = [
       'Every millisecond of the 33-second path from agent.purchaseCard() to PAN-in-hand. Payment confirmation, Stage 1 scrape, Stage 2 fulfilment, the SSE stream, and the failure modes we found along the way.',
     tags: ['engineering', 'fulfilment'],
   },
+  {
+    date: '2026-04-14',
+    slug: 'sse-beats-polling-for-agent-apis',
+    title: 'Why SSE beats polling for agent-facing APIs',
+    excerpt:
+      'Server-Sent Events are almost always the right primitive for long-lived order tracking with autonomous agents. Latency, reconnects, fallbacks, and the operational details that matter when your clients are long-lived processes instead of browsers.',
+    tags: ['api', 'engineering'],
+  },
 ];
 
 const PIPELINE: Post[] = [
-  {
-    date: 'Coming soon',
-    title: 'Why SSE beats polling for agent-facing APIs',
-    excerpt:
-      'Server-Sent Events are almost always the right primitive for long-lived order tracking with autonomous clients. Latency, reconnection behaviour, and why the cards402 SDK uses SSE-first with polling as an automatic fallback.',
-    tags: ['api', 'engineering'],
-  },
   {
     date: 'Coming soon',
     title: 'Claim codes: credentials that never touch the transcript',

@@ -22,6 +22,12 @@ export interface ChangelogEntry {
 export const CHANGELOG_ENTRIES: ChangelogEntry[] = [
   {
     date: '2026-04-14',
+    title: 'New post: why SSE beats polling for agent-facing APIs',
+    tags: ['feature'],
+    body: 'Why the Cards402 SDK defaults to Server-Sent Events for order state, why we kept polling as an automatic fallback, and the operational details (keepalive interval, nginx buffering, terminal close) that make SSE reliable in practice when your clients are long-lived processes instead of browsers.',
+  },
+  {
+    date: '2026-04-14',
     title: 'New post: non-custodial card issuance on Soroban',
     tags: ['feature'],
     body: "Architectural walk-through of the Cards402 receiver contract, the Soroban event watcher, and the refund story. Why agents pay a contract we can't drain, what we gave up on the latency side, and why the trade was worth it for a payment platform aimed at autonomous agents.",
