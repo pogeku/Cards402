@@ -32,12 +32,12 @@ const BENEFITS = [
   {
     icon: '◐',
     title: '28 days paid leave',
-    body: 'Plus local public holidays. Plus a mandatory week off between Christmas and New Year. You will take the time.',
+    body: 'Plus local public holidays. Plus a mandatory week off between Christmas and New Year.',
   },
   {
     icon: '⌘',
     title: 'Equipment allowance',
-    body: '£3,000 to kit out your workstation on day one, refreshed every 3 years. Pick the keyboard.',
+    body: '£3,000 to kit out your workstation on day one, refreshed every 3 years.',
   },
   {
     icon: '☾',
@@ -47,7 +47,7 @@ const BENEFITS = [
   {
     icon: '✈',
     title: 'Team travel covered',
-    body: 'Quarterly team offsites in good cities. Travel, hotel, meals covered. You get to pick a city.',
+    body: 'Quarterly team offsites in good cities. Travel, hotel, meals covered.',
   },
   {
     icon: '♡',
