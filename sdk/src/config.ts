@@ -54,14 +54,45 @@ export function loadCards402Config(configPath?: string): Cards402Config | null {
 }
 
 /**
- * Write the config file with 0600 permissions so only the owner can
- * read it. Creates the parent directory on demand.
+ * Write the config file atomically with 0600 permissions so only the
+ * owner can read it. Creates the parent directory on demand.
+ *
+ * Atomicity: write to `<path>.tmp-<pid>-<rand>` first, fsync, then
+ * rename over the target. A mid-write crash (power loss, OOM, Ctrl-C
+ * between write and flush) leaves the old file intact instead of a
+ * truncated new one that loadCards402Config would explode on.
+ *
+ * Permission hardening: the `mode` option on writeFileSync only
+ * applies when the file is being CREATED, so a stale 0644 file from
+ * an earlier buggy version would retain its wide permissions forever.
+ * We fsync+rename so the temp path is always freshly created with
+ * 0600, then the rename replaces the target atomically.
  */
 export function saveCards402Config(config: Cards402Config, configPath?: string): { path: string } {
   const p = configPath || defaultConfigPath();
   const dir = path.dirname(p);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(p, JSON.stringify(config, null, 2), { mode: 0o600 });
+
+  const tmp = `${p}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+  const body = JSON.stringify(config, null, 2);
+  const fd = fs.openSync(tmp, 'w', 0o600);
+  try {
+    fs.writeFileSync(fd, body);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  // Atomic rename. POSIX guarantees this replaces an existing file
+  // with the same semantics; on Windows rename-over-existing also
+  // works from Node 10+.
+  fs.renameSync(tmp, p);
+  // Belt-and-braces: some filesystems (FAT on USB sticks) drop the
+  // mode on rename. Force-tighten after.
+  try {
+    fs.chmodSync(p, 0o600);
+  } catch {
+    /* non-fatal — best effort */
+  }
   return { path: p };
 }
 
@@ -70,6 +101,12 @@ export function saveCards402Config(config: Cards402Config, configPath?: string):
  *   1. Explicit `apiKey` / `baseUrl` passed to the call
  *   2. CARDS402_API_KEY / CARDS402_BASE_URL env vars
  *   3. ~/.cards402/config.json
+ *
+ * The two fields resolve independently — passing `apiKey` to a call
+ * that needs its `baseUrl` to come from config.json used to silently
+ * drop the config lookup because the early-return on `opts.apiKey`
+ * was only consulting env vars for baseUrl. Now both fields walk the
+ * full priority chain and only stop once each is filled.
  */
 export function resolveCredentials(
   opts: {
@@ -77,18 +114,21 @@ export function resolveCredentials(
     baseUrl?: string;
   } = {},
 ): { apiKey: string | undefined; baseUrl: string | undefined } {
-  if (opts.apiKey) {
-    return { apiKey: opts.apiKey, baseUrl: opts.baseUrl || process.env.CARDS402_BASE_URL };
+  let apiKey: string | undefined = opts.apiKey;
+  let baseUrl: string | undefined = opts.baseUrl;
+
+  if (!apiKey && process.env.CARDS402_API_KEY) apiKey = process.env.CARDS402_API_KEY;
+  if (!baseUrl && process.env.CARDS402_BASE_URL) baseUrl = process.env.CARDS402_BASE_URL;
+
+  if (!apiKey || !baseUrl) {
+    // Only load config if at least one field is still missing — saves
+    // a filesystem read on the common case where env + opts fully cover it.
+    const cfg = loadCards402Config();
+    if (cfg) {
+      if (!apiKey) apiKey = cfg.api_key;
+      if (!baseUrl) baseUrl = cfg.api_url;
+    }
   }
-  if (process.env.CARDS402_API_KEY) {
-    return {
-      apiKey: process.env.CARDS402_API_KEY,
-      baseUrl: opts.baseUrl || process.env.CARDS402_BASE_URL,
-    };
-  }
-  const cfg = loadCards402Config();
-  if (cfg) {
-    return { apiKey: cfg.api_key, baseUrl: opts.baseUrl || cfg.api_url };
-  }
-  return { apiKey: undefined, baseUrl: opts.baseUrl };
+
+  return { apiKey, baseUrl };
 }
