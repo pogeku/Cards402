@@ -55,6 +55,92 @@ describe('assertSafeUrl — SSRF protection', () => {
     await assert.rejects(() => assertSafeUrl('http://[::1]/payload'), /private IP/);
   });
 
+  // ── IPv6 edge cases — regression guards for the 2026-04-14 audit ──────────
+
+  it('blocks IPv6 unspecified ::', async () => {
+    await assert.rejects(() => assertSafeUrl('http://[::]/payload'), /private IP/);
+  });
+
+  it('blocks IPv6 ULA fc00:', async () => {
+    await assert.rejects(() => assertSafeUrl('http://[fc00::1]/payload'), /private IP/);
+  });
+
+  it('blocks IPv6 ULA fd00:', async () => {
+    await assert.rejects(() => assertSafeUrl('http://[fd12:3456:789a::1]/payload'), /private IP/);
+  });
+
+  it('blocks IPv6 link-local fe80:', async () => {
+    await assert.rejects(() => assertSafeUrl('http://[fe80::1]/payload'), /private IP/);
+  });
+
+  it('blocks IPv6 link-local fe8f: (was missed by old fe80:-only regex)', async () => {
+    await assert.rejects(() => assertSafeUrl('http://[fe8f::1]/payload'), /private IP/);
+  });
+
+  it('blocks IPv6 link-local feb0: (top of fe80::/10)', async () => {
+    await assert.rejects(() => assertSafeUrl('http://[feb0::1]/payload'), /private IP/);
+  });
+
+  it('blocks IPv6 multicast ff00:', async () => {
+    await assert.rejects(() => assertSafeUrl('http://[ff02::1]/payload'), /private IP/);
+  });
+
+  it('blocks IPv6 docs prefix 2001:db8::', async () => {
+    await assert.rejects(() => assertSafeUrl('http://[2001:db8::1]/payload'), /private IP/);
+  });
+
+  it('blocks IPv4-mapped IPv6 loopback ::ffff:127.0.0.1', async () => {
+    // Attack vector: IPv4 loopback encoded as mapped IPv6 bypasses a
+    // naive IPv6-only check. canonicalizeIp in ssrf.js should route
+    // this to the IPv4 loopback range.
+    await assert.rejects(() => assertSafeUrl('http://[::ffff:127.0.0.1]/payload'), /private IP/);
+  });
+
+  it('blocks IPv4-mapped IPv6 AWS metadata ::ffff:169.254.169.254', async () => {
+    await assert.rejects(
+      () => assertSafeUrl('http://[::ffff:169.254.169.254]/latest/meta-data/'),
+      /private IP/,
+    );
+  });
+
+  it('blocks IPv4-mapped IPv6 RFC-1918 ::ffff:10.0.0.1', async () => {
+    await assert.rejects(() => assertSafeUrl('http://[::ffff:10.0.0.1]/payload'), /private IP/);
+  });
+
+  // ── IPv4 missing-range regression guards ──────────────────────────────────
+
+  it('blocks multicast 224.0.0.1', async () => {
+    await assert.rejects(() => assertSafeUrl('http://224.0.0.1/payload'), /private IP/);
+  });
+
+  it('blocks multicast 239.255.255.255 (end of 224.0.0.0/4)', async () => {
+    await assert.rejects(() => assertSafeUrl('http://239.255.255.255/payload'), /private IP/);
+  });
+
+  it('blocks reserved 240.0.0.0/4', async () => {
+    await assert.rejects(() => assertSafeUrl('http://240.0.0.1/payload'), /private IP/);
+  });
+
+  it('blocks broadcast 255.255.255.255', async () => {
+    await assert.rejects(() => assertSafeUrl('http://255.255.255.255/payload'), /private IP/);
+  });
+
+  it('blocks IETF benchmark 198.18.0.0/15', async () => {
+    await assert.rejects(() => assertSafeUrl('http://198.18.0.1/payload'), /private IP/);
+  });
+
+  it('blocks docs TEST-NET-1 192.0.2.0/24', async () => {
+    await assert.rejects(() => assertSafeUrl('http://192.0.2.50/payload'), /private IP/);
+  });
+
+  it('blocks docs TEST-NET-2 198.51.100.0/24', async () => {
+    await assert.rejects(() => assertSafeUrl('http://198.51.100.50/payload'), /private IP/);
+  });
+
+  it('blocks docs TEST-NET-3 203.0.113.0/24', async () => {
+    await assert.rejects(() => assertSafeUrl('http://203.0.113.50/payload'), /private IP/);
+  });
+
   // ── URL validation ─────────────────────────────────────────────────────────
 
   it('throws on completely invalid URL', async () => {
