@@ -201,8 +201,11 @@ export default function DeveloperPage() {
             </a>{' '}
             for the full reference.
           </div>
-          <Snippet title="Install" code={`npm install cards402`} />
-          <Snippet title="Onboard an agent" code={`npx cards402 onboard --claim <claim-code>`} />
+          <Snippet title="Install" code={`npm install cards402@latest`} />
+          <Snippet
+            title="Onboard an agent"
+            code={`npx -y cards402@latest onboard --claim <claim-code>`}
+          />
           <Snippet
             title="Purchase a card"
             code={`import { purchaseCardOWS } from 'cards402';

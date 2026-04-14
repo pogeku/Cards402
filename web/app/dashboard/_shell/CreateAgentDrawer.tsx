@@ -103,7 +103,7 @@ export function CreateAgentDrawer({ open, onClose }: Props) {
   const snippet = created?.claim
     ? [
         'Read https://cards402.com/skill.md and set up this agent by running:',
-        `npx cards402 onboard --claim ${created.claim.code}`,
+        `npx -y cards402@latest onboard --claim ${created.claim.code}`,
       ].join('\n')
     : '';
 

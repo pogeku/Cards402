@@ -22,6 +22,13 @@ export interface ChangelogEntry {
 export const CHANGELOG_ENTRIES: ChangelogEntry[] = [
   {
     date: '2026-04-14',
+    version: 'sdk@0.4.7',
+    title: 'SDK 0.4.7 — self-updating CLI warning + @latest everywhere in the docs',
+    tags: ['feature', 'fix'],
+    body: 'The CLI now prints a one-line stderr warning on every invocation if your installed version is older than the latest on npm. The check fires in the background with a 2s fetch timeout, caches its result in ~/.cards402/version-check.json for 24h, and never blocks or fails the actual command — stdout is untouched so scripts parsing CLI output are unaffected. Every operator-facing install snippet across skill.md, the quickstart, the landing page, the dashboard claim-code drawer, the developer page, llms.txt, and the examples README now pins @latest on npx so each invocation re-resolves against the registry instead of serving a stale cached version. The practical effect: when we ship an SDK patch release (like 0.4.6 which unblocked USDC purchases), agents onboarded under the new instructions pick it up on their next run instead of having to wait for the npx cache to expire or for the operator to manually nuke it.',
+  },
+  {
+    date: '2026-04-14',
     version: 'sdk@0.4.6',
     title: 'SDK 0.4.6 — stop stranding agents on failed Soroban transactions',
     tags: ['fix', 'api'],

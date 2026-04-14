@@ -28,8 +28,10 @@ subscription payments.
 
 ## How an agent uses Cards402
 
-1. The operator runs `npx cards402 onboard --claim c402_<code>` once on the
-   agent's machine to exchange a single-use claim code for a real API key.
+1. The operator runs `npx -y cards402@latest onboard --claim c402_<code>` once
+   on the agent's machine to exchange a single-use claim code for a real API
+   key. Always pin `@latest` on npx so SDK patch releases (especially payment-
+   path fixes) propagate instead of being served from npx's local cache.
 2. The agent funds its Stellar wallet with USDC or XLM.
 3. The agent calls `purchaseCardOWS({ apiKey, walletName, amountUsdc })` —
    one function that creates the order, signs the Soroban payment, streams

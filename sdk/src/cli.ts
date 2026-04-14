@@ -16,6 +16,26 @@
 async function main(): Promise<number> {
   const [, , cmd = 'mcp', ...rest] = process.argv;
 
+  // Fire-and-forget update check. Runs in parallel with the command;
+  // warns on stderr if this install is older than the latest on npm.
+  // Never blocks, never throws. Skipped for `version` / help since
+  // those exit too quickly for the fetch to race.
+  if (
+    cmd !== 'version' &&
+    cmd !== '--version' &&
+    cmd !== '-v' &&
+    cmd !== '-h' &&
+    cmd !== '--help' &&
+    cmd !== 'help'
+  ) {
+    try {
+      const { checkForUpdates } = await import('./version-check');
+      checkForUpdates();
+    } catch {
+      /* version-check module load failed — non-fatal */
+    }
+  }
+
   if (cmd === '-h' || cmd === '--help' || cmd === 'help') {
     process.stdout.write(`cards402 — virtual Visa cards for AI agents
 

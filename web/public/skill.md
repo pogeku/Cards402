@@ -23,8 +23,14 @@ It looks like `c402_abc123def456…` and is single-use. To exchange the claim
 for a usable API key, run:
 
 ```bash
-npx cards402 onboard --claim c402_<code>
+npx -y cards402@latest onboard --claim c402_<code>
 ```
+
+> **Always pin `@latest`.** The `@latest` flag forces `npx` to re-resolve
+> against the npm registry on every invocation instead of serving a stale
+> cached version. This matters because SDK fixes affecting on-chain
+> payment paths ship as patch releases — you do **not** want to run a
+> stranded-agent version of the CLI against real money.
 
 This does four things in one call:
 
@@ -45,7 +51,7 @@ public key the command printed — that covers the Stellar account reserve
 and lets the wallet pay fees. Check the balance any time with:
 
 ```bash
-npx cards402 wallet balance
+npx -y cards402@latest wallet balance
 ```
 
 For USDC payments the wallet needs a USDC trustline. You don't have to do
@@ -65,7 +71,7 @@ The simplest path — a single CLI call that creates an order, signs the
 Soroban payment, and waits for the card:
 
 ```bash
-npx cards402 purchase --amount 25
+npx -y cards402@latest purchase --amount 25
 ```
 
 Or from TypeScript:

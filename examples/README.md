@@ -58,7 +58,7 @@ The fastest path for Claude-based agents. No code needed — just configure:
   "mcpServers": {
     "cards402": {
       "command": "npx",
-      "args": ["-y", "cards402"],
+      "args": ["-y", "cards402@latest"],
       "env": {
         "CARDS402_API_KEY": "cards402_...",
         "OWS_WALLET_NAME": "my-agent"
@@ -69,8 +69,12 @@ The fastest path for Claude-based agents. No code needed — just configure:
 ```
 
 The `cards402` CLI defaults to the `mcp` subcommand when no other subcommand
-is passed, so `npx cards402` with no args runs the MCP server. `-y` is the
-standard npm auto-accept flag for the one-time install prompt.
+is passed, so `npx cards402@latest` with no args runs the MCP server. `-y`
+auto-accepts the one-time install prompt. **Always pin `@latest`** — without
+it, `npx` serves whatever version it first resolved from its local cache
+indefinitely, so SDK patch releases (particularly the ones touching on-chain
+payment paths) don't reach the agent until the operator manually clears the
+npx cache. With `@latest`, every invocation re-resolves against the registry.
 
 Then ask Claude: "Buy me a $10 virtual Visa card."
 

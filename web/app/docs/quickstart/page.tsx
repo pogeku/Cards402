@@ -61,7 +61,7 @@ const howToJsonLd = {
       '@type': 'HowToStep',
       position: 2,
       name: 'Claim your first API key',
-      text: 'Exchange a single-use claim code for an API key via npx cards402 onboard --claim c402_<code>.',
+      text: 'Exchange a single-use claim code for an API key via npx -y cards402@latest onboard --claim c402_<code>. Always pin @latest on npx so you re-resolve against the registry and never run a stale cached version of the CLI.',
       url: 'https://cards402.com/docs/quickstart#claim-your-first-api-key',
     },
     {
@@ -121,11 +121,23 @@ const STEPS = [
           Cards402 ships as a single npm package with an included CLI. One install gets you the
           TypeScript SDK, the CLI, and the MCP server.
         </p>
-        <CodeBlock label="Shell">{`npm install cards402
-# or: pnpm add cards402 / bun add cards402`}</CodeBlock>
+        <CodeBlock label="Shell">{`npm install cards402@latest
+# or: pnpm add cards402@latest / bun add cards402@latest`}</CodeBlock>
         <p>
           The package exports <Code>purchaseCardOWS</Code>, <Code>createOrder</Code>,{' '}
           <Code>waitForCard</Code>, and a <Code>Cards402</Code> client class for lower-level usage.
+        </p>
+        <p>
+          If you&apos;re running the CLI through <Code>npx</Code> (the recommended path for
+          ephemeral agent invocations), always pin <Code>@latest</Code>:
+        </p>
+        <CodeBlock label="Shell">{`npx -y cards402@latest --help`}</CodeBlock>
+        <p>
+          Without <Code>@latest</Code>, <Code>npx</Code> caches the first version it resolves and
+          serves that indefinitely. SDK fixes affecting on-chain payment paths ship as patch
+          releases — pinning <Code>@latest</Code> re-resolves against the registry on every
+          invocation so your agent picks them up automatically. The CLI also prints a one-line
+          stderr warning when a newer version is available, cached to one check per 24h.
         </p>
       </>
     ),
@@ -141,7 +153,7 @@ const STEPS = [
           <strong>New key</strong>, name it, and copy the token — it&apos;s only shown once.
         </p>
         <p>Prefer not to paste the raw key into agent context? Use a claim code instead:</p>
-        <CodeBlock label="Shell">{`npx cards402 onboard --claim c402_abc123...`}</CodeBlock>
+        <CodeBlock label="Shell">{`npx -y cards402@latest onboard --claim c402_abc123...`}</CodeBlock>
         <p>
           Claim codes are single-use. The agent exchanges one for a real API key on first run and
           invalidates the claim in the same round trip. Credentials never appear in the LLM

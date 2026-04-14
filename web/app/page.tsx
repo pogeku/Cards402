@@ -11,7 +11,7 @@ import { HeroScene, HeroCard } from '@/app/components/HeroCard';
 const agentOneLiner = `Read https://cards402.com/skill.md and set up
 this agent by running:
 
-  npx cards402 onboard --claim c402_<code>`;
+  npx -y cards402@latest onboard --claim c402_<code>`;
 
 const purchaseSnippet = `import { purchaseCardOWS } from 'cards402';
 

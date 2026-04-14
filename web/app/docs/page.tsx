@@ -636,7 +636,7 @@ Content-Type: application/json
             create-order → sign Soroban tx → stream → return card:
           </Para>
           <CodeBlock label="Shell">
-            {`npx cards402 purchase --amount 25
+            {`npx -y cards402@latest purchase --amount 25
 # optional: --asset xlm|usdc
 # default is "auto" — picks USDC if the wallet has enough, else XLM`}
           </CodeBlock>
