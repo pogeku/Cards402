@@ -151,47 +151,61 @@ const claimLimiter = rateLimit({
 app.post('/v1/agent/claim', claimLimiter, (req, res) => {
   const { event: bizEvent } = require('./lib/logger');
   const secretBox = require('./lib/secret-box');
+  const { hashClaimCode } = require('./lib/claim-hash');
+  const { recordAudit } = require('./lib/audit');
   const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
   if (!code) {
     return res.status(400).json({ error: 'missing_code', message: 'code is required' });
   }
 
-  // Atomic claim: UPDATE … WHERE used_at IS NULL returns 1 iff the row
-  // moved from unused → used. Second concurrent request gets 0 rows and
-  // falls through to the "invalid/expired/already used" branch. Same
-  // generic error for all three so probing can't reveal which bucket a
-  // stolen code is in.
+  // F1: the DB stores SHA256(code), not the code itself. Hash before
+  // lookup so the UNIQUE constraint still matches the mint path.
+  const codeHash = hashClaimCode(code);
+
+  // F2: fold the used_at mark and the sealed_payload wipe into a single
+  // atomic UPDATE. The previous flow was claim → SELECT → decrypt →
+  // separate UPDATE wipe, which meant a crash between mark-used and
+  // wipe left the sealed_payload in the DB alongside used_at=set. The
+  // wipe's stated intent ("DB dump after redemption can't re-extract
+  // the api_key") depended on that window being zero. The UPDATE
+  // below returns the pre-wipe sealed_payload via a nested SELECT so
+  // we still get the payload to decrypt in memory, but the row itself
+  // is mutated to the post-redemption state in one statement.
+  //
+  // Concurrent callers: better-sqlite3's transaction() wraps this in
+  // BEGIN IMMEDIATE, so the second caller blocks on the write lock
+  // until the first commits. After commit the second sees used_at set
+  // and UPDATE returns changes=0.
   const now = new Date().toISOString();
   const ip =
     /** @type {any} */ (req).ip || /** @type {any} */ (req).connection?.remoteAddress || null;
-  const update = db
-    .prepare(
-      `
-    UPDATE agent_claims
-    SET used_at = @now, claimed_ip = @ip
-    WHERE code = @code
-      AND used_at IS NULL
-      AND datetime(expires_at) > datetime('now')
-  `,
-    )
-    .run({ code, now, ip });
 
-  if (update.changes === 0) {
+  const redeemTx = db.transaction((codeHashArg) => {
+    const selectStmt = db.prepare(
+      `SELECT api_key_id, sealed_payload FROM agent_claims
+       WHERE code = ? AND used_at IS NULL AND datetime(expires_at) > datetime('now')`,
+    );
+    const rowArg = /** @type {any} */ (selectStmt.get(codeHashArg));
+    if (!rowArg) return null;
+    const upd = db
+      .prepare(
+        `UPDATE agent_claims
+         SET used_at = @now, claimed_ip = @ip, sealed_payload = ''
+         WHERE code = @code AND used_at IS NULL`,
+      )
+      .run({ code: codeHashArg, now, ip });
+    if (upd.changes === 0) return null; // lost the race to another concurrent call
+    return rowArg;
+  });
+
+  const row = redeemTx(codeHash);
+  if (!row) {
+    // invalid, expired, or already used — same generic 401 for all
+    // three buckets so probing can't distinguish them.
     return res.status(401).json({
       error: 'invalid_claim',
       message: 'Claim code is invalid, expired, or already used.',
     });
-  }
-
-  // Pull the sealed payload that belongs to the now-consumed claim,
-  // decrypt it, and also wipe the sealed payload from the row so the
-  // api_key can never be re-extracted even if the DB is dumped later.
-  const row = /** @type {any} */ (
-    db.prepare(`SELECT api_key_id, sealed_payload FROM agent_claims WHERE code = ?`).get(code)
-  );
-  if (!row) {
-    // Shouldn't happen — we just successfully updated that row.
-    return res.status(500).json({ error: 'claim_inconsistent' });
   }
 
   let payload;
@@ -206,11 +220,29 @@ app.post('/v1/agent/claim', claimLimiter, (req, res) => {
           : 'Failed to decrypt claim payload.',
     });
   }
-  db.prepare(`UPDATE agent_claims SET sealed_payload = '' WHERE code = ?`).run(code);
 
   const key = /** @type {any} */ (
-    db.prepare(`SELECT id, label FROM api_keys WHERE id = ?`).get(row.api_key_id)
+    db.prepare(`SELECT id, label, dashboard_id FROM api_keys WHERE id = ?`).get(row.api_key_id)
   );
+
+  // F3: write an audit_log row for the claim redemption. This is the
+  // single most forensically important event in the api-key lifecycle
+  // (who turned a mint into live credentials, from what IP, when) and
+  // was previously only in bizEvent telemetry — invisible to dashboard
+  // operators reviewing audit history. Scoped to the api_key's owning
+  // dashboard via the join above.
+  if (key?.dashboard_id) {
+    recordAudit({
+      dashboardId: key.dashboard_id,
+      actor: { id: null, email: 'agent-claim', role: 'system' },
+      action: 'agent.claim_redeemed',
+      resourceType: 'agent',
+      resourceId: row.api_key_id,
+      details: { label: key.label ?? null },
+      ip,
+      userAgent: req.headers?.['user-agent'] || null,
+    });
+  }
 
   // Flip the key into 'initializing' state the instant the claim is
   // redeemed, so the dashboard's modal + state pill progress even if the

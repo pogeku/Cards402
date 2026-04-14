@@ -408,6 +408,15 @@ router.post('/api-keys', requirePermission('agent:create'), async (req, res) => 
   // trades the code for the real api_key via POST /v1/agent/claim —
   // so the raw api_key never has to live in a pasted snippet (or the
   // agent's conversation transcript).
+  //
+  // Adversarial audit F1-claim-code: store a SHA256 of the code rather
+  // than the raw value. The code column previously held plaintext, so
+  // a DB dump within the 10-min TTL window would expose every live
+  // claim verbatim. This now matches the pattern already used for
+  // auth_codes.code_hash and sessions.token_hash — the server stores
+  // only a hash, verification hashes on the way in, and the UNIQUE
+  // constraint still works because both sides hash identically.
+  const { hashClaimCode } = require('../lib/claim-hash');
   const claimId = uuidv4();
   const claimCode = `c402_${crypto.randomBytes(24).toString('hex')}`;
   const claimTtlMs = 10 * 60 * 1000; // 10 min — long enough to paste + run, short enough to matter
@@ -423,7 +432,7 @@ router.post('/api-keys', requirePermission('agent:create'), async (req, res) => 
   `,
   ).run({
     id: claimId,
-    code: claimCode,
+    code: hashClaimCode(claimCode),
     api_key_id: id,
     sealed_payload: sealedPayload,
     expires_at: claimExpiresAt,
