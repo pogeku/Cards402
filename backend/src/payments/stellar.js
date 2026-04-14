@@ -69,10 +69,23 @@ function saveStartLedger(ledger) {
 
 // ── Watcher ───────────────────────────────────────────────────────────────────
 
+// Shutdown flag checked by the poll loop on every scheduling tick.
+// Set by the teardown function returned from startWatcher() so the
+// SIGINT/SIGTERM handler in index.js can stop the watcher cleanly —
+// in-flight getEvents() / onPayment work finishes, but no new poll
+// is scheduled, and the handler's server.close() timeout doesn't
+// fight a re-scheduling setTimeout.
+let shutdownRequested = false;
+
 function startWatcher(onPayment, log = console.log) {
   if (!RECEIVER_CONTRACT_ID) throw new Error('RECEIVER_CONTRACT_ID not set');
   log(`[stellar] watching receiver contract ${RECEIVER_CONTRACT_ID} on ${NETWORK}`);
+  shutdownRequested = false;
   poll(onPayment, log);
+  return function stopWatcher() {
+    shutdownRequested = true;
+    log('[stellar] watcher stop requested — will drain after current poll');
+  };
 }
 
 async function poll(onPayment, log) {
@@ -118,6 +131,7 @@ async function poll(onPayment, log) {
     // Override via WATCHER_POLL_INTERVAL_MS if you're running a dedicated RPC
     // or want to trade RPC load against latency differently. Error path is
     // backed off 4× to avoid hammering a broken endpoint.
+    if (shutdownRequested) return;
     const POLL_MS = parseInt(process.env.WATCHER_POLL_INTERVAL_MS || '1500', 10);
     setTimeout(() => poll(onPayment, log), events.length === 200 ? 0 : POLL_MS);
   } catch (err) {
@@ -163,6 +177,7 @@ async function poll(onPayment, log) {
         });
         // Retry quickly — the reset cursor is valid, no need to wait
         // the 4× backoff we'd apply for generic RPC flakiness.
+        if (shutdownRequested) return;
         setTimeout(() => poll(onPayment, log), POLL_MS);
         return;
       }
@@ -173,6 +188,7 @@ async function poll(onPayment, log) {
     // visible in the metrics pipeline, not just stderr. Cheap because poll
     // errors are rare — the hot path is success, which doesn't emit this.
     bizEvent('stellar.poll_error', { error: err.message });
+    if (shutdownRequested) return;
     setTimeout(() => poll(onPayment, log), POLL_MS * 4);
   }
 }

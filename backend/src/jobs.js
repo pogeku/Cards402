@@ -748,11 +748,18 @@ async function checkAgentFundingStatusGuarded() {
   }
 }
 
+// Track every interval scheduled by startJobs() so the process
+// signal handler in index.js can cancel them cleanly on SIGINT /
+// SIGTERM. Without this, pm2's graceful-stop sent SIGINT, Node
+// exited immediately, and any in-flight runJobs execution was
+// abandoned mid-transaction.
+const _jobIntervals = /** @type {NodeJS.Timeout[]} */ ([]);
+
 function startJobs() {
   // Main reconciler tick — the slow one. Order expiry, stuck-order
   // recovery, webhook retries, etc. Safe to run at 5-minute cadence.
   runJobs();
-  setInterval(runJobs, JOBS_INTERVAL_MS);
+  _jobIntervals.push(setInterval(runJobs, JOBS_INTERVAL_MS));
 
   // Funding check — runs on its own fast interval because the user is
   // actively waiting for the dashboard pill to flip after depositing.
@@ -760,19 +767,34 @@ function startJobs() {
   // and the emitted SSE event pushes to any open dashboard immediately.
   const FUNDING_INTERVAL_MS = parseInt(process.env.FUNDING_CHECK_INTERVAL_MS || '15000', 10);
   checkAgentFundingStatusGuarded();
-  setInterval(checkAgentFundingStatusGuarded, FUNDING_INTERVAL_MS);
+  _jobIntervals.push(setInterval(checkAgentFundingStatusGuarded, FUNDING_INTERVAL_MS));
 
   // Alert evaluator — walks every enabled rule once a minute, fires
   // Discord on new firings, persists history. Cheap + bounded, runs in
   // the same process as everything else.
   const ALERT_INTERVAL_MS = parseInt(process.env.ALERT_INTERVAL_MS || '60000', 10);
   evaluateAlertsForAllDashboards().catch(() => {});
-  setInterval(
-    () => evaluateAlertsForAllDashboards().catch((err) => log(`alerts error: ${err.message}`)),
-    ALERT_INTERVAL_MS,
+  _jobIntervals.push(
+    setInterval(
+      () => evaluateAlertsForAllDashboards().catch((err) => log(`alerts error: ${err.message}`)),
+      ALERT_INTERVAL_MS,
+    ),
   );
 
   log('background jobs started');
+}
+
+// Cancel every interval started by startJobs(). Called from the
+// process shutdown handler in index.js on SIGINT / SIGTERM.
+// In-flight jobs finish naturally because runJobs() is already
+// guarded by the jobsRunning mutex — this stops new ticks from
+// scheduling, nothing more.
+function stopJobs() {
+  while (_jobIntervals.length > 0) {
+    const t = _jobIntervals.pop();
+    if (t) clearInterval(t);
+  }
+  log('background jobs stopped');
 }
 
 // Evaluate alert rules for every dashboard. Per-dashboard to honour
@@ -792,6 +814,7 @@ async function evaluateAlertsForAllDashboards() {
 
 module.exports = {
   startJobs,
+  stopJobs,
   expireStaleOrders,
   expireApprovalRequests,
   reconcileOrderingFulfillment,
