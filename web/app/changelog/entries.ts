@@ -22,6 +22,12 @@ export interface ChangelogEntry {
 export const CHANGELOG_ENTRIES: ChangelogEntry[] = [
   {
     date: '2026-04-14',
+    title: 'Security + correctness audit — 18 fixes across backend and SDK',
+    tags: ['security', 'fix', 'infra'],
+    body: "An end-to-end audit of the security-critical primitives and the agent-facing SDK, covering the backend webhook layer, auth middleware, HMAC signing, card-at-rest sealing, SSRF guard, policy engine, error sanitiser, and every CLI surface operators touch. Eighteen commits shipped. Highlights: (1) Outbound HTTPS webhooks were silently failing in production — the DNS-pinning code rewrote the URL hostname to the resolved IP, which broke TLS certificate verification for every webhook endpoint with a CA-issued cert. Dropped the rewrite, kept the SSRF validation; the DNS-rebinding window is back but narrow and well-understood. (2) Auth middleware now blocks suspended keys at every /v1/* route — previously `suspended` was only enforced at order-creation time, so read endpoints let flagged agents straight through. (3) SSRF guard was missing IPv4-mapped IPv6, fe80::/10 past fe80, IPv4 multicast (224/4), reserved ranges, broadcast, and the RFC 5737 doc prefixes. Rewrote on Node's built-in net.BlockList with 19 regression tests. (4) Card-vault sealed blobs are now shape-validated (truncated rows no longer throw an opaque TypeError), and per-field decrypt errors are labelled so ops can pinpoint which order and which column is corrupt. (5) Policy engine fails closed on NaN/negative amounts and corrupt numeric policy columns — previously both silently disabled rules. (6) `/vcc-callback` rate limiter was a single global bucket; bucket by IP so attackers can't starve legitimate callbacks. (7) `/auth/me` no longer shares a rate-limit budget with `/auth/login`, so dashboard browsing from NAT'd networks stops hitting 429s. (8) SDK sweep: CLI amount bounds match backend ($0.01 / $10,000), `--asset auto` added to `purchase` + MCP, config writes are now atomic with re-tightened perms, `waitForCard` no longer doubles its timeout on SSE fallback, onboard refuses to silently overwrite existing credentials. (9) Enhanced /status endpoint returns live 24h delivery + watcher freshness, and a real /status page + status.cards402.com subdomain route. Backend suite went from ~200 tests to 336; new regression guards shipped alongside every fix.",
+  },
+  {
+    date: '2026-04-14',
     version: 'sdk@0.4.7',
     title: 'SDK 0.4.7 — self-updating CLI warning + @latest everywhere in the docs',
     tags: ['feature', 'fix'],
