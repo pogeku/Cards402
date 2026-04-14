@@ -288,6 +288,44 @@ pre {
   color: #000;
 }
 
+/* ── Focus styles ──────────────────────────────────────────────────── */
+
+/* Only apply the accent ring to keyboard focus — mouse clicks keep the
+   quiet default so we don't flash a green ring on every button press.
+   The 2px offset lifts it above the element's own border so rounded
+   pills and cards still look clean. */
+:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Skip-to-main-content link. Rendered by MarketingChrome as the first
+   child of <body>; remains visually hidden until it receives keyboard
+   focus, at which point it pops into the top-left with a mint pill
+   so screen-reader users and keyboard-only users can bypass the nav. */
+.skip-link {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 100;
+  transform: translateY(-120%);
+  background: var(--fg);
+  color: var(--bg);
+  padding: 0.65rem 1.1rem;
+  border-radius: 0 0 8px 0;
+  font-family: var(--font-body);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: transform 0.25s var(--ease-out);
+}
+.skip-link:focus {
+  transform: translateY(0);
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+
 /* ── Animations ────────────────────────────────────────────────────── */
 
 @keyframes fadeInUp {

@@ -22,6 +22,9 @@ export function MarketingChrome({ children }: { children: ReactNode }) {
 
   return (
     <>
+      <a href="#main" className="skip-link">
+        Skip to main content
+      </a>
       <div className="grain" aria-hidden />
       <nav
         style={{
@@ -69,7 +72,9 @@ export function MarketingChrome({ children }: { children: ReactNode }) {
         </div>
       </nav>
 
-      <main style={{ flex: 1, position: 'relative', zIndex: 2 }}>{children}</main>
+      <main id="main" style={{ flex: 1, position: 'relative', zIndex: 2 }}>
+        {children}
+      </main>
 
       <footer
         style={{
