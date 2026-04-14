@@ -137,7 +137,13 @@ const orderPollLimiter = rateLimit({
 // ── Policy preview (exported for use in app.js) ─────────────────────────────
 
 function policyCheck(apiKeyId, amount) {
-  const result = checkPolicy(apiKeyId, String(amount));
+  // Preview mode: do NOT persist the decision to policy_decisions. The
+  // preview endpoint (GET /v1/policy/check) is read-only from the user's
+  // perspective and is rate-limited at 600/min — without this flag every
+  // preview call would bloat policy_decisions with fake "decision" rows
+  // that never corresponded to a real order and would also pollute the
+  // post-incident forensic trail. See checkPolicy's persist option.
+  const result = checkPolicy(apiKeyId, String(amount), { persist: false });
   const key = /** @type {any} */ (db.prepare(`SELECT * FROM api_keys WHERE id = ?`).get(apiKeyId));
   let remaining_daily = null;
   if (key?.policy_daily_limit_usdc) {

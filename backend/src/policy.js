@@ -22,14 +22,29 @@ const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frid
 /**
  * Evaluate all policy rules for a proposed transaction.
  *
+ * The `persist` option controls whether the decision is logged to
+ * policy_decisions. Default is `true` — the real order-creation path
+ * relies on every decision being auditable. The preview endpoint
+ * (GET /v1/policy/check) passes `persist: false` so a compromised or
+ * buggy agent hitting the preview at the poll limit (600/min) can't
+ * bloat the policy_decisions table with fake decision rows and can't
+ * pollute post-incident forensic reconstruction with previews that
+ * were never real orders. Adversarial audit finding F1-policy.
+ *
  * @param {string} apiKeyId
  * @param {string} amountUsdc  decimal string, e.g. "250.00"
+ * @param {{ persist?: boolean }} [opts]
  * @returns {{ decision: 'approved'|'blocked'|'pending_approval', rule: string, reason: string }}
  */
-function checkPolicy(apiKeyId, amountUsdc) {
+function checkPolicy(apiKeyId, amountUsdc, opts = {}) {
+  const persist = opts.persist !== false;
+  const finalise = (decision, rule, reason) =>
+    persist
+      ? _decide(apiKeyId, null, amountUsdc, decision, rule, reason)
+      : { decision, rule, reason };
+
   const key = /** @type {any} */ (db.prepare(`SELECT * FROM api_keys WHERE id = ?`).get(apiKeyId));
-  if (!key)
-    return _decide(apiKeyId, null, amountUsdc, 'blocked', 'key_not_found', 'API key not found');
+  if (!key) return finalise('blocked', 'key_not_found', 'API key not found');
 
   // Defensive input validation. orders.js already rejects invalid amounts
   // before calling this, but checkPolicy is also exported for direct use
@@ -39,10 +54,7 @@ function checkPolicy(apiKeyId, amountUsdc) {
   // Fail-closed here so checkPolicy's contract doesn't depend on its callers.
   const amount = parseFloat(amountUsdc);
   if (!Number.isFinite(amount) || amount <= 0) {
-    return _decide(
-      apiKeyId,
-      null,
-      amountUsdc,
+    return finalise(
       'blocked',
       'invalid_amount',
       `Amount must be a positive finite number (got: ${amountUsdc}).`,
@@ -51,14 +63,7 @@ function checkPolicy(apiKeyId, amountUsdc) {
 
   // ── 1. Suspension (immediate hard block) ────────────────────────────────────
   if (key.suspended) {
-    return _decide(
-      apiKeyId,
-      null,
-      amountUsdc,
-      'blocked',
-      'suspended',
-      'This agent is suspended by the account owner.',
-    );
+    return finalise('blocked', 'suspended', 'This agent is suspended by the account owner.');
   }
 
   // ── 2. Single-transaction hard cap ──────────────────────────────────────────
@@ -72,20 +77,14 @@ function checkPolicy(apiKeyId, amountUsdc) {
         field: 'policy_single_tx_limit_usdc',
         stored: String(key.policy_single_tx_limit_usdc),
       });
-      return _decide(
-        apiKeyId,
-        null,
-        amountUsdc,
+      return finalise(
         'blocked',
         'policy_corrupt_single_tx',
         'Account policy (per-transaction limit) is misconfigured — contact support.',
       );
     }
     if (amount > cap) {
-      return _decide(
-        apiKeyId,
-        null,
-        amountUsdc,
+      return finalise(
         'blocked',
         'single_tx_hard_cap',
         `Transaction $${amount.toFixed(2)} exceeds the per-transaction hard cap of $${cap.toFixed(2)}.`,
@@ -122,10 +121,7 @@ function checkPolicy(apiKeyId, amountUsdc) {
           : nowMins >= startMins || nowMins < endMins;
       if (!inWindow) {
         const nowStr = `${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')} UTC`;
-        return _decide(
-          apiKeyId,
-          null,
-          amountUsdc,
+        return finalise(
           'blocked',
           'after_hours',
           `Transactions are only allowed ${start}–${end} UTC. Current time: ${nowStr}.`,
@@ -137,10 +133,7 @@ function checkPolicy(apiKeyId, amountUsdc) {
         field: 'policy_allowed_hours',
         error: err.message,
       });
-      return _decide(
-        apiKeyId,
-        null,
-        amountUsdc,
+      return finalise(
         'blocked',
         'policy_corrupt_hours',
         'Account policy (allowed hours) is misconfigured — contact support.',
@@ -155,10 +148,7 @@ function checkPolicy(apiKeyId, amountUsdc) {
       if (!Array.isArray(allowed)) throw new Error('not an array');
       const today = new Date().getUTCDay();
       if (!allowed.includes(today)) {
-        return _decide(
-          apiKeyId,
-          null,
-          amountUsdc,
+        return finalise(
           'blocked',
           'blocked_day',
           `Transactions are not allowed on ${DAY_NAMES[today]}.`,
@@ -170,10 +160,7 @@ function checkPolicy(apiKeyId, amountUsdc) {
         field: 'policy_allowed_days',
         error: err.message,
       });
-      return _decide(
-        apiKeyId,
-        null,
-        amountUsdc,
+      return finalise(
         'blocked',
         'policy_corrupt_days',
         'Account policy (allowed days) is misconfigured — contact support.',
@@ -190,10 +177,7 @@ function checkPolicy(apiKeyId, amountUsdc) {
         field: 'policy_daily_limit_usdc',
         stored: String(key.policy_daily_limit_usdc),
       });
-      return _decide(
-        apiKeyId,
-        null,
-        amountUsdc,
+      return finalise(
         'blocked',
         'policy_corrupt_daily',
         'Account policy (daily limit) is misconfigured — contact support.',
@@ -218,10 +202,7 @@ function checkPolicy(apiKeyId, amountUsdc) {
     );
     const spentToday = parseFloat(row.total);
     if (spentToday + amount > dailyLimit) {
-      return _decide(
-        apiKeyId,
-        null,
-        amountUsdc,
+      return finalise(
         'blocked',
         'daily_limit_exceeded',
         `Daily limit of $${dailyLimit.toFixed(2)} would be exceeded. ` +
@@ -242,10 +223,7 @@ function checkPolicy(apiKeyId, amountUsdc) {
         field: 'policy_require_approval_above_usdc',
         stored: String(key.policy_require_approval_above_usdc),
       });
-      return _decide(
-        apiKeyId,
-        null,
-        amountUsdc,
+      return finalise(
         'blocked',
         'policy_corrupt_approval',
         'Account policy (approval threshold) is misconfigured — contact support.',
@@ -264,14 +242,7 @@ function checkPolicy(apiKeyId, amountUsdc) {
   }
 
   // ── 7. All checks passed ─────────────────────────────────────────────────────
-  return _decide(
-    apiKeyId,
-    null,
-    amountUsdc,
-    'approved',
-    'all_checks_passed',
-    'Transaction approved by policy.',
-  );
+  return finalise('approved', 'all_checks_passed', 'Transaction approved by policy.');
 }
 
 /**
