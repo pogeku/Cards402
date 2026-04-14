@@ -59,9 +59,9 @@ const FEE_ROWS = [
 
 const LIMITS = [
   { label: 'Minimum order', value: '$1.00' },
+  { label: 'Maximum per order', value: '$1,000' },
+  { label: 'Max single transaction', value: '$5,000' },
   { label: 'Maximum card balance', value: '$10,000' },
-  { label: 'Max transaction', value: '$5,000' },
-  { label: 'Max per day', value: '$5,000' },
 ];
 
 const FAQ = [

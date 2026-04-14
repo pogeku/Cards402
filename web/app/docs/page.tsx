@@ -230,7 +230,14 @@ const errors = [
   {
     code: 'invalid_amount',
     status: 400,
-    meaning: 'amount_usdc is missing or not a positive number.',
+    meaning:
+      'amount_usdc is missing, not a positive decimal string, or exceeds the per-order cap of $1,000.00.',
+  },
+  {
+    code: 'invalid_webhook_url',
+    status: 400,
+    meaning:
+      'webhook_url failed SSRF validation (non-HTTPS, loopback, private IP, etc.). Use a public HTTPS endpoint.',
   },
   {
     code: 'spend_limit_exceeded',
@@ -241,6 +248,18 @@ const errors = [
     code: 'order_not_found',
     status: 404,
     meaning: 'Order does not exist or belongs to another key.',
+  },
+  {
+    code: 'idempotency_conflict',
+    status: 409,
+    meaning:
+      'Idempotency-Key was reused with a different request body. Mint a new key or resend the original body.',
+  },
+  {
+    code: 'rate_limit_exceeded',
+    status: 429,
+    meaning:
+      'Too many orders (60/hour) or too many polls (600/minute). Back off and retry; the window is rolling.',
   },
   {
     code: 'xlm_price_unavailable',
@@ -481,7 +500,9 @@ export default function DocsPage() {
                   <td style={{ color: 'var(--fg-muted)' }}>string</td>
                   <td style={{ color: 'var(--fg-muted)' }}>Yes</td>
                   <td style={{ color: 'var(--fg-muted)' }}>
-                    Card value in USD, as a decimal string (e.g. <Code>&quot;25.00&quot;</Code>).
+                    Card value in USD, as a positive decimal string (e.g.{' '}
+                    <Code>&quot;25.00&quot;</Code>). Maximum <Code>&quot;1000.00&quot;</Code> per
+                    order.
                   </td>
                 </tr>
                 <tr>
