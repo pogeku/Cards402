@@ -264,7 +264,14 @@ router.post('/', orderCreateLimiter, async (req, res) => {
       api_key_id: req.apiKey.id,
       order_id: id,
       amount_usdc: String(amount),
-      agent_note: req.body.note || null,
+      // Accept only string notes and cap to 1 KB. Without this cap a caller
+      // could POST a multi-MB note and balloon every dashboard read of the
+      // approval_requests table; without the typeof guard an array would
+      // coerce to a comma-joined string that slips past length checks.
+      agent_note:
+        typeof req.body.note === 'string' && req.body.note.length > 0
+          ? req.body.note.slice(0, 1000)
+          : null,
       expires_at: expiresAt,
     });
 

@@ -25,6 +25,22 @@ const router = Router();
 
 router.use(requireAuth, requireDashboard);
 
+// Short-string sanitiser for user-supplied note/label fields. Three jobs:
+//   1. Reject anything that isn't a string — an array or object would
+//      otherwise coerce to "a,b" or "[object Object]" on stringify and
+//      slip past downstream length checks.
+//   2. Cap length so a caller can't POST a multi-MB note and balloon
+//      every subsequent SELECT of the table.
+//   3. Collapse empty strings to null so `""` can't silently overwrite
+//      a previously-set value.
+// Returns null if the input is unusable — callers pass this straight
+// through to DB parameters expecting a nullable TEXT column.
+function shortString(value, max) {
+  if (typeof value !== 'string') return null;
+  if (value.length === 0) return null;
+  return value.slice(0, max);
+}
+
 // ── Live SSE feed ─────────────────────────────────────────────────────────────
 
 // GET /dashboard/stream — Server-Sent Events feed of state changes
@@ -314,7 +330,11 @@ router.get('/api-keys', (req, res) => {
 
 // POST /dashboard/api-keys — create a new agent API key
 router.post('/api-keys', requirePermission('agent:create'), async (req, res) => {
-  const { label, spend_limit_usdc, default_webhook_url, wallet_public_key } = req.body;
+  const { spend_limit_usdc, default_webhook_url, wallet_public_key } = req.body;
+  // Labels are cosmetic — 100 chars is more than enough for any real
+  // agent name, and the cap stops a caller from stuffing the column
+  // with a multi-MB blob that then rides along in every dashboard read.
+  const label = shortString(req.body.label, 100);
   const validationErr = validateApiKeyFields(
     /** @type {any} */ ({ spend_limit_usdc, default_webhook_url, wallet_public_key }),
   );
@@ -417,7 +437,6 @@ router.patch('/api-keys/:id', requirePermission('agent:update'), async (req, res
     enabled,
     spend_limit_usdc,
     default_webhook_url,
-    label,
     wallet_public_key,
     policy_daily_limit_usdc,
     policy_single_tx_limit_usdc,
@@ -425,6 +444,10 @@ router.patch('/api-keys/:id', requirePermission('agent:update'), async (req, res
     policy_allowed_hours,
     policy_allowed_days,
   } = req.body;
+  // Only sanitise label if the caller actually sent it — `undefined`
+  // means "don't touch this field" and must pass through unchanged so
+  // the later `if (label !== undefined)` guard still fires.
+  const label = req.body.label === undefined ? undefined : shortString(req.body.label, 100);
 
   const validationErr = validateApiKeyFields({
     spend_limit_usdc,
@@ -638,9 +661,10 @@ router.post(
     };
 
     const now = new Date().toISOString();
+    const decisionNote = shortString(req.body.note, 1000);
     db.prepare(
       `UPDATE approval_requests SET status = 'approved', decided_at = ?, decided_by = ?, decision_note = ? WHERE id = ?`,
-    ).run(now, req.user.email, req.body.note || null, req.params.id);
+    ).run(now, req.user.email, decisionNote, req.params.id);
     db.prepare(
       `
     UPDATE orders
@@ -656,7 +680,7 @@ router.post(
       approval.amount_usdc,
       'approved',
       'owner_approved',
-      req.body.note || 'Approved by dashboard owner',
+      decisionNote || 'Approved by dashboard owner',
     );
 
     const order = db.prepare(`SELECT * FROM orders WHERE id = ?`).get(approval.order_id);
@@ -682,7 +706,7 @@ router.post(
       details: {
         order_id: approval.order_id,
         amount_usdc: approval.amount_usdc,
-        note: req.body.note || null,
+        note: decisionNote,
       },
     });
     res.json({ ok: true });
@@ -705,7 +729,7 @@ router.post('/approval-requests/:id/reject', requirePermission('approval:decide'
     return res.status(409).json({ error: 'already_decided', current_status: approval.status });
 
   const now = new Date().toISOString();
-  const note = req.body.note || 'Rejected';
+  const note = shortString(req.body.note, 1000) || 'Rejected';
   db.prepare(
     `UPDATE approval_requests SET status = 'rejected', decided_at = ?, decided_by = ?, decision_note = ? WHERE id = ?`,
   ).run(now, req.user.email, note, req.params.id);

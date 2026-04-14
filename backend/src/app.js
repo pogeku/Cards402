@@ -465,8 +465,17 @@ app.post('/v1/agent/status', agentStatusLimiter, (req, res) => {
     params.wallet_public_key = wallet_public_key || null;
   }
   if (detail !== undefined) {
+    // Reject non-string detail — without the typeof guard an object
+    // coerces to "[object Object]" via String(), which passes the length
+    // check but stores a nonsense row in agent_state_detail.
+    if (detail !== null && typeof detail !== 'string') {
+      return res.status(400).json({
+        error: 'invalid_detail',
+        message: 'detail must be a string or null',
+      });
+    }
     fields.push('agent_state_detail = @detail');
-    params.detail = detail ? String(detail).slice(0, 500) : null;
+    params.detail = detail ? detail.slice(0, 500) : null;
   }
   if (fields.length === 0) {
     return res.status(400).json({
