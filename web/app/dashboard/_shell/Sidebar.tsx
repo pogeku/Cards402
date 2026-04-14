@@ -188,6 +188,21 @@ const SECTIONS: Section[] = [
         ),
       },
       {
+        href: '/dashboard/platform/approvals',
+        label: 'Approvals',
+        icon: <Icon d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />,
+      },
+      {
+        href: '/dashboard/platform/unmatched',
+        label: 'Unmatched',
+        icon: <Icon d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6M8 9l4 4 4-4" />,
+      },
+      {
+        href: '/dashboard/platform/audit',
+        label: 'Audit',
+        icon: <Icon d="M9 12l2 2 4-4M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9 9 4.03 9 9z" />,
+      },
+      {
         href: '/dashboard/platform/health',
         label: 'Health',
         icon: <Icon d="M22 12h-4l-3 9L9 3l-3 9H2" />,
