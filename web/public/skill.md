@@ -125,15 +125,11 @@ Cards402 is designed to run without a human, but you should escalate if:
 Cards402 does not store API keys in plaintext — they're hashed with a random
 salt before they touch the database. The backend cannot recover a key; only
 you hold the usable bearer token. Treat it like a wallet private key.
-Similarly, the Stellar wallet you bind during onboarding lives in the OS
-keyring on the machine running the SDK. Cards402 never sees or touches the
-secret.
+Similarly, the Stellar wallet you bind during onboarding lives in an
+encrypted OWS vault on the machine running the SDK. Cards402 never sees or
+touches the secret.
 
-If you ever need to revoke your access, run:
-
-```bash
-npx cards402 revoke
-```
-
-This invalidates the key at the backend in one round trip. After revocation
-you would need a fresh claim code from the operator to come back online.
+If you ever need to revoke your access, open
+<https://cards402.com/dashboard>, go to the Keys tab, and click **Revoke**
+next to the key. The backend invalidates it immediately. Once revoked you
+would need a fresh claim code from the operator to come back online.

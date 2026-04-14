@@ -276,7 +276,7 @@ For Claude Desktop, Cursor, or any MCP host:
   "mcpServers": {
     "cards402": {
       "command": "npx",
-      "args": ["cards402-mcp"],
+      "args": ["cards402"],
       "env": {
         "CARDS402_API_KEY": "cards402_...",
         "OWS_WALLET_NAME": "my-agent",
@@ -287,5 +287,9 @@ For Claude Desktop, Cursor, or any MCP host:
   }
 }
 ```
+
+The `cards402` bin defaults to the `mcp` subcommand when no other
+subcommand is passed, so `npx cards402` with no args boots the MCP
+server. `npx cards402 mcp` is equivalent and more explicit.
 
 Tools available: `purchase_vcc`, `setup_wallet`, `check_order`, `check_budget`.
