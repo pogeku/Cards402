@@ -26,12 +26,37 @@ for a usable API key, run:
 npx cards402 onboard --claim c402_<code>
 ```
 
-This stores a long-lived API key in your environment, binds a Stellar wallet
-to your account, and sets up a USDC trustline if needed. Run it **once**.
-Do not save the claim code in conversation history — once exchanged, it's
-invalid and your key is what matters.
+This does four things in one call:
 
-After onboarding, any Cards402 command you run will use the cached key
+1. Exchanges the claim code for a long-lived API key via the backend.
+2. Writes the key to `~/.cards402/config.json` (chmod 0600) so the SDK can
+   load it automatically on subsequent runs. You don't need to paste the key
+   into any env var yourself.
+3. Creates an encrypted OWS Stellar wallet in the default vault at
+   `~/.ows/wallets` and prints its public key.
+4. Reports the wallet address to the cards402 backend so your operator sees
+   "Awaiting deposit" in their dashboard immediately.
+
+Run it **once**. Do not save the claim code in conversation history — once
+exchanged, it's invalid and your API key is what matters.
+
+Your agent still needs to fund the wallet. Send **at least 2 XLM** to the
+public key the command printed — that covers the Stellar account reserve
+and lets the wallet pay fees. Check the balance any time with:
+
+```bash
+npx cards402 wallet balance
+```
+
+For USDC payments the wallet needs a USDC trustline. The easiest way to
+add one is to re-run the MCP `setup_wallet` tool after the XLM lands — it
+detects an activated wallet with no USDC balance and submits the trustline
+transaction automatically. If you're not using the MCP host, the SDK
+exports `addUsdcTrustlineOWS({ walletName })` which you can call from a
+TypeScript script. Without the trustline the wallet can still pay in XLM,
+so XLM-only agents can skip this step.
+
+After onboarding, any subsequent Cards402 command uses the cached key
 automatically. There is no need to pass credentials on subsequent calls.
 
 ## Purchasing a card
