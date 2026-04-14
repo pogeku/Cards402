@@ -666,7 +666,7 @@ event: phase
 data: {"order_id":"a3f7c2d1-...","status":"delivered","phase":"ready","amount_usdc":"25.00","card":{"number":"4111 2345 6789 0123","cvv":"847","expiry":"12/27","brand":"Visa"},"updated_at":"2026-04-08T12:00:45Z"}`}
           </CodeBlock>
 
-          <CodeBlock label="Minimal client (Node 18+ / browser)">
+          <CodeBlock label="Minimal client — TypeScript / Node 18+ / browser">
             {`const res = await fetch(\`\${apiUrl}/orders/\${orderId}/stream\`, {
   headers: { 'X-Api-Key': key, Accept: 'text/event-stream' },
 });
@@ -689,6 +689,43 @@ while (true) {
     }
   }
 }`}
+          </CodeBlock>
+
+          <CodeBlock label="Minimal client — Python 3.10+ / httpx">
+            {`import json
+import httpx
+
+TERMINAL = {"failed", "refunded", "expired", "rejected"}
+
+def wait_for_card(api_url: str, order_id: str, key: str):
+    headers = {"X-Api-Key": key, "Accept": "text/event-stream"}
+    url = f"{api_url}/orders/{order_id}/stream"
+    with httpx.stream("GET", url, headers=headers, timeout=None) as res:
+        buf = ""
+        for chunk in res.iter_text():
+            buf += chunk
+            while "\\n\\n" in buf:
+                event, buf = buf.split("\\n\\n", 1)
+                data_line = next(
+                    (l for l in event.split("\\n") if l.startswith("data: ")),
+                    None,
+                )
+                if not data_line:
+                    continue
+                state = json.loads(data_line[6:])
+                if state["phase"] == "ready":
+                    return state["card"]
+                if state["phase"] in TERMINAL:
+                    raise RuntimeError(state.get("error") or state["phase"])
+
+    raise RuntimeError("stream ended before terminal phase")`}
+          </CodeBlock>
+
+          <CodeBlock label="Minimal client — curl">
+            {`curl -N \\
+  -H "X-Api-Key: cards402_..." \\
+  -H "Accept: text/event-stream" \\
+  https://api.cards402.com/v1/orders/<order_id>/stream`}
           </CodeBlock>
 
           <Para>
@@ -867,8 +904,8 @@ while (true) {
 }`}
           </CodeBlock>
 
-          <SubTitle>Signature verification (Node.js)</SubTitle>
-          <CodeBlock>
+          <SubTitle>Signature verification</SubTitle>
+          <CodeBlock label="Node.js">
             {`const { createHmac, timingSafeEqual } = require('crypto');
 
 function verifyWebhook(rawBody, signature, timestamp, secret) {
@@ -877,6 +914,19 @@ function verifyWebhook(rawBody, signature, timestamp, secret) {
     .update(timestamp + '.' + rawBody).digest('hex');
   return timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
 }`}
+          </CodeBlock>
+          <CodeBlock label="Python 3">
+            {`import hmac, hashlib, time
+
+def verify_webhook(raw_body: bytes, signature: str, timestamp: str, secret: str) -> bool:
+    # Reject anything older than 5 minutes to thwart replay attacks.
+    if abs(time.time() * 1000 - int(timestamp)) > 5 * 60 * 1000:
+        return False
+    message = f"{timestamp}.".encode() + raw_body
+    expected = "sha256=" + hmac.new(
+        secret.encode(), message, hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(signature, expected)`}
           </CodeBlock>
 
           <Para>
