@@ -115,6 +115,21 @@ export interface RetryOptions {
   maxDelayMs?: number;
 }
 
+// Shared order-ID shape validator. Keeps the client, the MCP tool,
+// and anything else that stamps an order id into a URL in lockstep.
+// The backend mints UUIDv4 but we allow any 1–64 char alphanumeric +
+// `_` + `-` string so hand-crafted test ids still work.
+const ORDER_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+function validateOrderId(orderId: string): void {
+  if (typeof orderId !== 'string' || !ORDER_ID_PATTERN.test(orderId)) {
+    throw new Cards402ErrorCtor(
+      `Invalid order id: ${String(orderId).slice(0, 32)}`,
+      'invalid_order_id',
+      400,
+    );
+  }
+}
+
 export class Cards402Client {
   private baseUrl: string;
   private apiKey: string;
@@ -224,7 +239,11 @@ export class Cards402Client {
   }
 
   async getOrder(orderId: string): Promise<OrderStatus> {
-    const res = await this.fetchWithRetry(`${this.baseUrl}/orders/${orderId}`, {
+    // Validate and encode — path param must be a UUID-shaped identifier.
+    // The server also validates, but failing here avoids a round-trip
+    // on typos and eliminates a path-traversal surface on misuse.
+    validateOrderId(orderId);
+    const res = await this.fetchWithRetry(`${this.baseUrl}/orders/${encodeURIComponent(orderId)}`, {
       headers: { 'X-Api-Key': this.apiKey },
     });
     if (!res.ok) return this.handleError(res);
@@ -239,6 +258,14 @@ export class Cards402Client {
     orderId: string,
     { timeoutMs = 300000, intervalMs = 3000 }: { timeoutMs?: number; intervalMs?: number } = {},
   ): Promise<CardDetails> {
+    validateOrderId(orderId);
+    // Shared deadline so an SSE attempt that eats most of the budget
+    // can't also grant polling its own full timeoutMs. Pre-fix, a
+    // stream that aborted at t=timeoutMs fell through to a polling
+    // loop that ran for another full timeoutMs — total wait 2×
+    // requested. Now the polling fallback inherits whatever time is
+    // left and the total stays within timeoutMs ± a few ms.
+    const deadlineMs = Date.now() + timeoutMs;
     try {
       return await this.waitForCardStream(orderId, timeoutMs);
     } catch (err) {
@@ -251,8 +278,15 @@ export class Cards402Client {
       ) {
         throw err;
       }
-      // Anything else (network, parse, 406, etc.) — fall back to polling.
-      return this.waitForCardPoll(orderId, timeoutMs, intervalMs);
+      // An AbortError from the timer firing means we hit the stream's
+      // own deadline — that's a WaitTimeoutError, not "fall back to
+      // polling". Only genuine transport failures fall through.
+      if (err instanceof Error && (err.name === 'AbortError' || err.message.includes('aborted'))) {
+        throw new WaitTimeoutError(orderId, timeoutMs);
+      }
+      const remainingMs = Math.max(0, deadlineMs - Date.now());
+      if (remainingMs === 0) throw new WaitTimeoutError(orderId, timeoutMs);
+      return this.waitForCardPoll(orderId, remainingMs, intervalMs);
     }
   }
 
