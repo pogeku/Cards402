@@ -379,7 +379,35 @@ async function retryWebhooks() {
   await Promise.allSettled(
     rows.map(async (row) => {
       try {
-        await fireWebhook(row.url, JSON.parse(row.payload), row.secret, null);
+        // The queued payload is stored card-redacted (fulfillment.js::
+        // enqueueWebhook). Before refiring, re-hydrate PAN / CVV / expiry
+        // by unsealing the canonical card data from the orders table.
+        // If the order is gone or the card columns are empty, ship the
+        // redacted payload as-is — the agent will at least know what
+        // happened even without the card fields.
+        const payload = JSON.parse(row.payload);
+        if (
+          payload &&
+          typeof payload === 'object' &&
+          payload.status === 'delivered' &&
+          payload.order_id &&
+          payload.card &&
+          payload.card.number === null
+        ) {
+          const orderRow = /** @type {any} */ (
+            db
+              .prepare(
+                `SELECT card_number, card_cvv, card_expiry, card_brand FROM orders WHERE id = ?`,
+              )
+              .get(payload.order_id)
+          );
+          if (orderRow && orderRow.card_number) {
+            const { openCard } = require('./lib/card-vault');
+            const card = openCard(orderRow);
+            payload.card = card;
+          }
+        }
+        await fireWebhook(row.url, payload, row.secret, null);
         db.prepare(`UPDATE webhook_queue SET delivered = 1 WHERE id = ?`).run(row.id);
         log(`  webhook ${row.id.slice(0, 8)} delivered`);
       } catch (err) {

@@ -16,6 +16,35 @@ function isFrozen() {
   );
 }
 
+// Redact PAN / CVV / expiry from a webhook payload before it's persisted
+// to either webhook_deliveries.request_body (delivery log, readable via
+// /dashboard/webhook-deliveries by any dashboard user with webhook:read)
+// or webhook_queue.payload (retry queue, readable by anyone with backend
+// DB access). The live outbound fetch still gets the unredacted payload;
+// only the at-rest copies are stripped.
+//
+// card.brand is NOT sensitive (it's just "USD Visa Card" after
+// normalizeCardBrand) and is preserved so the delivery log still shows
+// useful context.
+//
+// On retry, jobs.js::retryWebhooks detects a redacted-but-delivered
+// payload and re-hydrates card fields from the sealed card vault before
+// firing, so the queue path still works end-to-end without persisting
+// card data at rest.
+function redactCardFields(payload) {
+  if (!payload || typeof payload !== 'object' || !payload.card) return payload;
+  return {
+    ...payload,
+    card: {
+      ...payload.card,
+      number: null,
+      cvv: null,
+      expiry: null,
+      // brand kept as-is — the normalizeCardBrand() output is not PII
+    },
+  };
+}
+
 // Retry delays: attempt 1 → 30s, attempt 2 → 5m, attempt 3 → 30m
 const WEBHOOK_RETRY_DELAYS_MS = [30_000, 5 * 60_000, 30 * 60_000];
 const MAX_WEBHOOK_ATTEMPTS = 3;
@@ -152,10 +181,14 @@ async function fireWebhook(url, payload, webhookSecret, _log) {
     deliveryError = deliveryError || err.message;
     throw err;
   } finally {
+    // Persist a card-redacted copy of the payload to the delivery log.
+    // The live fetch above sent the real payload to the agent's URL —
+    // this log is just for dashboard debugging and must not carry PAN
+    // at rest.
     recordWebhookDelivery({
       url,
       method: 'POST',
-      requestBody: payload,
+      requestBody: redactCardFields(payload),
       responseStatus: responseStatus ?? undefined,
       responseBody: responseBodyText ?? undefined,
       latencyMs: Date.now() - startedAt,
@@ -165,7 +198,10 @@ async function fireWebhook(url, payload, webhookSecret, _log) {
   }
 }
 
-// Queue a webhook for delivery. On first failure, persists to webhook_queue for retry by jobs.js.
+// Queue a webhook for delivery. On first failure, persists a CARD-
+// REDACTED copy to webhook_queue for retry by jobs.js. The retry
+// handler rehydrates card fields from the sealed card vault before
+// firing, so the queue table never stores PAN/CVV/expiry at rest.
 async function enqueueWebhook(url, payload, webhookSecret) {
   try {
     await fireWebhook(url, payload, webhookSecret, null);
@@ -176,7 +212,14 @@ async function enqueueWebhook(url, payload, webhookSecret) {
       INSERT INTO webhook_queue (id, url, payload, secret, attempts, next_attempt, last_error)
       VALUES (?, ?, ?, ?, 1, ?, ?)
     `,
-    ).run(uuidv4(), url, JSON.stringify(payload), webhookSecret || null, nextAttempt, err.message);
+    ).run(
+      uuidv4(),
+      url,
+      JSON.stringify(redactCardFields(payload)),
+      webhookSecret || null,
+      nextAttempt,
+      err.message,
+    );
   }
 }
 
@@ -262,6 +305,7 @@ module.exports = {
   scheduleRefund,
   enqueueWebhook,
   fireWebhook,
+  redactCardFields,
   WEBHOOK_RETRY_DELAYS_MS,
   MAX_WEBHOOK_ATTEMPTS,
 };
