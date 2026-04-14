@@ -20,19 +20,39 @@ async function createTestKey({
   label = 'test-agent',
   spendLimit = null,
   defaultWebhookUrl = null,
+  suspended = 0,
+  expiresAt = null,
+  enabled = 1,
 } = {}) {
   const rawKey = `cards402_${crypto.randomBytes(24).toString('hex')}`;
   // Low bcrypt cost (4) for fast tests
   const keyHash = await bcrypt.hash(rawKey, 4);
   const id = uuidv4();
   const webhookSecret = `whsec_${crypto.randomBytes(32).toString('hex')}`;
+  // Match production: src/api/dashboard.js:332 stores chars 9-21 as the
+  // prefix index so the auth middleware's O(1) lookup path fires in tests
+  // instead of falling back to the legacy NULL-prefix scan.
+  const keyPrefix = rawKey.slice(9, 21);
 
   db.prepare(
     `
-    INSERT INTO api_keys (id, key_hash, label, spend_limit_usdc, webhook_secret, default_webhook_url)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO api_keys
+      (id, key_hash, key_prefix, label, spend_limit_usdc, webhook_secret,
+       default_webhook_url, enabled, suspended, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
-  ).run(id, keyHash, label, spendLimit, webhookSecret, defaultWebhookUrl);
+  ).run(
+    id,
+    keyHash,
+    keyPrefix,
+    label,
+    spendLimit,
+    webhookSecret,
+    defaultWebhookUrl,
+    enabled,
+    suspended,
+    expiresAt,
+  );
 
   return { id, key: rawKey, webhookSecret };
 }
