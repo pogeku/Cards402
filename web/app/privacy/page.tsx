@@ -156,8 +156,7 @@ export default function PrivacyPage() {
                     also permanently visible on the Stellar public ledger.
                   </li>
                   <li>
-                    <strong>Login codes:</strong> expire 15 minutes after being sent and are deleted
-                    at expiry.
+                    <strong>Login codes:</strong> expire 15 minutes after being sent.
                   </li>
                 </ul>
               </>

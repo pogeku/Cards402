@@ -57,9 +57,9 @@ export default function TermsPage() {
             body: (
               <>
                 <p>
-                  You must be 18 or older. You must not be located in a country subject to OFAC, UK,
-                  or EU comprehensive sanctions. You must not use Cards402 to issue cards to any
-                  sanctioned person or entity.
+                  You must not be located in a country subject to OFAC, UK, or EU comprehensive
+                  sanctions. You must not use Cards402 to issue cards to any sanctioned person or
+                  entity.
                 </p>
                 <p>
                   If you&apos;re using Cards402 on behalf of a company, you warrant that you have
@@ -186,10 +186,8 @@ export default function TermsPage() {
               <>
                 <p>
                   To the maximum extent permitted by law, Cards402&apos;s total liability for any
-                  claim arising out of or relating to the service is limited to the greater of{' '}
-                  <strong>one hundred US dollars ($100)</strong> or the fees paid by you to Cards402
-                  in the twelve months preceding the claim (which, given our pricing, is almost
-                  always $0).
+                  claim arising out of or relating to the service is limited to the fees paid by you
+                  to Cards402 in the twelve months preceding the claim.
                 </p>
                 <p>
                   We are not liable for indirect, incidental, consequential, special, or punitive
