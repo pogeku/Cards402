@@ -17,6 +17,44 @@ const { event: bizEvent } = require('../lib/logger');
 
 const router = Router();
 
+// Canonical JSON — stable serialisation of an arbitrary JSON-able value
+// so that two semantically-identical inputs always produce the same
+// string. Object keys are recursively sorted (lexicographic); arrays
+// preserve order (arrays are ordered by definition); primitives are
+// passed through to JSON.stringify. Used by the idempotency fingerprint
+// so that a retry with a differently-iterated nested metadata object
+// still hashes identically. Bounded recursion depth prevents a hostile
+// body with a 10k-deep nested object from blowing the stack.
+function canonicalJson(value, depth = 0) {
+  if (depth > 32) {
+    throw new Error('canonicalJson: nesting depth exceeds 32');
+  }
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((v) => canonicalJson(v, depth + 1)).join(',')}]`;
+  }
+  const keys = Object.keys(value).sort();
+  const parts = [];
+  for (const k of keys) {
+    const v = value[k];
+    if (v === undefined) continue; // match JSON.stringify's own undefined-skip semantics
+    parts.push(`${JSON.stringify(k)}:${canonicalJson(v, depth + 1)}`);
+  }
+  return `{${parts.join(',')}}`;
+}
+
+// Size caps on caller-supplied fields that end up persisted in the
+// orders row. Without these, a hostile caller can bloat the DB by
+// sending ~100KB metadata / webhook_url on every order request. Picks
+// are generous enough for real clients: 8KB of serialised metadata is
+// ~250 fields at 32-char values, and 2048 chars is the industry URL
+// length ceiling (IE historical limit; modern servers accept more but
+// nothing reasonable needs it).
+const MAX_METADATA_JSON_BYTES = 8 * 1024;
+const MAX_WEBHOOK_URL_CHARS = 2048;
+
 // Rate limit order creation per API key — default 60/hour, overridable per key via rate_limit_rpm.
 // req.apiKey is set by the auth middleware before this runs.
 const orderCreateLimiter = rateLimit({
@@ -160,12 +198,40 @@ function buildBudget(apiKey) {
 // notifications (approval email / Discord ping / spend-alert email)
 // fire AFTER commit out-of-band.
 router.post('/', orderCreateLimiter, async (req, res) => {
-  const idempotencyKey = req.headers['idempotency-key'];
+  // Idempotency-Key handling — hardening from the adversarial audit:
+  //
+  // F2: express parses repeated headers into an array. The previous
+  // code used `req.headers['idempotency-key']` directly, which would
+  // stringify `['a','b']` into the DB on a duplicated header. Reject
+  // the duplicate with 400 so the caller can't accidentally persist
+  // junk keys. Also cap the key length at 255 chars — long keys bloat
+  // the idempotency_keys table indefinitely (every retry writes a new
+  // row) and no real client needs more than that.
+  const rawIdemHeader = req.headers['idempotency-key'];
+  if (Array.isArray(rawIdemHeader)) {
+    return res.status(400).json({
+      error: 'invalid_idempotency_key',
+      message: 'Idempotency-Key header may appear at most once.',
+    });
+  }
+  const idempotencyKey = typeof rawIdemHeader === 'string' ? rawIdemHeader : null;
+  if (idempotencyKey && idempotencyKey.length > 255) {
+    return res.status(400).json({
+      error: 'invalid_idempotency_key',
+      message: 'Idempotency-Key must be at most 255 characters.',
+    });
+  }
+
+  // F1: canonical JSON stringify for the fingerprint. The previous
+  // implementation passed `Object.keys(body).sort()` as JSON.stringify's
+  // replacer, which only restricts top-level key order — nested objects
+  // still serialise in whatever iteration order their reference client
+  // happened to produce. Two semantically-identical retries from
+  // different clients would therefore produce different fingerprints
+  // and spuriously 409 on retry. Recursively sorting every object's
+  // keys before stringify is the deterministic fix.
   const requestFingerprint = idempotencyKey
-    ? crypto
-        .createHash('sha256')
-        .update(JSON.stringify(req.body, Object.keys(req.body || {}).sort()))
-        .digest('hex')
+    ? crypto.createHash('sha256').update(canonicalJson(req.body)).digest('hex')
     : null;
 
   if (isFrozen()) {
@@ -214,16 +280,36 @@ router.post('/', orderCreateLimiter, async (req, res) => {
       .json({ error: 'invalid_amount', message: 'amount_usdc cannot exceed $10000.00' });
   }
 
-  // Validate webhook_url upfront — fail fast rather than storing a bad URL
-  if (webhook_url) {
-    try {
-      await assertSafeUrl(webhook_url);
-    } catch (err) {
-      return res.status(400).json({ error: 'invalid_webhook_url', message: err.message });
+  // Validate webhook_url upfront — fail fast rather than storing a bad URL.
+  // F4: cap the URL length before SSRF validation so a 100KB url can't
+  // be used to bloat the orders.webhook_url column across many orders.
+  if (webhook_url !== undefined && webhook_url !== null) {
+    if (typeof webhook_url !== 'string') {
+      return res.status(400).json({
+        error: 'invalid_webhook_url',
+        message: 'webhook_url must be a string',
+      });
+    }
+    if (webhook_url.length > MAX_WEBHOOK_URL_CHARS) {
+      return res.status(400).json({
+        error: 'invalid_webhook_url',
+        message: `webhook_url must be at most ${MAX_WEBHOOK_URL_CHARS} characters`,
+      });
+    }
+    if (webhook_url) {
+      try {
+        await assertSafeUrl(webhook_url);
+      } catch (err) {
+        return res.status(400).json({ error: 'invalid_webhook_url', message: err.message });
+      }
     }
   }
 
-  // Validate metadata — must be a plain JSON object if provided
+  // Validate metadata — must be a plain JSON object if provided.
+  // F3: cap the serialised size to keep orders.metadata from being
+  // abused as a free-form blob column. 8KB is far beyond anything a
+  // real client needs (a few hundred key/value pairs) while still
+  // cheap to store and transit.
   let metadataStr = null;
   if (metadata !== undefined) {
     if (typeof metadata !== 'object' || metadata === null || Array.isArray(metadata)) {
@@ -237,6 +323,12 @@ router.post('/', orderCreateLimiter, async (req, res) => {
       return res
         .status(400)
         .json({ error: 'invalid_metadata', message: 'metadata could not be serialized' });
+    }
+    if (Buffer.byteLength(metadataStr, 'utf8') > MAX_METADATA_JSON_BYTES) {
+      return res.status(400).json({
+        error: 'invalid_metadata',
+        message: `metadata serialized size must be at most ${MAX_METADATA_JSON_BYTES} bytes`,
+      });
     }
   }
 
