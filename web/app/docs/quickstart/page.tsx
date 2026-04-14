@@ -68,7 +68,7 @@ const howToJsonLd = {
       '@type': 'HowToStep',
       position: 3,
       name: 'Fund a wallet',
-      text: 'Create a Stellar wallet via createWallet() and fund it with XLM plus an optional USDC trustline.',
+      text: 'Create a Stellar wallet via createOWSWallet() and fund it with at least 2 XLM. The SDK auto-adds a USDC trustline on first USDC purchase.',
       url: 'https://cards402.com/docs/quickstart#fund-a-wallet',
     },
     {
@@ -157,27 +157,24 @@ const STEPS = [
       <>
         <p>
           Your agent pays the receiver contract directly, so it needs a Stellar wallet with at least
-          2 XLM (for the native account reserve) plus a USDC trustline if you plan to settle in
-          USDC. The SDK creates and manages one for you, stored encrypted in an OWS vault:
+          2 XLM for the native account reserve (plus a second XLM of slack if you plan to settle in
+          USDC — the extra XLM covers the one-time USDC trustline entry). The SDK creates the wallet
+          for you, stored encrypted in an OWS vault:
         </p>
-        <CodeBlock label="TypeScript">{`import {
-  createOWSWallet,
-  addUsdcTrustlineOWS,
-  getOWSBalance,
-} from 'cards402';
+        <CodeBlock label="TypeScript">{`import { createOWSWallet, getOWSBalance } from 'cards402';
 
 // Creates or loads a vault entry for 'my-agent'. Idempotent.
 const { walletId, publicKey } = createOWSWallet('my-agent');
 console.log('Send at least 2 XLM to', publicKey);
 
-// Once the account is activated on-chain, add the USDC trustline.
-// Skip this if you only plan to pay in XLM.
-const txHash = await addUsdcTrustlineOWS({
-  walletName: 'my-agent',
-});
-
 // Check the balance whenever you need to.
 const { xlm, usdc } = await getOWSBalance('my-agent');`}</CodeBlock>
+        <p>
+          You don&apos;t need to set up a USDC trustline manually. If you call{' '}
+          <Code>purchaseCardOWS</Code> with <Code>paymentAsset: &apos;usdc&apos;</Code> and the
+          wallet doesn&apos;t have a trustline yet, the SDK adds it automatically as long as the
+          wallet has at least 2 XLM for fees + reserve. XLM-only agents can skip this entirely.
+        </p>
         <p>
           Cards402 never sees or touches the secret key — it lives in an encrypted OWS vault on the
           machine running the SDK, protected by an optional passphrase. The same vault is what the

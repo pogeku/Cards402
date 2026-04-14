@@ -48,13 +48,13 @@ and lets the wallet pay fees. Check the balance any time with:
 npx cards402 wallet balance
 ```
 
-For USDC payments the wallet needs a USDC trustline. The easiest way to
-add one is to re-run the MCP `setup_wallet` tool after the XLM lands — it
-detects an activated wallet with no USDC balance and submits the trustline
-transaction automatically. If you're not using the MCP host, the SDK
-exports `addUsdcTrustlineOWS({ walletName })` which you can call from a
-TypeScript script. Without the trustline the wallet can still pay in XLM,
-so XLM-only agents can skip this step.
+For USDC payments the wallet needs a USDC trustline. You don't have to do
+anything special for this: `purchaseCardOWS` detects a missing trustline
+on the first USDC purchase and adds it automatically (as long as the
+wallet has at least 2 XLM — 1 for the account reserve, 1 for the
+trustline entry). The MCP `setup_wallet` tool does the same thing if you
+want to pre-add the trustline before the first purchase. XLM-only agents
+can skip this entirely.
 
 After onboarding, any subsequent Cards402 command uses the cached key
 automatically. There is no need to pass credentials on subsequent calls.
