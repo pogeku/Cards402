@@ -48,7 +48,7 @@ const PILLARS = [
   {
     eyebrow: 'Infrastructure',
     title: 'One region. One operator. Read-only replicas.',
-    body: 'Cards402 runs on encrypted VPS instances in a single EU data centre (Vultr Frankfurt). SSH keys are hardware-backed. The database uses WAL replication to a read-only replica that feeds analytics and backup. Root access is audited.',
+    body: 'Cards402 runs on encrypted VPS instances in a single EU data centre (Vultr Frankfurt). SSH keys are hardware-backed. The database runs SQLite in WAL journal mode for crash-consistent durability, and snapshot backups are taken on a scheduled cadence. Root access is audited.',
   },
 ];
 
@@ -56,7 +56,7 @@ const POSTURE = [
   { label: 'TLS', value: 'TLS 1.3 minimum · HSTS preloaded' },
   { label: 'Transport', value: 'Strict same-site cookies · CSRF on every mutation' },
   { label: 'Keys at rest', value: 'bcrypt · per-key salt · 12-char lookup index' },
-  { label: 'Database', value: 'SQLite · WAL replication · encrypted at rest' },
+  { label: 'Database', value: 'SQLite · WAL mode · scheduled snapshot backup' },
   { label: 'Secrets', value: 'Sealed in the OS keyring · never in env files' },
   { label: 'Stellar signer', value: 'Hardware wallet only for treasury ops' },
 ];
