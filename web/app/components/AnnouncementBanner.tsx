@@ -55,10 +55,14 @@ export function AnnouncementBanner({ id, href, tone = 'info', children }: Props)
   const storageKey = `cards402.announcement.dismissed.${id}`;
   const [dismissed, setDismissed] = useState<boolean | null>(null);
 
-  // Resolve the dismissed state after mount so SSR markup is stable.
-  // Returning null on the server side would mismatch React's
-  // hydration; we intentionally render the banner by default and
-  // hide it client-side if the storage says otherwise.
+  // Resolve the dismissed state after mount. We deliberately render
+  // nothing on the server (dismissed === null) and only show the
+  // banner once the effect below has read localStorage, otherwise
+  // SSR markup wouldn't match the first client paint and React 19
+  // would throw a hydration mismatch. The trade is a one-frame
+  // pop-in on the first visit — preferred over the alternative of
+  // the banner flashing visible and then disappearing for anyone
+  // who'd previously dismissed it.
   useEffect(() => {
     try {
       setDismissed(window.localStorage.getItem(storageKey) === '1');
@@ -67,8 +71,6 @@ export function AnnouncementBanner({ id, href, tone = 'info', children }: Props)
     }
   }, [storageKey]);
 
-  // Don't render until we've resolved dismissal, to avoid the
-  // flicker where the banner flashes visible then disappears.
   if (dismissed === null || dismissed === true) return null;
 
   const s = TONE_STYLES[tone];
