@@ -1021,11 +1021,19 @@ def wait_for_card(api_url: str, order_id: str, key: str):
             notification, not a delivery guarantee.
           </Para>
 
-          <SubTitle>Delivered payload</SubTitle>
+          <Para>
+            Five distinct webhook events are emitted depending on how the order resolves. Every
+            payload includes <Code>order_id</Code> and <Code>status</Code> — the rest is
+            event-specific.
+          </Para>
+
+          <SubTitle>delivered — card issued successfully</SubTitle>
           <CodeBlock>
             {`{
   "order_id": "a3f7c2d1-4e8b-4f0a-9c2d-1b3e5a7f9c0e",
   "status": "delivered",
+  "amount_usdc": "25.00",
+  "payment_asset": "usdc_soroban",
   "card": {
     "number": "4111 2345 6789 0123",
     "cvv": "847",
@@ -1035,12 +1043,49 @@ def wait_for_card(api_url: str, order_id: str, key: str):
 }`}
           </CodeBlock>
 
-          <SubTitle>Failed payload</SubTitle>
+          <SubTitle>failed — fulfilment error (refund queued)</SubTitle>
           <CodeBlock>
             {`{
   "order_id": "a3f7c2d1-4e8b-4f0a-9c2d-1b3e5a7f9c0e",
   "status": "failed",
+  "amount_usdc": "25.00",
+  "payment_asset": "usdc_soroban",
   "error": "Stage 1 scrape timed out after 3 retries."
+}`}
+          </CodeBlock>
+
+          <SubTitle>expired — no payment within 2 hours</SubTitle>
+          <CodeBlock>
+            {`{
+  "order_id": "a3f7c2d1-4e8b-4f0a-9c2d-1b3e5a7f9c0e",
+  "status": "expired",
+  "phase": "expired",
+  "note": "Payment window expired. No funds were taken."
+}`}
+          </CodeBlock>
+
+          <SubTitle>approved — approval request accepted (order unblocked)</SubTitle>
+          <CodeBlock>
+            {`{
+  "order_id": "a3f7c2d1-4e8b-4f0a-9c2d-1b3e5a7f9c0e",
+  "status": "pending_payment",
+  "phase": "awaiting_payment",
+  "note": "Approved."
+}`}
+          </CodeBlock>
+          <Para style={{ color: 'var(--fg-dim)', fontSize: '0.85rem' }}>
+            Fires only for keys with an approval-required spend policy. The order transitions from{' '}
+            <Code>awaiting_approval</Code> to <Code>awaiting_payment</Code> and is now paid for
+            normally.
+          </Para>
+
+          <SubTitle>rejected — approval request denied</SubTitle>
+          <CodeBlock>
+            {`{
+  "order_id": "a3f7c2d1-4e8b-4f0a-9c2d-1b3e5a7f9c0e",
+  "status": "rejected",
+  "phase": "rejected",
+  "error": "Outside approved merchant category."
 }`}
           </CodeBlock>
 
