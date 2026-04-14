@@ -82,9 +82,32 @@ async function fireWebhook(url, payload, webhookSecret, _log) {
     throw new Error(`webhook circuit open for ${origin}`);
   }
 
-  // B-6: resolve DNS and validate immediately before the fetch, then pin the
-  // resolved IP so DNS cannot be rebound between the check and the connection.
-  const resolved = await assertSafeUrl(url);
+  // SSRF guard: resolve DNS and validate against the private-IP blocklist
+  // immediately before the fetch. The resolved {address, family} is
+  // returned but intentionally unused — see the block below.
+  //
+  // Note on DNS rebinding (audit B-6 history). An earlier version of
+  // this function tried to "pin" the resolved IP by rewriting the URL
+  // hostname to the IP and setting a Host header, so an attacker
+  // couldn't flip DNS to a private range in the ~100ms between our
+  // validation and fetch. That rewrite broke TLS: Node/undici verifies
+  // the server certificate against the URL hostname, not the Host
+  // header, and most CA-issued certs don't include IP addresses in
+  // their SAN list — so every HTTPS webhook to a hostname URL would
+  // silently fail cert verification. Verified empirically 2026-04-14
+  // by hitting https://example.com/ with the URL rewritten to its
+  // resolved IP: `fetch failed` on cert mismatch.
+  //
+  // Properly closing the rebinding window requires pinning at the
+  // socket level (undici Agent.connect.lookup) while leaving the URL
+  // hostname intact for SNI + cert verification. Node's bundled
+  // undici is not exposed via require, so that requires adding the
+  // userspace undici package — doubling the undici copy in the tree.
+  // For now, accept the residual risk: validate-before-fetch is what
+  // ~everyone ships, and the narrow window requires a targeted
+  // attacker with live DNS control. Private-IP blocklist covers the
+  // much larger attack surface.
+  await assertSafeUrl(url);
   const body = JSON.stringify(payload);
   const headers = { 'Content-Type': 'application/json' };
 
@@ -97,18 +120,6 @@ async function fireWebhook(url, payload, webhookSecret, _log) {
     signatureHeader = headers['X-Cards402-Signature'];
   }
 
-  // Pin to the resolved IP to close the DNS rebinding window.
-  // Replace the hostname in the URL with the validated IP; keep the original
-  // hostname in the Host header so the server can route the request correctly.
-  let fetchUrl = url;
-  if (resolved) {
-    const parsed = new URL(url);
-    const pinnedHost = resolved.family === 6 ? `[${resolved.address}]` : resolved.address;
-    parsed.hostname = pinnedHost;
-    fetchUrl = parsed.toString();
-    headers['Host'] = new URL(url).host; // original hostname:port
-  }
-
   const startedAt = Date.now();
   const { recordWebhookDelivery } = require('./lib/webhook-log');
   let responseStatus = null;
@@ -116,7 +127,7 @@ async function fireWebhook(url, payload, webhookSecret, _log) {
   let deliveryError = null;
 
   try {
-    const res = await fetch(fetchUrl, {
+    const res = await fetch(url, {
       method: 'POST',
       headers,
       body,

@@ -232,6 +232,45 @@ describe('fireWebhook', () => {
     );
   });
 
+  // Regression guard for the 2026-04-14 audit.
+  //
+  // An earlier version of fireWebhook tried to "pin" the resolved IP
+  // by rewriting the URL hostname to the IP and setting a Host header.
+  // For HTTPS, this broke TLS cert verification: Node/undici validates
+  // the server cert against the URL hostname (now the IP), and most
+  // CA-issued certs don't include IP addresses in their SAN list, so
+  // every hostname-based HTTPS webhook silently failed cert
+  // verification and eventually gave up in the retry queue.
+  //
+  // The fix: drop the rewriting. The test ensures fetch is still
+  // called with the ORIGINAL URL even when assertSafeUrl returns a
+  // resolved address (the case that triggered the bug).
+  it('calls fetch with the original URL even when SSRF resolution returns an IP', async () => {
+    ssrfMock.assertSafeUrl = async () => ({ address: '93.184.216.34', family: 4 });
+    await fireWebhook('https://hooks.example.com/events', { order_id: 'pin-regression' }, null);
+    assert.equal(fetchCalls.length, 1);
+    assert.equal(
+      fetchCalls[0].url,
+      'https://hooks.example.com/events',
+      'URL must be the original hostname URL, not a pinned IP — rewriting the URL breaks TLS cert verification',
+    );
+    // No Host header override either — the older code set one as part
+    // of the rewrite. If that's back, the fix regressed.
+    assert.ok(
+      !fetchCalls[0].opts.headers.Host,
+      'no synthetic Host header should be set — fetch derives it from the URL',
+    );
+  });
+
+  it('calls fetch with the original URL when SSRF resolution returns an IPv6 address', async () => {
+    ssrfMock.assertSafeUrl = async () => ({
+      address: '2606:2800:220:1:248:1893:25c8:1946',
+      family: 6,
+    });
+    await fireWebhook('https://hooks.example.com/events', { order_id: 'pin-regression-v6' }, null);
+    assert.equal(fetchCalls[0].url, 'https://hooks.example.com/events');
+  });
+
   it('calls assertSafeUrl before fetching', async () => {
     let ssrfChecked = false;
     ssrfMock.assertSafeUrl = async (url) => {
