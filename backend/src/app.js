@@ -32,7 +32,22 @@ app.use((req, res, next) => {
 });
 
 /** @type {any} */ const helmetMiddleware = helmet;
-app.use(helmetMiddleware());
+// helmet defaults are fine for everything except the HSTS header — the
+// built-in default is max-age=15552000 (180 days) with no `preload`
+// directive, which is too short to qualify for the Chrome HSTS preload
+// list. Bump to two years + preload so api.cards402.com can be
+// submitted to hstspreload.org and every browser refuses plaintext
+// even on first visit. frameguard stays at SAMEORIGIN (API JSON
+// responses don't need to be embeddable anywhere).
+app.use(
+  helmetMiddleware({
+    hsts: {
+      maxAge: 63072000, // 2 years
+      includeSubDomains: true,
+      preload: true,
+    },
+  }),
+);
 app.set('trust proxy', 1);
 
 // Audit A-25: require HTTPS in non-development environments. A misconfigured
