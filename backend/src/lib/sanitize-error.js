@@ -6,6 +6,27 @@
 // the SSE stream and the failure webhook gets boiled down to one of a
 // small fixed set of public error codes + messages.
 //
+// When NOT to use this module:
+//
+//   - HTTP-layer errors (invalid_api_key, rate_limit_exceeded,
+//     invalid_amount, spend_limit_exceeded on order creation). Those
+//     have dedicated typed classes in sdk/src/errors.ts that the
+//     client already knows how to catch by instanceof; running them
+//     through sanitize() would collapse them into the GENERIC bucket
+//     and lose the structure the SDK depends on.
+//
+//   - Ops-internal state (webhook_queue.last_error, audit log bodies,
+//     bizEvent payloads). These never reach agents, so scrubbing
+//     them is unnecessary and loses debugging signal.
+//
+// The right rule: call sanitize() only when the result is about to be
+// written to `orders.error` or included in a delivery/failure webhook
+// payload — anywhere else, keep the raw error for ops visibility.
+//
+// Tests: backend/test/unit/sanitize-error.test.js locks the contract
+// (30 cases) so any change to RULES / GENERIC still guarantees no
+// internal vocabulary leaks into a public message.
+//
 // Why: the cards402 ↔ vcc ↔ CTX ↔ scraper pipeline has a lot of
 // internal moving parts (vcc, captcha solvers, playwright, stage1/stage2
 // scrapers, yourrewardcard, CTX merchant ids, etc.). Leaking those names
