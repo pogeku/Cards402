@@ -568,7 +568,16 @@ async function checkAgentFundingStatus() {
   const { emit: emitBusEvent } = require('./lib/event-bus');
   for (const row of awaiting) {
     try {
-      const res = await fetch(`https://horizon.stellar.org/accounts/${row.wallet_public_key}`);
+      // 5-second per-wallet timeout. Without this, a single slow /
+      // dead Horizon response blocks the entire awaiting_funding
+      // loop until Node's default socket-level timeout (which is
+      // effectively never). A 5s cap means a Horizon incident can
+      // only stretch one funding refresh tick by (num_awaiting × 5s)
+      // worst case, and the guarded wrapper above won't stack
+      // executions if the tick runs long.
+      const res = await fetch(`https://horizon.stellar.org/accounts/${row.wallet_public_key}`, {
+        signal: AbortSignal.timeout(5000),
+      });
       if (!res.ok) continue; // 404 = unactivated, try again next tick
       const data = /** @type {any} */ (await res.json());
       const balances = Array.isArray(data.balances) ? data.balances : [];
@@ -616,7 +625,21 @@ async function checkAgentFundingStatus() {
   }
 }
 
+// Mutex guard for runJobs. setInterval does NOT await async callbacks,
+// so if runJobs exceeds JOBS_INTERVAL_MS (e.g. because retryWebhooks is
+// waiting on a slow webhook target or reconcileOrderingFulfillment is
+// polling a degraded VCC) the next interval tick will fire a second
+// concurrent runJobs execution. That races every SELECT+UPDATE inside
+// the job and has doubled webhook notifications + doubled refunds in
+// manual testing. Simple in-memory boolean guard closes the window.
+let jobsRunning = false;
+
 async function runJobs() {
+  if (jobsRunning) {
+    log('previous tick still in flight — skipping');
+    return;
+  }
+  jobsRunning = true;
   try {
     await expireStaleOrders();
     expireApprovalRequests();
@@ -627,6 +650,27 @@ async function runJobs() {
     purgeOldCards();
   } catch (err) {
     console.error(`[jobs] unhandled error: ${err.message}`);
+  } finally {
+    jobsRunning = false;
+  }
+}
+
+// Same pattern for checkAgentFundingStatus. The per-wallet Horizon
+// fetch used to have no timeout (an invalid / dead / slow wallet would
+// pile up concurrent executions on the FUNDING_INTERVAL_MS tick). Now
+// the fetch has an AbortSignal timeout AND a mutex so a stuck one
+// doesn't stack.
+let fundingCheckRunning = false;
+
+async function checkAgentFundingStatusGuarded() {
+  if (fundingCheckRunning) return;
+  fundingCheckRunning = true;
+  try {
+    await checkAgentFundingStatus();
+  } catch (err) {
+    console.error(`[jobs] funding check error: ${err.message}`);
+  } finally {
+    fundingCheckRunning = false;
   }
 }
 
@@ -641,8 +685,8 @@ function startJobs() {
   // Horizon is cheap, the query is bounded (only awaiting_funding rows),
   // and the emitted SSE event pushes to any open dashboard immediately.
   const FUNDING_INTERVAL_MS = parseInt(process.env.FUNDING_CHECK_INTERVAL_MS || '15000', 10);
-  checkAgentFundingStatus();
-  setInterval(checkAgentFundingStatus, FUNDING_INTERVAL_MS);
+  checkAgentFundingStatusGuarded();
+  setInterval(checkAgentFundingStatusGuarded, FUNDING_INTERVAL_MS);
 
   // Alert evaluator — walks every enabled rule once a minute, fires
   // Discord on new firings, persists history. Cheap + bounded, runs in

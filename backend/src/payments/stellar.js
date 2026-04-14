@@ -31,7 +31,20 @@ function loadStartLedger() {
   const v = /** @type {any} */ (
     db.prepare(`SELECT value FROM system_state WHERE key = 'stellar_start_ledger'`).get()
   )?.value;
-  return v ? parseInt(v) : null;
+  if (!v) return null;
+  const parsed = parseInt(v, 10);
+  // Defence in depth against a corrupted system_state row. A NaN or
+  // negative cursor would either loop forever against the RPC or
+  // replay from ledger 0 — both are bad. Treat any non-positive-
+  // integer value as "no cursor" and let poll() re-anchor to the
+  // current latest ledger.
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.error(
+      `[stellar] stellar_start_ledger has invalid value ${JSON.stringify(v)} — ignoring`,
+    );
+    return null;
+  }
+  return parsed;
 }
 
 function saveStartLedger(ledger) {
@@ -109,6 +122,52 @@ async function poll(onPayment, log) {
     setTimeout(() => poll(onPayment, log), events.length === 200 ? 0 : POLL_MS);
   } catch (err) {
     const POLL_MS = parseInt(process.env.WATCHER_POLL_INTERVAL_MS || '1500', 10);
+
+    // Self-healing for cursor-out-of-range errors. Soroban public RPC
+    // only retains ~24 hours (~170k ledgers) of event history. If our
+    // cursor falls outside that window — which happens after a long
+    // outage, restart delay, or if the RPC history cutoff moves past
+    // us faster than we poll — every subsequent getEvents() call
+    // fails with "startLedger must be within the ledger range: X - Y".
+    // Without self-healing, the watcher gets stuck retrying the same
+    // out-of-range cursor forever and every on-chain payment during
+    // the stuck window is silently missed.
+    //
+    // Recovery: parse the upper bound from the error message and jump
+    // the cursor to that ledger minus a small margin. Events between
+    // our old cursor and the new one are lost — but they were ALREADY
+    // lost the moment they fell outside the retention window. At
+    // least new events are picked up instead of silently failing
+    // forever. Emit a distinct bizEvent so ops can correlate the
+    // recovery with the missing-payment window.
+    //
+    // This matches the bug pattern bit shawn@rozo.ai: two stranded
+    // $30 USDC orders with zero on-chain footprint from our side,
+    // because our watcher was stuck in this exact error loop.
+    const msg = err?.message || '';
+    const outOfRangeMatch = msg.match(/startLedger must be within the ledger range: (\d+) - (\d+)/);
+    if (outOfRangeMatch) {
+      const upper = parseInt(outOfRangeMatch[2], 10);
+      if (Number.isFinite(upper) && upper > 0) {
+        // Resume at upper - 100 so we get a bit of buffer but don't
+        // try to re-scan the whole retention window in one batch.
+        const resumeAt = Math.max(1, upper - 100);
+        const oldCursor = loadStartLedger();
+        saveStartLedger(resumeAt);
+        log(`[stellar] cursor ${oldCursor} fell outside RPC retention; resetting to ${resumeAt}`);
+        bizEvent('stellar.cursor_reset_out_of_range', {
+          old_cursor: oldCursor,
+          new_cursor: resumeAt,
+          rpc_lower: parseInt(outOfRangeMatch[1], 10),
+          rpc_upper: upper,
+        });
+        // Retry quickly — the reset cursor is valid, no need to wait
+        // the 4× backoff we'd apply for generic RPC flakiness.
+        setTimeout(() => poll(onPayment, log), POLL_MS);
+        return;
+      }
+    }
+
     log(`[stellar] poll error: ${err.message} — retrying in ${POLL_MS * 4}ms`);
     // Emit a bizEvent so RPC flakiness and rethrown dispatch failures are
     // visible in the metrics pipeline, not just stderr. Cheap because poll
