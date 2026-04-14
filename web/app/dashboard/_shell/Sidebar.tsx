@@ -22,6 +22,11 @@ interface Item {
 interface Section {
   label?: string;
   items: Item[];
+  // Platform-owner-only sections are gated by the `is_platform_owner`
+  // flag on the authed user, which is an orthogonal axis from the
+  // tenant-scoped `permission` system. Non-owner users never see these
+  // items at all.
+  platformOwnerOnly?: boolean;
 }
 
 function Icon({ d }: { d: string }) {
@@ -140,13 +145,63 @@ const SECTIONS: Section[] = [
       },
     ],
   },
+  {
+    label: 'Platform',
+    platformOwnerOnly: true,
+    items: [
+      {
+        href: '/dashboard/platform',
+        label: 'Overview',
+        icon: <Icon d="M4 4h6v6H4zM14 4h6v6h-6zM14 14h6v6h-6zM4 14h6v6H4z" />,
+      },
+      {
+        href: '/dashboard/platform/orders',
+        label: 'All orders',
+        icon: (
+          <Icon d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M16 13H8M16 17H8M10 9H8" />
+        ),
+      },
+      {
+        href: '/dashboard/platform/agents',
+        label: 'All agents',
+        icon: (
+          <Icon d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0z" />
+        ),
+      },
+      {
+        href: '/dashboard/platform/users',
+        label: 'All users',
+        icon: (
+          <Icon d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0z" />
+        ),
+      },
+      {
+        href: '/dashboard/platform/treasury',
+        label: 'Treasury',
+        icon: <Icon d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />,
+      },
+      {
+        href: '/dashboard/platform/webhooks',
+        label: 'Webhooks',
+        icon: (
+          <Icon d="M8 12h8M8 8h8M8 16h4M4 6v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2z" />
+        ),
+      },
+      {
+        href: '/dashboard/platform/health',
+        label: 'Health',
+        icon: <Icon d="M22 12h-4l-3 9L9 3l-3 9H2" />,
+      },
+    ],
+  },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { approvals } = useDashboard();
+  const { approvals, user } = useDashboard();
   const perms = usePermissions();
   const approvalCount = approvals.length;
+  const isPlatformOwner = !!user?.is_platform_owner;
 
   return (
     <aside
@@ -195,6 +250,7 @@ export function Sidebar() {
       </Link>
 
       {SECTIONS.map((section, sIdx) => {
+        if (section.platformOwnerOnly && !isPlatformOwner) return null;
         const visible = section.items.filter((i) => !i.permission || perms.can(i.permission));
         if (visible.length === 0) return null;
         return (
