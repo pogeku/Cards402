@@ -570,6 +570,28 @@ Content-Type: application/json
 }`}
           </CodeBlock>
 
+          <CodeBlock label="Response — 202 Accepted (awaiting owner approval)">
+            {`{
+  "order_id": "a3f7c2d1-4e8b-4f0a-9c2d-1b3e5a7f9c0e",
+  "phase": "awaiting_approval",
+  "approval_request_id": "ar_9f3a1b2c",
+  "amount_usdc": "25.00",
+  "message": "Amount exceeds per-txn cap of $10.00",
+  "note": "The account owner has been notified. Poll GET /v1/orders/<id> to check status.",
+  "expires_at": "2026-04-08T14:00:00.000Z"
+}`}
+          </CodeBlock>
+
+          <Para style={{ color: 'var(--fg-dim)', fontSize: '0.85rem' }}>
+            When the API key has an approval-required spend policy and the requested amount trips
+            that policy, the server returns <Code>202 Accepted</Code> with this shape{' '}
+            <em>instead of</em> 201 Created. No <Code>payment</Code> block is included because
+            there&apos;s nothing to pay yet — poll the returned <Code>order_id</Code> until{' '}
+            <Code>phase</Code> transitions to <Code>awaiting_payment</Code> (approved) or{' '}
+            <Code>rejected</Code> (denied). Approval TTL defaults to 2 hours; tune via the operator
+            dashboard.
+          </Para>
+
           <SubTitle>Skipping all of this with the CLI</SubTitle>
           <Para>
             Most agents should never talk to the raw API. After{' '}
