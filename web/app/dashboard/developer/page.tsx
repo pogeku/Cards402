@@ -208,9 +208,10 @@ export default function DeveloperPage() {
             code={`import { purchaseCardOWS } from 'cards402';
 
 const card = await purchaseCardOWS({
+  apiKey: process.env.CARDS402_API_KEY!,
+  walletName: 'my-agent',
   amountUsdc: '10.00',
   paymentAsset: 'xlm',
-  walletName: 'my-agent',
 });`}
           />
           <Snippet
