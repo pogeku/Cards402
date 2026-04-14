@@ -699,6 +699,58 @@ applyMigration(23, () => {
   `);
 });
 
+// Migration 24: composite + partial indexes for hot query paths that
+// are single-column-indexed today. Flagged by a DB index-coverage audit —
+// none of these are biting in pilot volumes, but at a few hundred
+// thousand orders they'd turn hot user-triggered queries into full
+// table scans. Cheap to ship now while the tables are small (creating
+// an index on a 30-row table is instant) and much cheaper than
+// fighting a production regression later.
+//
+// Each index is motivated by a specific query shape below:
+//
+//   idx_orders_api_key_status
+//     Serves the spend-limit check in api/orders.js and the in-flight
+//     sum in policy.js:
+//       SELECT SUM(CAST(amount_usdc AS REAL)) FROM orders
+//       WHERE api_key_id = ? AND status IN ('pending_payment', ...)
+//     Single-column idx_orders_api_key_id lets SQLite narrow to the
+//     key then scans every row to filter by status. The composite
+//     lets it jump straight to the (key, status) tuples.
+//
+//   idx_orders_api_key_created_at
+//     Serves policy.js daily spend limit check:
+//       SELECT SUM(...) FROM orders
+//       WHERE api_key_id = ? AND date(created_at) = date('now')
+//     and the dashboard.js "orders created in the last N days"
+//     pattern used by analytics + stats surfaces. Without this,
+//     every daily-limit check scans every order that key has
+//     ever created.
+//
+//   idx_unmatched_payments_pending  (PARTIAL INDEX)
+//     The unmatched_payments table had NO indexes at all beyond the
+//     PRIMARY KEY. A partial index on the pending-refund subset keeps
+//     the index tiny (only rows awaiting refund are included) and
+//     makes the background "poll unmatched rows that still need a
+//     refund" sweep O(pending) instead of O(all).
+//
+//   idx_unmatched_payments_created_at
+//     General chronological listing used by the platform router's
+//     /unmatched-payments endpoint.
+applyMigration(24, () => {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_orders_api_key_status
+      ON orders(api_key_id, status);
+    CREATE INDEX IF NOT EXISTS idx_orders_api_key_created_at
+      ON orders(api_key_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_unmatched_payments_pending
+      ON unmatched_payments(created_at)
+      WHERE refund_stellar_txid IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_unmatched_payments_created_at
+      ON unmatched_payments(created_at);
+  `);
+});
+
 // Audit A-5: post-migration sanity check. If a newer release has rolled
 // through here and bumped the on-disk schema beyond what this binary
 // knows about, fail hard instead of running against a schema we don't
@@ -709,7 +761,7 @@ applyMigration(23, () => {
 //
 // EXPECTED_SCHEMA_VERSION must match the last `applyMigration(N)` call
 // above. Bump it in lock-step with any new migration.
-const EXPECTED_SCHEMA_VERSION = 23;
+const EXPECTED_SCHEMA_VERSION = 24;
 const actualVersion = getSchemaVersion();
 if (actualVersion > EXPECTED_SCHEMA_VERSION) {
   console.error(
