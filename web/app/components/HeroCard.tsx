@@ -480,11 +480,19 @@ function CardStyles() {
       }
 
       /* SVG rect outline that draws around the card perimeter on
-         load. stroke-dasharray is longer than the real perimeter
-         (~2050 at this aspect) so 1600 → 0 completes a full
-         loop; actual length doesn't matter as long as the offset
-         covers it. Animation #1 draws the stroke, animation #2
-         dims it from full white to a subtle rim after the draw. */
+         load. The rect is 381 x 597 with rx=28, so its real
+         perimeter is 2(325) + 2(541) + 2π(28) ≈ 1908 units.
+         stroke-dasharray must be STRICTLY GREATER than the real
+         perimeter or the last ~16% of the stroke ends up in the
+         gap portion of the dash pattern and never gets drawn.
+         An earlier comment here claimed 1600 was longer than the
+         ~2050 perimeter — both figures were wrong, and the result
+         was a stroke that drew ~84% of the way round and stopped.
+         2200 comfortably exceeds the real perimeter for the
+         current rect dimensions and leaves headroom if the
+         aspect-ratio ever changes. Animation #1 draws the stroke,
+         animation #2 dims it from full white to a subtle rim
+         after the draw. */
       .hc-card-outline {
         position: absolute;
         inset: 0.08rem;
@@ -500,8 +508,8 @@ function CardStyles() {
         stroke-width: 1.35;
         stroke-linecap: round;
         stroke-linejoin: round;
-        stroke-dasharray: 1600;
-        stroke-dashoffset: 1600;
+        stroke-dasharray: 2200;
+        stroke-dashoffset: 2200;
         filter:
           drop-shadow(0 0 8px rgba(255, 255, 255, 0.2))
           drop-shadow(0 0 18px rgba(255, 207, 110, 0.18));
@@ -746,7 +754,7 @@ function CardStyles() {
       /* Stroke draws around the card perimeter from one corner. */
       @keyframes hc-drawOutline {
         0% {
-          stroke-dashoffset: 1600;
+          stroke-dashoffset: 2200;
           opacity: 1;
         }
         100% {
