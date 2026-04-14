@@ -244,6 +244,22 @@ function parseStellarPayUri(uri) {
   };
 }
 
+// Micro-order threshold, in USD. USDC-paid orders below this value are
+// paid to CTX directly out of the treasury's XLM float, bypassing the
+// DEX swap. Rationale: at $0.02 USDC the DEX rate drift between probe
+// and execution time (~0.075%) is larger than the 7-decimal Stellar
+// precision gives us room to absorb — the agent's USDC arrives in
+// exactly-right units so there's no cushion for slippage, and
+// sendUsdcAsXlm's early-abort rejects the tx rather than burning fees
+// on a doomed path_payment. For these tiny orders the absolute cost of
+// the slippage is a fraction of a cent, so we eat it from treasury
+// reserves. The agent's USDC stays in the treasury and we reconcile
+// USDC→XLM in bulk periodically (bulk swaps have much better execution
+// quality than per-order micro swaps). Orders at or above this
+// threshold still go through the DEX. Configurable via env so ops can
+// tune it without a redeploy once we have volume data.
+const MICRO_ORDER_USD_THRESHOLD = parseFloat(process.env.MICRO_ORDER_USD_THRESHOLD || '0.20');
+
 // Pay a CTX gift card invoice.
 //
 // The CTX invoice is always quoted in XLM (via a SEP-0007 `web+stellar:pay?`
@@ -251,12 +267,15 @@ function parseStellarPayUri(uri) {
 //
 //   - If the agent paid cards402 in XLM, we just forward XLM from the
 //     treasury (the agent's payment already landed there).
-//   - If the agent paid cards402 in USDC, we do a single atomic
-//     `PathPaymentStrictReceive`: USDC → DEX → XLM → CTX wallet. The
-//     treasury holds USDC from the agent's payment and converts it
-//     just-in-time. `sendMax` is capped at the order's full USDC amount,
-//     since CTX prices include a ~4.5% merchant discount that comfortably
-//     absorbs DEX slippage + fees.
+//   - If the agent paid cards402 in USDC and the order is >= the micro
+//     threshold, we do a single atomic `PathPaymentStrictSend`: USDC →
+//     DEX → XLM → CTX wallet. The treasury holds USDC from the agent's
+//     payment and converts it just-in-time. `sendMax` is capped at the
+//     order's full USDC amount.
+//   - If the agent paid cards402 in USDC but the order is below the
+//     micro threshold, we skip the DEX entirely and send CTX the XLM
+//     straight out of the treasury float. The agent's USDC piles up in
+//     the treasury for bulk reconciliation later.
 //
 // Returns the Stellar transaction hash.
 /**
@@ -278,6 +297,35 @@ async function payCtxOrder(paymentUrl, opts = {}) {
     if (!maxUsdc || Number(maxUsdc) <= 0) {
       throw new Error(`payCtxOrder: paymentAsset=usdc requires maxUsdc > 0 (got ${maxUsdc})`);
     }
+
+    // Micro-order fast path: for orders below the threshold, pay CTX
+    // directly out of treasury XLM and leave the agent's USDC in the
+    // treasury. See the MICRO_ORDER_USD_THRESHOLD comment above for
+    // the reasoning.
+    if (Number(maxUsdc) < MICRO_ORDER_USD_THRESHOLD) {
+      log(
+        'info',
+        'xlm-sender: paying CTX via direct XLM from treasury (micro order, DEX bypassed)',
+        {
+          dest_xlm: amount,
+          max_usdc: maxUsdc,
+          threshold_usd: MICRO_ORDER_USD_THRESHOLD,
+          destination: maskStellarAddress(destination),
+        },
+      );
+      const txHash = await sendXlm({ destination, amount, memo });
+      bizEvent('ctx.paid', {
+        path: 'xlm_from_treasury_micro',
+        amount_xlm: amount,
+        max_usdc: maxUsdc,
+        threshold_usd: MICRO_ORDER_USD_THRESHOLD,
+        destination: maskStellarAddress(destination),
+        tx_hash: txHash,
+        memo_len: memo.length,
+      });
+      return txHash;
+    }
+
     log('info', 'xlm-sender: paying CTX via USDC→XLM path payment', {
       dest_xlm: amount,
       max_usdc: maxUsdc,
