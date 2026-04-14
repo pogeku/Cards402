@@ -132,17 +132,23 @@ async function probeUsdcToXlmPath(destXlm) {
   }
 }
 
-// Atomic USDC→XLM swap + send to a specific XLM destination. One Stellar
-// tx: PathPaymentStrictSend pushes exactly `maxUsdc` of USDC from the
-// treasury through the DEX and delivers the resulting XLM to `destination`.
+// Atomic USDC→XLM swap + CTX forward. One Stellar tx with TWO operations:
 //
-// Strict-SEND semantics (chosen after the 2026-04-14 op_over_source_max
-// failures): cards402 only ever spends exactly the USDC the agent paid in;
-// any DEX slippage is absorbed on the XLM side by delivering slightly less
-// XLM than the invoice quoted. `destMin` is the floor — up to 1% below the
-// invoice is tolerated. If the market has moved enough that even the face
-// value can't buy 99% of the invoice XLM, the tx fails atomically (no
-// partial spend, no stuck state) and the order is refunded.
+//   1. pathPaymentStrictSend(sendAmount=maxUsdc USDC, destMin=destXlm XLM,
+//      destination=self) — swaps the agent's USDC into at least destXlm
+//      XLM inside our own treasury account. Any surplus XLM beyond destXlm
+//      stays in treasury as margin.
+//
+//   2. payment(amount=destXlm XLM, destination=CTX) — a plain Stellar
+//      payment op delivering exactly the invoice amount to CTX with the
+//      invoice memo. This is the critical bit: CTX's payment watcher
+//      only registers direct `payment` operations and silently ignores
+//      `path_payment_*` ops (the 2026-04-14 "pending/unpaid" bug), so the
+//      swap has to land in a separate op from the CTX delivery.
+//
+// If the DEX can't deliver at least destXlm XLM for the agent's USDC the
+// whole tx fails atomically with op_under_dest_min on op 1 — no spend,
+// no partial state, and the order is refunded by the caller.
 async function sendUsdcAsXlm({ destination, destXlm, maxUsdc, memo }) {
   const secret = process.env.STELLAR_XLM_SECRET;
   if (!secret) throw new Error('STELLAR_XLM_SECRET not set');
@@ -155,6 +161,7 @@ async function sendUsdcAsXlm({ destination, destXlm, maxUsdc, memo }) {
     process.env.STELLAR_USDC_ISSUER || 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
   const usdc = new Asset('USDC', USDC_ISSUER);
   const keypair = Keypair.fromSecret(secret);
+  const treasuryAddress = keypair.publicKey();
 
   // Probe the DEX for book health AND the concrete path Horizon would use.
   // We pin the returned path on the actual submission so Core's in-core
@@ -171,44 +178,52 @@ async function sendUsdcAsXlm({ destination, destXlm, maxUsdc, memo }) {
     max_usdc: maxUsdc,
   });
 
-  // Business rule: we accept up to 1% slippage by delivering slightly less
-  // XLM to CTX, never by spending more USDC than the agent gave us. The
-  // agent's USDC is the sendAmount ceiling and the floor on delivered XLM
-  // is invoice * 0.99. Format to Stellar's 7-decimal precision.
-  const SLIPPAGE_FLOOR = 0.99;
+  // Strict-send sendAmount is exactly the agent's face value; destMin is
+  // the full invoice amount so op 2 is guaranteed a sufficient balance to
+  // forward. Stellar 7-decimal precision.
   const sendAmount = Number(maxUsdc).toFixed(7);
-  const destMin = (Number(destXlm) * SLIPPAGE_FLOOR).toFixed(7);
+  const destMin = Number(destXlm).toFixed(7);
+  const forwardAmount = Number(destXlm).toFixed(7);
 
   // Early-abort check: if the probe already tells us that face-value USDC
-  // can't buy even 99% of the invoice XLM at current market rates, the tx
-  // will fail with op_under_dest_min. Abort now so we don't burn fees.
+  // can't buy destMin XLM at current market rates, the tx will fail with
+  // op_under_dest_min. Abort now so we don't burn fees on a doomed submit.
   if (probe.ok) {
     const quoteUsdcPerXlm = Number(probe.sourceAmount) / Number(destXlm);
     const xlmAtSendAmount = Number(sendAmount) / quoteUsdcPerXlm;
     if (xlmAtSendAmount < Number(destMin)) {
       throw new Error(
         `DEX would only deliver ${xlmAtSendAmount.toFixed(7)} XLM for ${sendAmount} USDC, ` +
-          `below the 1% slippage floor of ${destMin} XLM (invoice ${destXlm}). Aborting.`,
+          `below invoice floor ${destMin} XLM. Aborting without burning fees.`,
       );
     }
   }
 
-  // Pin the probe's path on the operation so the submission uses the same
-  // route the probe priced. Empty path only if the probe failed or reported
-  // a direct swap (no intermediate hops).
+  // Pin the probe's path so the submission uses the same route the probe
+  // priced. Empty path only if the probe failed or reported a direct swap.
   const path = probe.ok ? probe.path : [];
 
   return submitWithRetry(
     (account) =>
-      new TransactionBuilder(account, { fee: '100000', networkPassphrase: NETWORK_PASSPHRASE })
+      new TransactionBuilder(account, { fee: '200000', networkPassphrase: NETWORK_PASSPHRASE })
+        // Op 1: swap USDC → XLM into our own treasury.
         .addOperation(
           Operation.pathPaymentStrictSend({
             sendAsset: usdc,
             sendAmount,
-            destination,
+            destination: treasuryAddress,
             destAsset: Asset.native(),
             destMin,
             path,
+          }),
+        )
+        // Op 2: direct XLM payment of exactly the invoice amount to CTX.
+        // This is the op CTX's watcher sees and matches against the invoice.
+        .addOperation(
+          Operation.payment({
+            destination,
+            asset: Asset.native(),
+            amount: forwardAmount,
           }),
         )
         .addMemo(Memo.text(memo))
