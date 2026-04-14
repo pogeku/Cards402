@@ -244,8 +244,8 @@ export default function PressPage() {
           {[
             { label: 'Full wordmark · dark', href: '/logo.svg' },
             { label: 'Full wordmark · light', href: '/logo-light.svg' },
-            { label: 'Icon · PNG', href: '/icon.png' },
-            { label: 'Favicon · ICO', href: '/icon.png' },
+            { label: 'App icon · PNG', href: '/icon.png' },
+            { label: 'Apple touch icon · PNG', href: '/apple-icon.png' },
           ].map((a) => (
             <a
               key={a.label}
