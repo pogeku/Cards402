@@ -131,11 +131,19 @@ router.post('/', orderCreateLimiter, async (req, res) => {
 
   const { amount_usdc, webhook_url, metadata } = req.body;
 
-  // Strict decimal validation — reject "10abc" which parseFloat would silently accept as 10
-  if (typeof amount_usdc !== 'string' || !/^\d+(\.\d+)?$/.test(amount_usdc.trim())) {
+  // Strict decimal validation — reject "10abc" which parseFloat would
+  // silently accept as 10, AND reject sub-cent amounts like "10.12345"
+  // which Pathward cannot represent (every Visa Reward Card balance is
+  // integer cents). The previous regex was `/^\d+(\.\d+)?$/` which
+  // allowed any decimal precision; a caller sending amount_usdc:
+  // "10.12345678" would slip past validation, get parseFloat'd, and
+  // land in the spend-limit accounting with sub-cent precision the
+  // rest of the pipeline can't honour. Tighten to max 2 decimals so
+  // every stored amount_usdc is integer-cents-clean.
+  if (typeof amount_usdc !== 'string' || !/^\d+(\.\d{1,2})?$/.test(amount_usdc.trim())) {
     return res.status(400).json({
       error: 'invalid_amount',
-      message: 'amount_usdc must be a decimal number string (e.g. "10.00")',
+      message: 'amount_usdc must be a decimal with at most 2 decimal places (e.g. "10.00")',
     });
   }
   const amount = parseFloat(amount_usdc);
