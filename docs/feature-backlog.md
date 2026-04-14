@@ -46,6 +46,34 @@ the same day the drift was introduced. Until that test exists,
 the spec is a snapshot that can itself go stale — which is
 exactly what happened.
 
+**Loop 18 status:** 3 more drift bugs caught and fixed, all in
+upstream inputs rather than generated content:
+
+- `examples/README.md` had `npx -y cards402/mcp` which is not a
+  valid package spec. The CLI default subcommand is `mcp`
+  (`sdk/src/cli.ts:17`) so `npx -y cards402` is correct. Added a
+  paragraph explaining the default-subcommand convention.
+- `web/README.md` still referenced `admin/page.tsx` and the Geist
+  font. Admin was renamed to `dashboard/` months ago; the brand
+  refresh replaced Geist with Fraunces + IBM Plex Sans/Mono.
+  Rewrote the structure list and fonts note.
+- Root `README.md` called the web app "marketing/admin" and
+  pointed agents at `/agents.txt`. Updated to "marketing +
+  dashboard" and promoted `/docs/quickstart` + `/skill.md` as
+  the entry points.
+
+Also deleted the stale `project_architecture_v2.md` memory —
+it described an "agent pays VCC direct" design that never
+shipped; the real flow in `payment-handler.js:7` is
+agent→cards402 Soroban receiver→cards402 treasury pays VCC.
+The `_status.md` memory that describes the correct flow is
+now the single source in MEMORY.md.
+
+Remaining low-value drift surfaces I've checked in this loop
+and believe are clean: `contract/README.md`,
+`contract/api/vcc-internal.openapi.yaml`, `ARCHITECTURE.md §vcc
+interface + §security model`.
+
 ## Core product
 
 ### Cards
