@@ -188,7 +188,7 @@ const card = await purchaseCardOWS({
   apiKey: process.env.CARDS402_API_KEY,
   walletName: 'my-agent',
   amountUsdc: '25.00',
-  asset: 'xlm',  // or 'usdc'
+  paymentAsset: 'xlm',  // or 'usdc' (default)
 });
 
 console.log(card);
