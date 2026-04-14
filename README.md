@@ -17,7 +17,7 @@ cards402/
 ```
 
 The agent-facing pieces — the receiver contract, the TypeScript SDK, and the
-marketing/admin web app — are open source and live in this repository. The
+marketing + dashboard web app — are open source and live in this repository. The
 fulfillment engine that turns confirmed on-chain payments into Visa cards
 (`backend/`) is closed source and not published here; it talks to a separate
 VCC service over HTTP + HMAC webhooks. If you're running the backend
@@ -71,7 +71,7 @@ Contract ID: set in `RECEIVER_CONTRACT_ID` env var on the backend.
 
 ## Quick start (agents)
 
-See the [API docs](https://cards402.com/docs) or the [agents.txt](https://cards402.com/agents.txt) for machine-readable instructions.
+See the [quickstart](https://cards402.com/docs/quickstart), the full [API reference](https://cards402.com/docs), or the [skill.md](https://cards402.com/skill.md) drop-in agent instructions.
 
 1. Get an API key (contact us or use the portal)
 2. Create an order — you get a contract address and expected amount
