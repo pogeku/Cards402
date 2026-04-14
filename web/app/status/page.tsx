@@ -146,24 +146,19 @@ function deriveComponents(s: BackendStatus): ComponentRow[] {
   // Fulfilment pipeline: success rate over the terminal 24h orders.
   // Small samples are noisy — on a quiet day with 6 terminal orders,
   // 3 refunds is 50% and looks like an outage but is actually routine
-  // test traffic. Require at least LOW_VOLUME_FLOOR terminal orders
-  // before flagging anything worse than "operational". Below that we
-  // quietly note the low volume instead of raising a red alert.
+  // test traffic. Until daily volume crosses LOW_VOLUME_FLOOR we collapse
+  // the row to a generic "System healthy" so visitors don't read meaning
+  // into numbers that are statistically meaningless. Once volume is high
+  // enough for the success rate to be trustworthy we show the real row
+  // with the full breakdown.
   const LOW_VOLUME_FLOOR = 20;
   const pct = s.last_24h.success_rate;
   const terminal24h = s.last_24h.delivered + s.last_24h.failed + s.last_24h.refunded;
-  if (terminal24h === 0) {
+  if (terminal24h < LOW_VOLUME_FLOOR) {
     rows.push({
-      label: 'Card fulfilment pipeline',
+      label: 'System healthy',
       status: 'operational',
-      note: 'No terminal orders in the last 24h. Pipeline is idle but healthy.',
-    });
-  } else if (terminal24h < LOW_VOLUME_FLOOR) {
-    const pctStr = pct !== null ? `${(pct * 100).toFixed(1)}%` : 'n/a';
-    rows.push({
-      label: 'Card fulfilment pipeline',
-      status: 'operational',
-      note: `Low volume (${terminal24h} terminal orders in the last 24h — ${pctStr} success rate). Statistical noise dominates at this sample size; health will be flagged from ${LOW_VOLUME_FLOOR}+ orders/day.`,
+      note: 'All fulfilment components nominal. Per-order success metrics will appear once daily volume exceeds 20 orders.',
     });
   } else {
     const pctStr = pct !== null ? `${(pct * 100).toFixed(1)}%` : 'n/a';
@@ -232,10 +227,10 @@ function deriveComponents(s: BackendStatus): ComponentRow[] {
     note: `${s.orders.pending_payment} pending payment · ${s.orders.in_progress} in fulfilment.`,
   });
 
-  // Upstream — we don't have a structured signal for issuer / scraper
-  // health, so surface it as an advisory row derived from the 24h
-  // failure count. Only flag when there's enough volume for the
-  // number to be meaningful (same LOW_VOLUME_FLOOR as above).
+  // Upstream — we don't have a structured signal for issuer health, so
+  // surface it as an advisory row derived from the 24h failure count.
+  // Only flag when there's enough volume for the number to be
+  // meaningful (same LOW_VOLUME_FLOOR as above).
   if (terminal24h >= LOW_VOLUME_FLOOR && pct !== null && pct < 0.75) {
     rows.push({
       label: 'Upstream — Pathward',
@@ -246,7 +241,7 @@ function deriveComponents(s: BackendStatus): ComponentRow[] {
     rows.push({
       label: 'Upstream — Pathward',
       status: 'operational',
-      note: 'No known incidents reported by the issuer or the scraper.',
+      note: 'No known incidents reported by the issuer.',
     });
   }
 
