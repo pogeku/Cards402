@@ -43,4 +43,4 @@ public/
 
 - Uses `next/font/google` for Fraunces (display), IBM Plex Sans (body), and IBM Plex Mono (data). The build downloads font files from Google Fonts at build time — ensure outbound HTTPS access is available in your build environment.
 - The dashboard authenticates via email OTP (6-digit code), session cookie is `sameSite: strict`. The marketing surface is fully public.
-- Next.js 16 file conventions are in force: middleware lives in `proxy.ts` at the web root (not `middleware.ts`), and `next/font` is replaced by `next/font/google`/`next/font/local` imports.
+- Next.js 16 file conventions are in force: middleware lives in `proxy.ts` at the web root (the old `middleware.ts` name is deprecated and logs a migration notice in the dev server).
