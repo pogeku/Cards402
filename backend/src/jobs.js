@@ -544,6 +544,75 @@ function pruneIdempotencyKeys() {
   if (result.changes > 0) log(`pruned ${result.changes} expired idempotency key(s)`);
 }
 
+// Delete sessions rows whose expires_at has passed. Without this the
+// sessions table grows unboundedly — every login adds a row and
+// nothing ever deletes one unless the user logs out explicitly. Prod
+// was already carrying 3 expired rows out of 10; at pilot cadence
+// that's fine, but at steady state the table grows at roughly
+// (users × logins_per_day) per day.
+function pruneExpiredSessions() {
+  const result = db
+    .prepare(`DELETE FROM sessions WHERE datetime(expires_at) < datetime('now')`)
+    .run();
+  if (result.changes > 0) log(`pruned ${result.changes} expired session(s)`);
+}
+
+// Delete auth_codes rows older than their 15-minute TTL. Keeping used
+// or expired OTP rows indefinitely is pure DB bloat — the row carries
+// no value once it's been used or expired and all brute-force
+// protection uses the short active window.
+function pruneExpiredAuthCodes() {
+  const result = db
+    .prepare(
+      `DELETE FROM auth_codes
+       WHERE datetime(expires_at) < datetime('now', '-1 hours')`,
+    )
+    .run();
+  if (result.changes > 0) log(`pruned ${result.changes} expired auth code(s)`);
+}
+
+// Delete agent_claims rows that are either (a) already used and
+// older than 24h, or (b) expired unused for more than 24h. The
+// sealed_payload column is already wiped at redemption time so
+// there's no secret leak from keeping the row around, but the row
+// itself is still garbage.
+function pruneExpiredAgentClaims() {
+  const result = db
+    .prepare(
+      `DELETE FROM agent_claims
+       WHERE (used_at IS NOT NULL AND datetime(used_at) < datetime('now', '-24 hours'))
+          OR (used_at IS NULL AND datetime(expires_at) < datetime('now', '-24 hours'))`,
+    )
+    .run();
+  if (result.changes > 0) log(`pruned ${result.changes} stale agent claim(s)`);
+}
+
+// Delete webhook_deliveries rows older than WEBHOOK_LOG_RETENTION_DAYS
+// (default 30). The table is a debugging / replay surface for
+// operators — the recent window is useful, the historical tail is
+// noise. Cards are already redacted from request_body by fulfillment.js
+// before persistence so there's no data-minimisation concern beyond
+// the standard "small tables are faster to query" argument.
+function pruneWebhookDeliveries() {
+  const days = parseInt(process.env.WEBHOOK_LOG_RETENTION_DAYS || '30', 10);
+  const result = db
+    .prepare(`DELETE FROM webhook_deliveries WHERE datetime(created_at) < datetime('now', ?)`)
+    .run(`-${days} days`);
+  if (result.changes > 0) log(`pruned ${result.changes} webhook delivery log row(s)`);
+}
+
+// Delete policy_decisions older than POLICY_DECISIONS_RETENTION_DAYS
+// (default 90). Policy decisions are audit info for "why was this
+// order blocked" — a 90-day window is plenty for operator follow-up
+// questions, and the audit_log has its own history.
+function prunePolicyDecisions() {
+  const days = parseInt(process.env.POLICY_DECISIONS_RETENTION_DAYS || '90', 10);
+  const result = db
+    .prepare(`DELETE FROM policy_decisions WHERE datetime(created_at) < datetime('now', ?)`)
+    .run(`-${days} days`);
+  if (result.changes > 0) log(`pruned ${result.changes} policy decision(s)`);
+}
+
 // Poll Horizon for every agent wallet sitting in 'awaiting_funding'.
 // As soon as a wallet has enough XLM to pay the base reserve + any
 // balance, transition the api_keys row to 'funded' and emit an
@@ -647,6 +716,11 @@ async function runJobs() {
     await recoverStuckOrders();
     await retryWebhooks();
     pruneIdempotencyKeys();
+    pruneExpiredSessions();
+    pruneExpiredAuthCodes();
+    pruneExpiredAgentClaims();
+    pruneWebhookDeliveries();
+    prunePolicyDecisions();
     purgeOldCards();
   } catch (err) {
     console.error(`[jobs] unhandled error: ${err.message}`);
@@ -724,5 +798,10 @@ module.exports = {
   recoverStuckOrders,
   retryWebhooks,
   pruneIdempotencyKeys,
+  pruneExpiredSessions,
+  pruneExpiredAuthCodes,
+  pruneExpiredAgentClaims,
+  pruneWebhookDeliveries,
+  prunePolicyDecisions,
   purgeOldCards,
 };
