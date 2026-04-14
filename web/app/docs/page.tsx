@@ -9,6 +9,33 @@ export const metadata: Metadata = {
   alternates: { canonical: 'https://cards402.com/docs' },
 };
 
+// TechArticle JSON-LD — Google uses this type as a soft hint for
+// developer documentation pages. It lets the API reference show up
+// in dev-oriented search surfaces separately from marketing pages.
+// The dependencies field is a stable list of the core technologies
+// an integrator needs — Google uses it to match the article to
+// language/stack-specific queries.
+const techArticleJsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'TechArticle',
+  '@id': 'https://cards402.com/docs#article',
+  headline: 'Cards402 HTTP API reference',
+  description:
+    'Full HTTP API for Cards402: create orders, stream order state over SSE, poll as a fallback, verify webhook signatures, and handle every error code.',
+  datePublished: '2026-04-13',
+  dateModified: '2026-04-14',
+  proficiencyLevel: 'Expert',
+  dependencies: 'Node.js 18+, Stellar wallet, USDC or XLM',
+  author: {
+    '@type': 'Organization',
+    name: 'Cards402',
+    url: 'https://cards402.com',
+  },
+  publisher: { '@id': 'https://cards402.com#organization' },
+  inLanguage: 'en-GB',
+  mainEntityOfPage: 'https://cards402.com/docs',
+};
+
 // ── Inline primitives ─────────────────────────────────────────────
 // The docs page keeps to the same pattern as the landing page: inline
 // styles for layout + a trailing <style> block for hover/responsive
@@ -286,6 +313,10 @@ export default function DocsPage() {
         position: 'relative',
       }}
     >
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(techArticleJsonLd) }}
+      />
       {/* ── Sidebar ─────────────────────────────────────────────── */}
       <aside className="docs-sidebar">
         <div className="docs-sidebar-inner">
