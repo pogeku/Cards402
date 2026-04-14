@@ -48,7 +48,7 @@ const PILLARS = [
   {
     eyebrow: 'Infrastructure',
     title: 'One region. Audited root access.',
-    body: 'Cards402 runs on Hetzner Cloud in a single EU data centre. SSH keys are hardware-backed. The database is SQLite in WAL journal mode for crash-consistent durability, and snapshot backups are taken on a scheduled cadence. Every root-shell session is recorded and reviewed.',
+    body: 'SSH keys are hardware-backed. The database is SQLite in WAL journal mode for crash-consistent durability, and snapshot backups are taken on a scheduled cadence. Every root-shell session is recorded and reviewed.',
   },
 ];
 
