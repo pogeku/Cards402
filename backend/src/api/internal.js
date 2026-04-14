@@ -16,7 +16,7 @@ const { Router } = require('express');
 const requireAuth = require('../middleware/requireAuth');
 const requireInternal = require('../middleware/requireInternal');
 const requireCardReveal = require('../middleware/requireCardReveal');
-const { scheduleRefund } = require('../fulfillment');
+// scheduleRefund import removed along with the manual refund endpoint — see below
 const { getOrderStats } = require('../lib/stats');
 
 const router = Router();
@@ -159,17 +159,26 @@ router.get('/stats', (req, res) => {
   });
 });
 
-// POST /internal/orders/:id/refund — queue a manual refund (same as admin route)
-router.post('/orders/:id/refund', async (req, res) => {
-  const order = db.prepare(`SELECT * FROM orders WHERE id = ?`).get(req.params.id);
-  if (!order) return res.status(404).json({ error: 'not_found' });
-  try {
-    await scheduleRefund(order.id);
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: 'refund_failed', message: err.message });
-  }
-});
+// Manual refund endpoint DELETED (2026-04-14). The old handler was
+// guarded only by requireInternal (any @cards402.com mailbox) and
+// called scheduleRefund() without checking the order's status, which
+// meant any authenticated internal user could force a refund on a
+// 'delivered' or 'ordering' order — draining the treasury AND leaving
+// the customer with a fulfilled card. See audit finding treasury-drain-1.
+//
+// Automatic refunds still fire from the normal failure paths:
+//   - payment-handler.js on dispatch error (DEX swap failed, etc.)
+//   - vcc-callback.js on CTX 'failed' status
+//   - jobs.js::recoverStuckOrders for stale ordering rows past the
+//     fail-after threshold with VCC confirming the job isn't making
+//     progress
+//   - jobs.js::expireStaleOrders for expired pending_payment rows
+//
+// If ops ever needs a true manual override, add a new endpoint behind
+// requirePlatformOwner that (a) verifies the order is in a refundable
+// state (NOT delivered/ordering), (b) requires an explicit reason
+// string, and (c) writes to admin_actions for audit. Do NOT re-enable
+// this old handler.
 
 // GET /internal/operators — all API keys with full detail
 router.get('/operators', (req, res) => {
