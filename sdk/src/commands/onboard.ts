@@ -11,7 +11,7 @@
 //    "Awaiting deposit" in their dashboard immediately.
 // 5. Print the Stellar address + next steps.
 
-import { saveCards402Config } from '../config';
+import { loadCards402Config, saveCards402Config } from '../config';
 import { createOWSWallet, getOWSBalance } from '../ows';
 import { Cards402Client } from '../client';
 
@@ -121,7 +121,38 @@ export async function onboardCommand(argv: string[]): Promise<number> {
     return 2;
   }
 
+  // Local format check — fail fast on obvious typos (missing prefix,
+  // whitespace in the middle, truncated hex) before hitting the backend.
+  // Backend mint format is `c402_` + 48 hex chars (24 random bytes hex);
+  // accept anything at least 16 hex chars after the prefix to stay
+  // forward-compatible with future entropy bumps.
+  const claim = args.claim.trim();
+  if (!/^c402_[a-f0-9]{16,}$/i.test(claim)) {
+    process.stderr.write(
+      `error: '${claim.slice(0, 12)}…' does not look like a valid claim code.\n` +
+        'Expected format: c402_<hex>. Ask your operator to copy the code from\n' +
+        'the Agents tab of the dashboard — it is shown once and starts with c402_.\n',
+    );
+    return 2;
+  }
+
   const apiBase = args.apiBase || process.env.CARDS402_BASE_URL || 'https://api.cards402.com/v1';
+
+  // If the machine already has a Cards402 config, warn before
+  // overwriting. A re-onboard is legitimate (rotated key, replaced
+  // agent) but silently stomping the old file orphans the previous
+  // OWS wallet and locks the operator out of any funds sitting in it.
+  const existing = loadCards402Config();
+  if (existing) {
+    process.stderr.write(
+      '⚠ An existing cards402 config was found at ~/.cards402/config.json\n' +
+        `   previous wallet: ${existing.wallet_name ?? '(unknown)'}\n` +
+        `   created_at:      ${existing.created_at ?? '(unknown)'}\n` +
+        '   The old OWS wallet file (if present) is NOT deleted — keep it\n' +
+        '   safe if there are residual funds. Proceeding with the new claim.\n\n',
+    );
+  }
+
   // We can't derive the default wallet name until AFTER the claim is
   // redeemed (we need the label). So we start with the explicit
   // --wallet-name override, and if it wasn't passed we compute a
@@ -140,7 +171,7 @@ export async function onboardCommand(argv: string[]): Promise<number> {
     const res = await fetch(`${apiBase}/agent/claim`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: args.claim }),
+      body: JSON.stringify({ code: claim }),
     });
     const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     if (!res.ok) {
@@ -154,9 +185,29 @@ export async function onboardCommand(argv: string[]): Promise<number> {
       );
       return 1;
     }
+    // Validate the response shape before we persist anything. If the
+    // backend returned something unexpected we'd rather fail loudly
+    // here than write a half-populated config and break the next
+    // command with an obscure undefined error.
+    if (typeof data.api_key !== 'string' || !data.api_key) {
+      process.stderr.write(
+        'error: claim succeeded but the response is missing api_key — aborting.\n' +
+          'This is a backend bug. Report it to api@cards402.com with the response.\n',
+      );
+      return 1;
+    }
+    if (typeof data.api_key_id !== 'string' || !data.api_key_id) {
+      process.stderr.write(
+        'error: claim response missing api_key_id — aborting. Report to api@cards402.com.\n',
+      );
+      return 1;
+    }
     claimResponse = data as unknown as typeof claimResponse;
   } catch (err) {
-    process.stderr.write(`error: network failure during claim: ${String(err)}\n`);
+    // Surface a short message — full err.toString() may include cause
+    // chains with internal URLs or stack frames. Keep stderr clean.
+    const msg = err instanceof Error ? err.message.slice(0, 200) : 'unknown network error';
+    process.stderr.write(`error: network failure during claim: ${msg}\n`);
     return 1;
   }
 
@@ -231,23 +282,51 @@ export async function onboardCommand(argv: string[]): Promise<number> {
     })
     .catch(() => {});
 
-  // Step 6 — print the funding instructions.
+  // Step 6 — print status + next steps. The wording branches on
+  // whether the wallet is already funded (possible on re-onboard) or
+  // still needs a deposit.
+  const xlmNum = parseFloat(balance.xlm);
+  const usdcNum = parseFloat(balance.usdc);
+  const isFunded = xlmNum >= 2;
+
   process.stdout.write('\n');
   process.stdout.write('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
   process.stdout.write(' cards402 agent ready\n');
   process.stdout.write('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
-  process.stdout.write(`  Label:          ${claimResponse.label ?? '(none)'}\n`);
+  process.stdout.write(`  Label:           ${claimResponse.label ?? '(none)'}\n`);
   process.stdout.write(`  Stellar address: ${publicKey}\n`);
-  process.stdout.write(`  XLM balance:    ${balance.xlm}\n`);
-  process.stdout.write(`  USDC balance:   ${balance.usdc}\n`);
+  process.stdout.write(`  XLM balance:     ${balance.xlm}\n`);
+  process.stdout.write(`  USDC balance:    ${balance.usdc}\n`);
   process.stdout.write('\n');
-  process.stdout.write('Ask your operator to send XLM or USDC to the Stellar address above.\n');
-  process.stdout.write(
-    'Once the wallet has funds, call purchaseCardOWS({ walletName }) to buy a card.\n',
-  );
-  process.stdout.write(
-    'The operator will see your setup state update live in the cards402 dashboard.\n',
-  );
+
+  if (isFunded) {
+    // Wallet is already activated + has enough XLM for the base
+    // reserve (possible on re-onboard, or on a bootstrapped-by-hand
+    // account). Skip the "ask your operator to send" line and jump
+    // straight to the purchase command.
+    process.stdout.write('The wallet is funded and ready to buy cards.\n');
+    process.stdout.write('\n');
+    process.stdout.write('  Try a test purchase:\n');
+    process.stdout.write('    npx -y cards402@latest purchase --amount 0.01\n');
+    if (usdcNum > 0) {
+      process.stdout.write('\n');
+      process.stdout.write(`  (USDC balance ${balance.usdc} will be auto-picked for USDC-paid\n`);
+      process.stdout.write('   purchases up to that amount; XLM for anything larger.)\n');
+    }
+  } else {
+    process.stdout.write('Next step: fund the wallet.\n');
+    process.stdout.write('\n');
+    process.stdout.write('  Send to the Stellar address above:\n');
+    process.stdout.write('    • At least 2 XLM to activate the account and cover reserves.\n');
+    process.stdout.write('    • For XLM-paid purchases: enough XLM to cover the card face\n');
+    process.stdout.write('      value at the current XLM/USD rate, plus a safety margin.\n');
+    process.stdout.write('    • For USDC-paid purchases: 2 XLM + the USDC face value.\n');
+    process.stdout.write('\n');
+    process.stdout.write('  Once funded, run:\n');
+    process.stdout.write('    npx -y cards402@latest purchase --amount <USD>\n');
+  }
+  process.stdout.write('\n');
+  process.stdout.write('Your operator sees setup progress live in the cards402 dashboard.\n');
   process.stdout.write('\n');
   return 0;
 }
