@@ -34,6 +34,18 @@ Items that have since shipped during the audit loops:
 The iteration-by-iteration detail is in the commit history; this
 list is the summary for any future session picking up the project.
 
+**Loop 16 note on OpenAPI:** the repo already ships an OpenAPI
+spec at `contract/api/agent-api.openapi.yaml` which I discovered
+in loop 16. It was drifted against the backend in three places
+(webhook payload enum, amount cap, intro copy) and I fixed those
+in loop 16 — but the bigger backlog item is: **wire the spec
+into CI as a contract test against the real backend**. The
+manual drift audits in loops 1–15 caught 32 bugs that an
+OpenAPI-based contract test would have caught automatically
+the same day the drift was introduced. Until that test exists,
+the spec is a snapshot that can itself go stale — which is
+exactly what happened.
+
 ## Core product
 
 ### Cards
