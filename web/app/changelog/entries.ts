@@ -22,6 +22,12 @@ export interface ChangelogEntry {
 export const CHANGELOG_ENTRIES: ChangelogEntry[] = [
   {
     date: '2026-04-14',
+    title: 'New post: claim codes — credentials that never touch the transcript',
+    tags: ['feature'],
+    body: 'Security-architecture post on why Cards402 onboards agents with single-use claim codes instead of raw API keys. The failure mode (keys in LLM chat transcripts), the three options we considered (OAuth, env-only instructions, one-time exchange tokens), why we picked the last one, and what else building the primitive unlocked.',
+  },
+  {
+    date: '2026-04-14',
     title: 'New post: why SSE beats polling for agent-facing APIs',
     tags: ['feature'],
     body: 'Why the Cards402 SDK defaults to Server-Sent Events for order state, why we kept polling as an automatic fallback, and the operational details (keepalive interval, nginx buffering, terminal close) that make SSE reliable in practice when your clients are long-lived processes instead of browsers.',

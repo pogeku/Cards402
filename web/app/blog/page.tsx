@@ -35,6 +35,14 @@ type Post = {
 const PUBLISHED: Post[] = [
   {
     date: '2026-04-14',
+    slug: 'claim-codes-credentials-that-never-touch-the-transcript',
+    title: 'Claim codes: credentials that never touch the transcript',
+    excerpt:
+      "Raw API keys aren't insecure — they're insecure when the operator is going to paste them into an LLM chat. Why Cards402 onboards agents with single-use claim codes, the threat model, and the exchange flow that avoids every credential-in-prompt failure we could think of.",
+    tags: ['security', 'onboarding'],
+  },
+  {
+    date: '2026-04-14',
     slug: 'non-custodial-card-issuance-on-soroban',
     title: 'How we built non-custodial card issuance on Soroban',
     excerpt:
@@ -59,15 +67,7 @@ const PUBLISHED: Post[] = [
   },
 ];
 
-const PIPELINE: Post[] = [
-  {
-    date: 'Coming soon',
-    title: 'Claim codes: credentials that never touch the transcript',
-    excerpt:
-      'Why we chose single-use claim codes instead of raw API keys for agent onboarding, the threat model we were optimising for, and how the exchange flow avoids every credential-in-prompt failure mode we could think of.',
-    tags: ['security'],
-  },
-];
+const PIPELINE: Post[] = [];
 
 export default function BlogIndexPage() {
   return (
@@ -186,96 +186,100 @@ export default function BlogIndexPage() {
         </div>
       </PageSection>
 
-      {/* Pipeline */}
-      <PageSection eyebrow="Pipeline" title="What's on deck.">
-        <div
-          style={{
-            display: 'grid',
-            gap: '0',
-            borderTop: '1px solid var(--border)',
-          }}
-        >
-          {PIPELINE.map((p) => (
-            <article
-              key={p.title}
-              style={{
-                padding: '2rem 0',
-                borderBottom: '1px solid var(--border)',
-                display: 'grid',
-                gridTemplateColumns: 'minmax(110px, 130px) minmax(0, 1fr)',
-                gap: '2rem',
-                alignItems: 'baseline',
-              }}
-              className="blog-pipeline-row"
-            >
-              <div
+      {/* Pipeline — only rendered when there's at least one draft. When
+          every planned post has shipped, omit the section entirely so the
+          page doesn't show an empty "What's on deck" heading. */}
+      {PIPELINE.length > 0 && (
+        <PageSection eyebrow="Pipeline" title="What's on deck.">
+          <div
+            style={{
+              display: 'grid',
+              gap: '0',
+              borderTop: '1px solid var(--border)',
+            }}
+          >
+            {PIPELINE.map((p) => (
+              <article
+                key={p.title}
                 style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: '0.68rem',
-                  color: 'var(--fg-dim)',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.07em',
+                  padding: '2rem 0',
+                  borderBottom: '1px solid var(--border)',
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(110px, 130px) minmax(0, 1fr)',
+                  gap: '2rem',
+                  alignItems: 'baseline',
                 }}
+                className="blog-pipeline-row"
               >
-                {p.date}
-              </div>
-              <div>
-                <h2
-                  style={{
-                    fontFamily: 'var(--font-display)',
-                    fontSize: 'clamp(1.3rem, 2vw + 0.3rem, 1.8rem)',
-                    fontWeight: 500,
-                    color: 'var(--fg)',
-                    margin: '0 0 0.7rem',
-                    letterSpacing: '-0.02em',
-                    lineHeight: 1.15,
-                  }}
-                >
-                  {p.title}
-                </h2>
-                <p
-                  style={{
-                    fontFamily: 'var(--font-body)',
-                    fontSize: '0.9rem',
-                    color: 'var(--fg-muted)',
-                    lineHeight: 1.68,
-                    margin: '0 0 0.85rem',
-                    maxWidth: 620,
-                  }}
-                >
-                  {p.excerpt}
-                </p>
                 <div
                   style={{
-                    display: 'flex',
-                    gap: '0.4rem',
-                    flexWrap: 'wrap',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: '0.68rem',
+                    color: 'var(--fg-dim)',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.07em',
                   }}
                 >
-                  {p.tags.map((t) => (
-                    <span
-                      key={t}
-                      style={{
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: '0.6rem',
-                        padding: '0.2rem 0.55rem',
-                        borderRadius: 999,
-                        color: 'var(--fg-dim)',
-                        background: 'var(--surface)',
-                        border: '1px solid var(--border)',
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.06em',
-                      }}
-                    >
-                      {t}
-                    </span>
-                  ))}
+                  {p.date}
                 </div>
-              </div>
-            </article>
-          ))}
-        </div>
-      </PageSection>
+                <div>
+                  <h2
+                    style={{
+                      fontFamily: 'var(--font-display)',
+                      fontSize: 'clamp(1.3rem, 2vw + 0.3rem, 1.8rem)',
+                      fontWeight: 500,
+                      color: 'var(--fg)',
+                      margin: '0 0 0.7rem',
+                      letterSpacing: '-0.02em',
+                      lineHeight: 1.15,
+                    }}
+                  >
+                    {p.title}
+                  </h2>
+                  <p
+                    style={{
+                      fontFamily: 'var(--font-body)',
+                      fontSize: '0.9rem',
+                      color: 'var(--fg-muted)',
+                      lineHeight: 1.68,
+                      margin: '0 0 0.85rem',
+                      maxWidth: 620,
+                    }}
+                  >
+                    {p.excerpt}
+                  </p>
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: '0.4rem',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    {p.tags.map((t) => (
+                      <span
+                        key={t}
+                        style={{
+                          fontFamily: 'var(--font-mono)',
+                          fontSize: '0.6rem',
+                          padding: '0.2rem 0.55rem',
+                          borderRadius: 999,
+                          color: 'var(--fg-dim)',
+                          background: 'var(--surface)',
+                          border: '1px solid var(--border)',
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.06em',
+                        }}
+                      >
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        </PageSection>
+      )}
 
       {/* Pitch */}
       <section style={{ padding: '3rem 1.35rem 6rem' }}>
