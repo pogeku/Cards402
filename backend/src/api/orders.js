@@ -153,10 +153,20 @@ router.post('/', orderCreateLimiter, async (req, res) => {
       .status(400)
       .json({ error: 'invalid_amount', message: 'amount_usdc must be a positive number' });
   }
-  if (amount > 1000) {
+  // Platform order bounds. Min is $0.01 (smallest USD value the issuer
+  // can represent on a gift card); max is $10,000 (Pathward's absolute
+  // ceiling on a single prepaid card balance). Agents that need more
+  // should issue multiple cards — blast-radius containment is a
+  // feature, not a bug.
+  if (amount < 0.01) {
     return res
       .status(400)
-      .json({ error: 'invalid_amount', message: 'amount_usdc cannot exceed $1000.00' });
+      .json({ error: 'invalid_amount', message: 'amount_usdc must be at least $0.01' });
+  }
+  if (amount > 10000) {
+    return res
+      .status(400)
+      .json({ error: 'invalid_amount', message: 'amount_usdc cannot exceed $10000.00' });
   }
 
   // Validate webhook_url upfront — fail fast rather than storing a bad URL

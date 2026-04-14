@@ -264,7 +264,7 @@ const errors = [
     code: 'invalid_amount',
     status: 400,
     meaning:
-      'amount_usdc is missing, not a positive decimal string, or exceeds the per-order cap of $1,000.00.',
+      'amount_usdc is missing, not a positive decimal string, below $0.01, or above the $10,000.00 per-order ceiling.',
   },
   {
     code: 'invalid_webhook_url',

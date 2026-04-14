@@ -134,12 +134,14 @@ export interface components {
         CreateOrderRequest: {
             /**
              * @description Card value in USD as a positive decimal string, e.g. "10.00".
-             *     Maximum "1000.00" per order — orders above this cap are
-             *     rejected with `invalid_amount`. The cap is platform-level;
-             *     the Pathward-issued card itself can hold up to $10,000.
+             *     Minimum "0.01" and maximum "10000.00" per order — orders
+             *     outside this range are rejected with `invalid_amount`.
+             *     The maximum matches Pathward's per-card balance ceiling.
+             * @example 0.01
              * @example 10.00
              * @example 25.50
              * @example 100.00
+             * @example 10000.00
              */
             amount_usdc: string;
             /**

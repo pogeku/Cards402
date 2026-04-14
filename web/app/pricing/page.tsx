@@ -58,9 +58,9 @@ const FEE_ROWS = [
 ];
 
 const LIMITS = [
-  { label: 'Minimum order', value: '$1.00' },
-  { label: 'Maximum per order', value: '$1,000' },
-  { label: 'Max single transaction', value: '$5,000' },
+  { label: 'Minimum order', value: '$0.01' },
+  { label: 'Maximum per order', value: '$10,000' },
+  { label: 'Max single card transaction', value: '$5,000' },
   { label: 'Maximum card balance', value: '$10,000' },
 ];
 
@@ -86,8 +86,8 @@ const FAQ = [
     a: "If an order fails before the card is issued, the USDC/XLM you paid is automatically refunded to your sender address. Once a card is issued, the funds sit on the card — we can't reverse them, but your agent can spend them.",
   },
   {
-    q: 'What if I need a card larger than $1,000?',
-    a: "Cards402 caps individual card orders at $1,000 USD as a guardrail against agent runaway spend. If you need more than that for a single purchase, issue multiple cards and split the purchase — this also limits your blast radius if one card leaks. Enterprise agents with a sustained need for larger cards can email hello@cards402.com; we'll raise the cap on your key once we understand the use case.",
+    q: 'What are the order size limits?',
+    a: "Cards402 accepts orders between $0.01 and $10,000 per card. The floor exists because the issuer can't represent sub-cent balances; the ceiling is Pathward's per-card balance cap. Inside that range, any amount works — there's no step function or reload fee. If you need an aggregate spend above $10,000 for one agent task, issue multiple cards and split the purchase: it keeps blast radius contained and is usually what an auditor wants to see anyway.",
   },
   {
     q: 'How does Cards402 stay non-custodial if you can refund me?',

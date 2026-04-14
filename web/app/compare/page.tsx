@@ -110,8 +110,8 @@ const ROWS: Row[] = [
   },
   {
     label: 'Maximum per order',
-    cards402: { value: '$1,000', note: 'Platform cap, raisable on request' },
-    corporate: { value: 'Credit-line limit', note: 'Typically $10k+', win: true },
+    cards402: { value: '$10,000', note: "Pathward's per-card balance ceiling" },
+    corporate: { value: 'Credit-line limit', note: 'Typically $10k+' },
     shared: { value: 'Card balance', note: 'Whatever is loaded' },
   },
   {

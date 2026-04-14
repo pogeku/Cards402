@@ -50,4 +50,4 @@ There is no hosted checkout, no webhook endpoint to host, no polling loop.
 - [Company](https://cards402.com/company): Mission, principles, roadmap.
 - [Careers](https://cards402.com/careers): Open roles with published salary bands.
 - [Press](https://cards402.com/press): Media contact, press kit, quick facts.
-- [Affiliate program](https://cards402.com/affiliate): Coming soon — 10% recurring on every referred operator.
+- [Affiliate program](https://cards402.com/affiliate): Coming soon — 20% of card revenue, recurring for the operator's lifetime (30% for the first 20 affiliates).

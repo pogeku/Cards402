@@ -103,15 +103,24 @@ There is **no cash access** — the card cannot be used at ATMs or to get
 cashback. The card is **not for recurring payments** — subscriptions,
 memberships, and rentals are blocked by the issuer.
 
-Maximum per-transaction is $5,000; maximum per day is $5,000; maximum card
-balance is $10,000.
+### Order size limits
+
+cards402 accepts any order from **$0.01 to $10,000** per card. Below the
+floor the issuer can't represent the balance; above the ceiling is
+Pathward's per-card maximum. Need more in aggregate? Issue multiple
+cards — blast-radius containment is why the API works the way it does.
+
+Once the card is issued, Pathward's own rules apply: **max $5,000 per
+transaction**, **max $5,000 per day**, **max $10,000 card balance**,
+no ATM access, no recurring payments.
 
 ## Error handling
 
 Cards402 returns errors as JSON bodies with a stable `error` field. The
 relevant ones for agent logic:
 
-- `invalid_amount` (400) — `amount_usdc` must be a positive decimal string.
+- `invalid_amount` (400) — `amount_usdc` must be a decimal string between
+  `"0.01"` and `"10000.00"`.
 - `spend_limit_exceeded` (403) — you've hit the spend cap on this key.
   Either stop spending or ask the operator to raise the limit.
 - `order_not_found` (404) — the order ID is wrong or belongs to another key.

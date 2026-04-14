@@ -20,8 +20,8 @@ export const metadata: Metadata = {
 
 const PERKS = [
   {
-    title: '10% on every card, forever',
-    body: 'Earn 10% of every card face-value issued by operators you referred, for the full lifetime of their account. No expiring cookies, no 30-day attribution window, no capped earnings.',
+    title: '20% of card revenue, forever',
+    body: 'Earn 20% of the revenue Cards402 makes on every card issued by operators you referred, for the full lifetime of their account. Paid monthly in USDC or XLM, on-chain, auditable. No expiring cookies, no 30-day attribution window, no capped earnings.',
   },
   {
     title: 'Monthly Stellar payouts',
@@ -216,7 +216,7 @@ export default function AffiliatePage() {
                 maxWidth: 560,
               }}
             >
-              First 20 affiliates get a lifetime 15% rate.
+              First 20 affiliates get a lifetime 30% rate.
             </h2>
             <p
               className="type-body"

@@ -277,11 +277,13 @@ async function handlePayment({
     ).run(vccJobId, callbackNonce, new Date().toISOString(), orderId);
 
     // Branch Stellar payment on what the agent paid us:
-    //   - XLM → forward as-is from treasury
-    //   - USDC → atomic PathPaymentStrictReceive (USDC→DEX→XLM→CTX)
-    // order.amount_usdc is the USDC amount the agent paid (the order's
-    // USD face value); it's our sendMax cap on the swap side of the
-    // path payment.
+    //   - XLM → forward as-is from treasury (single-op payment)
+    //   - USDC → two-op atomic tx (PathPaymentStrictSend into treasury
+    //     + plain Payment forwarding the invoice XLM to CTX). See the
+    //     sendUsdcAsXlm header for the 2026-04-14 bug that forced the
+    //     split — CTX's payment watcher ignores path_payment_* ops.
+    // order.amount_usdc is the USDC the agent paid (the order's USD
+    // face value); it's the sendAmount ceiling on the strict-send side.
     await payCtxOrder(paymentUrl, {
       paymentAsset,
       maxUsdc: order.amount_usdc,
