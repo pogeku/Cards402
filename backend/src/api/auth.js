@@ -18,6 +18,7 @@ const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const db = require('../db');
 const { sendLoginCode } = require('../lib/email');
 const { isPlatformOwner } = require('../lib/platform');
+const { recordAudit } = require('../lib/audit');
 
 const router = Router();
 
@@ -275,6 +276,28 @@ router.post('/verify', verifyLimiter, (req, res) => {
   `,
   ).run(uuidv4(), user.id, hashToken(rawToken), sessionExpiresAt);
 
+  // Audit trail for session creation — the single most important
+  // forensic event for insider-threat investigations. Before this,
+  // login success was invisible in audit_log: an attacker who forged
+  // a code or phished an operator could gain a session and ops would
+  // see zero record of it. Now every successful verify writes a row
+  // scoped to the user's dashboard, with the user agent + ip for
+  // device correlation across sessions.
+  recordAudit({
+    dashboardId: dashboard.id,
+    actor: { id: user.id, email: user.email, role: user.role },
+    action: 'auth.session_created',
+    resourceType: 'session',
+    resourceId: user.id,
+    details: {
+      first_login: !user.last_login_at,
+      role: user.role,
+      is_platform_owner: isPlatformOwner(user.email),
+    },
+    ip: req.ip || req.headers?.['x-forwarded-for'] || null,
+    userAgent: req.headers?.['user-agent'] || null,
+  });
+
   res.json({
     token: rawToken,
     user: {
@@ -295,7 +318,33 @@ router.post('/verify', verifyLimiter, (req, res) => {
 router.post('/logout', (req, res) => {
   const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
   if (token) {
+    // Look up the user + dashboard BEFORE deleting the session so the
+    // audit row can be attributed to the right dashboard_id. If the
+    // session is already invalid we skip — no audit row for a no-op
+    // logout.
+    const row = /** @type {any} */ (
+      db
+        .prepare(
+          `SELECT u.id AS user_id, u.email, u.role, d.id AS dashboard_id
+           FROM sessions s
+           JOIN users u ON s.user_id = u.id
+           LEFT JOIN dashboards d ON d.user_id = u.id
+           WHERE s.token_hash = ?`,
+        )
+        .get(hashToken(token))
+    );
     db.prepare(`DELETE FROM sessions WHERE token_hash = ?`).run(hashToken(token));
+    if (row && row.dashboard_id) {
+      recordAudit({
+        dashboardId: row.dashboard_id,
+        actor: { id: row.user_id, email: row.email, role: row.role },
+        action: 'auth.session_deleted',
+        resourceType: 'session',
+        resourceId: row.user_id,
+        ip: req.ip || req.headers?.['x-forwarded-for'] || null,
+        userAgent: req.headers?.['user-agent'] || null,
+      });
+    }
   }
   res.json({ ok: true });
 });

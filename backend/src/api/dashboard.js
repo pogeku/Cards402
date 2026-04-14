@@ -457,9 +457,24 @@ router.post('/api-keys', requirePermission('agent:create'), async (req, res) => 
 
 // PATCH /dashboard/api-keys/:id — update limits/policy
 router.patch('/api-keys/:id', requirePermission('agent:update'), async (req, res) => {
-  const owned = db
-    .prepare(`SELECT id FROM api_keys WHERE id = ? AND dashboard_id = ?`)
-    .get(req.params.id, req.dashboard.id);
+  // Fetch the full prior row so the audit trail can capture before/
+  // after. Without the before-state, an operator changing
+  // spend_limit_usdc from $1000 to $10000 would leave an audit
+  // record that says `{ spend_limit_usdc: "10000" }` — ops can't
+  // tell whether that's a loosening, a tightening, or the same
+  // value being re-saved. Capturing the old row makes
+  // post-incident reconstruction unambiguous.
+  const owned = /** @type {any} */ (
+    db
+      .prepare(
+        `SELECT id, enabled, spend_limit_usdc, default_webhook_url, label,
+                wallet_public_key, policy_daily_limit_usdc,
+                policy_single_tx_limit_usdc, policy_require_approval_above_usdc,
+                policy_allowed_hours, policy_allowed_days
+         FROM api_keys WHERE id = ? AND dashboard_id = ?`,
+      )
+      .get(req.params.id, req.dashboard.id)
+  );
   if (!owned) return res.status(404).json({ error: 'not_found' });
 
   const {
@@ -542,10 +557,17 @@ router.patch('/api-keys/:id', requirePermission('agent:update'), async (req, res
     ...fields,
   });
 
+  // Include the previous values for every field that's actually
+  // changing, so a post-incident forensics run can reconstruct the
+  // exact config transition (not just the new state).
+  const previous = {};
+  for (const k of Object.keys(fields)) {
+    previous[k] = owned[k] ?? null;
+  }
   recordAuditFromReq(req, 'agent.update', {
     resourceType: 'agent',
     resourceId: req.params.id,
-    details: fields,
+    details: { changes: fields, previous },
   });
   res.json({ ok: true });
 });

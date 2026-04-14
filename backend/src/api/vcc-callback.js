@@ -10,6 +10,25 @@ const { verifyVccSignature } = require('../vcc-client');
 const { sealCard } = require('../lib/card-vault');
 const { normalizeCardBrand } = require('../lib/normalize-card');
 const { event: bizEvent } = require('../lib/logger');
+const { recordAudit } = require('../lib/audit');
+
+// Look up the dashboard that owns an order so vcc-callback can write
+// audit rows scoped to it. Returns null if the order has no api_key
+// or the api_key has no dashboard — which shouldn't happen in
+// practice but we defensively log instead of throwing.
+function dashboardIdForOrder(orderId) {
+  const row = /** @type {any} */ (
+    db
+      .prepare(
+        `SELECT k.dashboard_id AS dashboard_id
+         FROM orders o
+         LEFT JOIN api_keys k ON o.api_key_id = k.id
+         WHERE o.id = ?`,
+      )
+      .get(orderId)
+  );
+  return row?.dashboard_id || null;
+}
 
 const router = Router();
 
@@ -176,6 +195,31 @@ router.post('/', (req, res) => {
       payment_asset: order.payment_asset,
       api_key_id: order.api_key_id,
     });
+    // Audit row for the external ingress writing to order state.
+    // VCC callbacks are HMAC-verified but still EXTERNAL — an
+    // attacker with a leaked secret or a MITM'd callback would
+    // otherwise write to orders with zero forensic trail. The
+    // audit row captures the transition, the card brand, and the
+    // amount so post-incident reconstruction can differentiate a
+    // legitimate fulfilment from a replayed callback.
+    const dashId = dashboardIdForOrder(order_id);
+    if (dashId) {
+      recordAudit({
+        dashboardId: dashId,
+        actor: { id: null, email: 'vcc-callback', role: 'system' },
+        action: 'order.fulfilled',
+        resourceType: 'order',
+        resourceId: order_id,
+        details: {
+          amount_usdc: order.amount_usdc,
+          payment_asset: order.payment_asset,
+          card_brand: normalizeCardBrand(card.brand),
+          api_key_id: order.api_key_id,
+        },
+        ip: req.ip || req.headers?.['x-forwarded-for'] || null,
+        userAgent: req.headers?.['user-agent'] || null,
+      });
+    }
 
     // Fire agent delivery webhook. Audit A-33: include amount + payment
     // asset so the agent can reconcile without an extra /v1/orders fetch.
@@ -228,6 +272,27 @@ router.post('/', (req, res) => {
       .run({ id: order_id, error: safeError, now });
     if (claimed.changes === 0) {
       return res.json({ ok: true, note: 'already_terminal_race' });
+    }
+
+    // Audit row for the failed transition — same rationale as the
+    // fulfilled branch above.
+    const dashId = dashboardIdForOrder(order_id);
+    if (dashId) {
+      recordAudit({
+        dashboardId: dashId,
+        actor: { id: null, email: 'vcc-callback', role: 'system' },
+        action: 'order.failed',
+        resourceType: 'order',
+        resourceId: order_id,
+        details: {
+          amount_usdc: order.amount_usdc,
+          payment_asset: order.payment_asset,
+          api_key_id: order.api_key_id,
+          error: safeError,
+        },
+        ip: req.ip || req.headers?.['x-forwarded-for'] || null,
+        userAgent: req.headers?.['user-agent'] || null,
+      });
     }
 
     bizEvent('order.failed', {
