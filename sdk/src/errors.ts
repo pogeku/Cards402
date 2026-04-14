@@ -41,14 +41,17 @@ export class SpendLimitError extends Cards402Error {
   }
 }
 
-/** Too many orders created in the current window (60/hour). */
+/**
+ * Rate limit hit. The backend returns `rate_limit_exceeded` for two
+ * different limits — 60 orders/hour on POST /v1/orders, and 10
+ * requests/second (600/minute) on GET /v1/orders/:id status polling.
+ * Which one fired is in the server's `message` field, not in the
+ * error code, so we forward the message verbatim instead of hardcoding
+ * the wrong explanation.
+ */
 export class RateLimitError extends Cards402Error {
-  constructor() {
-    super(
-      'Rate limit exceeded — maximum 60 orders per hour per API key. Wait before retrying.',
-      'rate_limit_exceeded',
-      429,
-    );
+  constructor(message = 'Rate limit exceeded. Back off and retry.') {
+    super(message, 'rate_limit_exceeded', 429);
     this.name = 'RateLimitError';
     Object.setPrototypeOf(this, new.target.prototype);
   }
@@ -74,9 +77,17 @@ export class PriceUnavailableError extends Cards402Error {
   }
 }
 
-/** amount_usdc was missing, zero, or non-numeric. */
+/**
+ * amount_usdc was missing, zero, non-numeric, or outside the bounds
+ * [0.01, 10000]. The message defaults to the full-range explanation
+ * but is overridden by whatever the backend sent so a call with e.g.
+ * "9.99999999" (too many decimals) gets the specific reason instead
+ * of the generic bounds message.
+ */
 export class InvalidAmountError extends Cards402Error {
-  constructor(message = 'Invalid amount_usdc — must be a positive number string, e.g. "10.00".') {
+  constructor(
+    message = 'Invalid amount_usdc — must be a decimal string between "0.01" and "10000.00" (e.g. "10.00").',
+  ) {
     super(message, 'invalid_amount', 400);
     this.name = 'InvalidAmountError';
     Object.setPrototypeOf(this, new.target.prototype);
@@ -181,7 +192,10 @@ export function parseApiError(status: number, body: Record<string, unknown>): Ca
     case 'spend_limit_exceeded':
       return new SpendLimitError(String(body.limit ?? '?'), String(body.spent ?? '?'));
     case 'rate_limit_exceeded':
-      return new RateLimitError();
+      // Forward the backend message verbatim — the code is shared
+      // between order-creation and polling rate limits, and the
+      // message is the only way to tell them apart.
+      return new RateLimitError(message);
     case 'service_temporarily_unavailable':
       return new ServiceUnavailableError(message);
     case 'price_unavailable':
