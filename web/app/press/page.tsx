@@ -291,7 +291,7 @@ export default function PressPage() {
             maxWidth: 720,
           }}
         >
-          Cards402, the Cards402 wordmark, and the Cards402 mark are trademarks of Cards402 Inc. Use
+          Cards402, the Cards402 wordmark, and the Cards402 mark are trademarks of CTX.com Inc. Use
           them to reference us accurately in editorial contexts — don&apos;t modify, recolour, or
           combine them with other marks.
         </p>

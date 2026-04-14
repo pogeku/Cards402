@@ -22,7 +22,7 @@ export default function PrivacyPage() {
       <LegalBody
         intro={
           <>
-            <strong>Last updated 14 April 2026.</strong> Cards402 is operated by Cards402 Inc. We
+            <strong>Last updated 14 April 2026.</strong> Cards402 is operated by CTX.com Inc. We
             review this page every time we add a new data processor or change retention policy, and
             we publish changes here before they take effect.
           </>
