@@ -11,7 +11,7 @@ const db = require('./db');
 const { log } = require('./lib/logger');
 const auth = require('./middleware/auth');
 const ordersRouter = require('./api/orders');
-const { buildBudget, policyCheck } = require('./api/orders');
+const { buildBudget, policyCheck, orderPollLimiter } = require('./api/orders');
 // Legacy /admin/* router was retired with the ampersand dashboard rewrite.
 // The new /dashboard surface (mounted below) is the canonical operator API
 // and is what /api/admin-proxy on the web app forwards to.
@@ -238,6 +238,20 @@ app.post('/v1/agent/claim', claimLimiter, (req, res) => {
 // cards402.com/status (and status.cards402.com via the proxy rewrite).
 // Aims to be cheap enough to hit every 10–30s without load concerns:
 // all queries are indexed and bounded to time windows.
+//
+// Still wants a per-IP limiter so an attacker can't turn the public
+// /status endpoint into a cheap SQLite thrasher — the handler runs
+// six COUNT/SUM queries on every hit and is unauthenticated. 180/min
+// per IP is ~3 req/s, generous for multi-tab dashboards behind NAT
+// but tight enough to cap a hostile loop.
+const statusLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 180,
+  keyGenerator: (/** @type {any} */ req) => ipKeyGenerator(req),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  handler: (_, res) => res.status(429).json({ error: 'too_many_requests' }),
+});
 
 const PROCESS_STARTED_AT = Date.now();
 
@@ -249,7 +263,7 @@ function sysStateInt(key) {
   return parseInt(row?.value || '0', 10) || 0;
 }
 
-app.get('/status', (req, res) => {
+app.get('/status', statusLimiter, (req, res) => {
   const frozen =
     /** @type {any} */ (db.prepare(`SELECT value FROM system_state WHERE key = 'frozen'`).get())
       ?.value === '1';
@@ -387,7 +401,11 @@ app.use('/v1', auth);
 app.use('/v1/orders', ordersRouter);
 
 // GET /v1/policy/check?amount=X — dry-run policy check without creating an order
-app.get('/v1/policy/check', (req, res) => {
+// Runs a SUM over orders per request, so it needs the same per-key
+// throttle as /v1/orders polling. Before this limiter was added, a
+// compromised key could enumerate the owner's daily spend and bruteforce
+// policy thresholds without burning order-creation budget.
+app.get('/v1/policy/check', orderPollLimiter, (req, res) => {
   const amount = String(req.query.amount || '');
   if (!amount || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
     return res
@@ -400,7 +418,23 @@ app.get('/v1/policy/check', (req, res) => {
 // POST /v1/agent/status — agent reports setup / lifecycle transitions.
 // Drives the live "onboarding state" pill in the dashboards. Idempotent:
 // an agent can POST the same state repeatedly without side-effects.
-app.post('/v1/agent/status', (req, res) => {
+//
+// Every POST emits a bizEvent and fans out an agent_state event on the
+// in-process bus, which the dashboard SSE stream picks up and relays to
+// every connected browser. Without a limiter, an agent stuck in a tight
+// loop (or a compromised key) could flood the bus and 100% the SSE fan-out.
+// 60/min per key is ~20× the real workload — an agent only transitions
+// through ~4 states over onboarding and rarely reports afterwards.
+const agentStatusLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 60,
+  keyGenerator: (/** @type {any} */ req) =>
+    /** @type {any} */ (req).apiKey?.id || ipKeyGenerator(req),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  handler: (_, res) => res.status(429).json({ error: 'too_many_requests' }),
+});
+app.post('/v1/agent/status', agentStatusLimiter, (req, res) => {
   const { emit: emitBusEvent } = require('./lib/event-bus');
   const ALLOWED_STATES = new Set(['initializing', 'awaiting_funding', 'funded']);
   const { state, wallet_public_key, detail } = req.body || {};
@@ -454,7 +488,9 @@ app.post('/v1/agent/status', (req, res) => {
 });
 
 // GET /v1/usage — agent's own spend and order summary
-app.get('/v1/usage', (req, res) => {
+// Runs COUNT + SUM over orders. Same per-key throttle as the rest of
+// the agent read surface.
+app.get('/v1/usage', orderPollLimiter, (req, res) => {
   const counts = db
     .prepare(
       `

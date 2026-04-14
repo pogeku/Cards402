@@ -768,3 +768,8 @@ async function checkSpendAlert(apiKeyId, newAmount) {
 module.exports = router;
 module.exports.buildBudget = buildBudget;
 module.exports.policyCheck = policyCheck;
+// Exported so app.js can reuse the same per-key bucket on the small
+// read endpoints it still owns (/v1/policy/check, /v1/usage). Keeping
+// a single limiter for "agent reads" means one noisy key can't steal
+// its own poll budget by spamming preview endpoints.
+module.exports.orderPollLimiter = orderPollLimiter;
