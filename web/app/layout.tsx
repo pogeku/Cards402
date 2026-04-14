@@ -173,7 +173,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${displayFont.variable} ${bodyFont.variable} ${monoFont.variable}`}>
+    <html
+      lang="en"
+      // Next.js 16: opt in to CSS `scroll-behavior: smooth` while
+      // suppressing it during route transitions. Without this
+      // attribute Next warns on every route change and Chrome can
+      // animate the scroll-to-top on navigation, which looks weird.
+      data-scroll-behavior="smooth"
+      className={`${displayFont.variable} ${bodyFont.variable} ${monoFont.variable}`}
+    >
       <head>
         {/* Structured data — emit as script tags rather than metadata
             so Google picks up both nodes under a single JSON array. */}
