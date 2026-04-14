@@ -194,6 +194,53 @@ this into a real roadmap later.
 - **Internationalisation.** English-only today. Spanish, Portuguese, and
   Japanese would cover most of the agent-developer demand we see.
 
+## Surfaces added during loop iteration 3 (backlog extensions)
+
+### Blog
+
+- **Pagination** on /blog once there are > 10 posts. Sort/filter by
+  tag and paginate at 10 per page.
+- **Related posts** section at the bottom of each post, ranked by
+  shared tags. Trivial once we have > 3 posts.
+- **Post lead images**. The anatomy post is pure text; visual lead
+  images (screenshots, architecture sketches) would make the post
+  cards on /blog much stronger.
+- **Table of contents** inside long blog posts using the same
+  sticky-toc pattern as the legal pages. Only needed > ~1200
+  words, the anatomy post borderline.
+- **Author / team page.** The anatomy post is bylined "Cards402
+  engineering". When real contributors land, wire them to
+  `/team/<handle>` with individual author pages.
+
+### Announcement banner
+
+- **Wire it to remote state.** The banner is currently unmounted —
+  mount it in MarketingChrome with an optional prop controlled by
+  a backend flag so launches can go up without a deploy.
+- **Slot for scheduled announcements** via cron so marketing can
+  schedule a launch banner to appear at a specific time.
+
+### Structured data saturation
+
+- **TechArticle JSON-LD on /docs** (as well as the existing HowTo
+  on /docs/quickstart). Google uses TechArticle as a soft hint for
+  dev-tool documentation pages.
+- **Service JSON-LD on /status** — Schema.org `Service` with a
+  `provider` pointing at the Organization.
+- **AboutPage / ContactPage / PrivacyPage wrappers** on the
+  matching pages. Tiny SEO uplift, zero visual change.
+- **Review / AggregateRating** once we have real testimonials to
+  cite. Don't fake this.
+
+### Pipeline + data
+
+- **Git-driven changelog.** Source CHANGELOG_ENTRIES from the
+  actual git history (filter by conventional-commit type) instead
+  of maintaining it by hand. Keeps page + feed always in sync.
+- **Search over /blog + /docs.** Pagefind builds a static JSON
+  index at build time, then a client-side fuzzy search. No server
+  dependency, works offline, ~20kb gzipped.
+
 ## Surfaces added during loop iteration 2 (backlog extensions)
 
 ### Docs
