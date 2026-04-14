@@ -90,8 +90,30 @@ function buildBudget(apiKey) {
 
 // POST /orders — create order, dispatch to VCC, return payment instructions
 // Supports Idempotency-Key header: same key within 24h returns the original response.
+//
+// Concurrency model: the DB write path runs inside a single synchronous
+// better-sqlite3 transaction (db.transaction). SQLite opens writes with
+// BEGIN IMMEDIATE, which acquires an exclusive write lock for the whole
+// txn — so two concurrent POST /orders on the same api_key serialise on
+// the lock, and the second request sees the first one's committed state
+// when it reads in-flight totals and the daily policy budget.
+//
+// This closes three TOCTOU races the adversarial audit found:
+//
+//   1. spend_limit_usdc — SELECT sum of in-flight + settled, compare to
+//      limit, INSERT new row. Previously a gap between the SELECT and
+//      the INSERT let two concurrent requests both pass the check.
+//   2. policy_daily_limit_usdc — same shape, inside checkPolicy().
+//   3. Idempotency-Key replay — SELECT cached row, INSERT OR IGNORE
+//      after doing the work. Two concurrent requests with the same
+//      key both saw "no cache", both did the work, both wrote orphan
+//      order rows.
+//
+// All async work (assertSafeUrl, usdToXlm) happens BEFORE the txn; the
+// txn is pure DB reads + writes so it can stay synchronous. Side-effect
+// notifications (approval email / Discord ping / spend-alert email)
+// fire AFTER commit out-of-band.
 router.post('/', orderCreateLimiter, async (req, res) => {
-  // ── Idempotency check ───────────────────────────────────────────────────────
   const idempotencyKey = req.headers['idempotency-key'];
   const requestFingerprint = idempotencyKey
     ? crypto
@@ -99,37 +121,6 @@ router.post('/', orderCreateLimiter, async (req, res) => {
         .update(JSON.stringify(req.body, Object.keys(req.body || {}).sort()))
         .digest('hex')
     : null;
-
-  if (idempotencyKey) {
-    const cached = /** @type {any} */ (
-      db
-        .prepare(
-          `SELECT response_status, response_body, request_fingerprint FROM idempotency_keys WHERE key = ? AND api_key_id = ?`,
-        )
-        .get(idempotencyKey, req.apiKey.id)
-    );
-    if (cached) {
-      if (cached.request_fingerprint && cached.request_fingerprint !== requestFingerprint) {
-        // Audit A-8: structured event so idempotency conflicts show up in
-        // metrics. Catches agents that reuse the same key with different
-        // payloads — either a bug or an attempt to bypass dedupe.
-        bizEvent('idempotency.conflict', {
-          api_key_id: req.apiKey.id,
-          idempotency_key: idempotencyKey.slice(0, 16),
-        });
-        return res.status(409).json({
-          error: 'idempotency_conflict',
-          message: 'Idempotency-Key reused with a different request body.',
-        });
-      }
-      bizEvent('idempotency.cache_hit', {
-        api_key_id: req.apiKey.id,
-        idempotency_key: idempotencyKey.slice(0, 16),
-        cached_status: cached.response_status,
-      });
-      return res.status(cached.response_status).json(JSON.parse(cached.response_body));
-    }
-  }
 
   if (isFrozen()) {
     return res.status(503).json({
@@ -195,176 +186,11 @@ router.post('/', orderCreateLimiter, async (req, res) => {
     }
   }
 
-  // Enforce spend limit — count delivered spend AND in-flight orders
-  if (req.apiKey.spend_limit_usdc) {
-    const settled = parseFloat(req.apiKey.total_spent_usdc || '0');
-    const inFlightRow = /** @type {any} */ (
-      db
-        .prepare(
-          `
-      SELECT COALESCE(SUM(CAST(amount_usdc AS REAL)), 0) AS total
-      FROM orders
-      WHERE api_key_id = ? AND status IN ('pending_payment','ordering','refund_pending')
-    `,
-        )
-        .get(req.apiKey.id)
-    );
-    const inFlight = inFlightRow ? parseFloat(inFlightRow.total) : 0;
-    const limit = parseFloat(req.apiKey.spend_limit_usdc);
-    if (settled + inFlight + amount > limit) {
-      return res.status(403).json({
-        error: 'spend_limit_exceeded',
-        limit: req.apiKey.spend_limit_usdc,
-        spent: req.apiKey.total_spent_usdc,
-      });
-    }
-  }
-
-  // Policy engine — evaluates spend controls before any funds move
-  const policyResult = checkPolicy(req.apiKey.id, amount_usdc);
-
-  if (policyResult.decision === 'blocked') {
-    return res.status(403).json({
-      error: 'policy_blocked',
-      rule: policyResult.rule,
-      message: policyResult.reason,
-    });
-  }
-
-  const id = uuidv4();
-
-  // Approval required — create order in awaiting_approval, no VCC job yet
-  if (policyResult.decision === 'pending_approval') {
-    db.prepare(
-      `
-      INSERT INTO orders (id, status, amount_usdc, api_key_id, webhook_url, request_id)
-      VALUES (@id, 'awaiting_approval', @amount_usdc, @api_key_id, @webhook_url, @request_id)
-    `,
-    ).run({
-      id,
-      amount_usdc: String(amount),
-      api_key_id: req.apiKey.id,
-      webhook_url: webhook_url || null,
-      request_id: req.id || null,
-    });
-
-    const approvalId = uuidv4();
-    // Audit A-24: configurable approval TTL. Default 2 hours; operators
-    // can tune via APPROVAL_TTL_MINUTES for long-running review workflows.
-    const approvalTtlMs =
-      Math.max(5, parseInt(process.env.APPROVAL_TTL_MINUTES || '120', 10)) * 60 * 1000;
-    const expiresAt = new Date(Date.now() + approvalTtlMs).toISOString();
-    db.prepare(
-      `
-      INSERT INTO approval_requests (id, api_key_id, order_id, amount_usdc, agent_note, expires_at)
-      VALUES (@id, @api_key_id, @order_id, @amount_usdc, @agent_note, @expires_at)
-    `,
-    ).run({
-      id: approvalId,
-      api_key_id: req.apiKey.id,
-      order_id: id,
-      amount_usdc: String(amount),
-      // Accept only string notes and cap to 1 KB. Without this cap a caller
-      // could POST a multi-MB note and balloon every dashboard read of the
-      // approval_requests table; without the typeof guard an array would
-      // coerce to a comma-joined string that slips past length checks.
-      agent_note:
-        typeof req.body.note === 'string' && req.body.note.length > 0
-          ? req.body.note.slice(0, 1000)
-          : null,
-      expires_at: expiresAt,
-    });
-
-    recordDecision(
-      req.apiKey.id,
-      id,
-      String(amount),
-      'pending_approval',
-      policyResult.rule,
-      policyResult.reason,
-    );
-
-    notifyOwnerApprovalNeeded({
-      approvalId,
-      orderId: id,
-      amountUsdc: amount_usdc,
-      apiKeyId: req.apiKey.id,
-      keyLabel: req.apiKey.label,
-      reason: policyResult.reason,
-    });
-
-    const approvalBody = {
-      order_id: id,
-      phase: 'awaiting_approval',
-      approval_request_id: approvalId,
-      amount_usdc: String(amount),
-      message: policyResult.reason,
-      note: `The account owner has been notified. Poll GET /v1/orders/${id} to check status.`,
-      expires_at: expiresAt,
-    };
-
-    if (idempotencyKey) {
-      db.prepare(
-        `INSERT OR IGNORE INTO idempotency_keys (key, api_key_id, request_fingerprint, response_status, response_body) VALUES (?, ?, ?, ?, ?)`,
-      ).run(idempotencyKey, req.apiKey.id, requestFingerprint, 202, JSON.stringify(approvalBody));
-    }
-
-    return res.status(202).json(approvalBody);
-  }
-
-  function respond(status, body) {
-    if (idempotencyKey) {
-      db.prepare(
-        `INSERT OR IGNORE INTO idempotency_keys (key, api_key_id, request_fingerprint, response_status, response_body) VALUES (?, ?, ?, ?, ?)`,
-      ).run(idempotencyKey, req.apiKey.id, requestFingerprint, status, JSON.stringify(body));
-    }
-    return res.status(status).json(body);
-  }
-
-  // Sandbox mode — return a fake card instantly, skip VCC and Stellar entirely.
-  // F1: even sandbox writes go through sealCard so the storage shape is
-  // uniform with prod and the read path doesn't have to branch.
-  if (req.apiKey.mode === 'sandbox') {
-    const { sealCard } = require('../lib/card-vault');
-    const sealed = sealCard({
-      number: '4111111111111111',
-      cvv: '123',
-      expiry: '12/99',
-      brand: 'Visa',
-    });
-    db.prepare(
-      `
-      INSERT INTO orders (id, status, amount_usdc, api_key_id, webhook_url, metadata, request_id,
-                          card_number, card_cvv, card_expiry, card_brand)
-      VALUES (@id, 'delivered', @amount_usdc, @api_key_id, @webhook_url, @metadata, @request_id,
-              @num, @cvv, @expiry, @brand)
-    `,
-    ).run({
-      id,
-      amount_usdc: String(amount),
-      api_key_id: req.apiKey.id,
-      webhook_url: webhook_url || null,
-      metadata: metadataStr,
-      request_id: req.id || null,
-      num: sealed.number,
-      cvv: sealed.cvv,
-      expiry: sealed.expiry,
-      brand: sealed.brand,
-    });
-
-    const sandboxBody = {
-      order_id: id,
-      status: 'delivered',
-      phase: 'ready',
-      amount_usdc: String(amount),
-      sandbox: true,
-      card: { number: '4111111111111111', cvv: '123', expiry: '12/99', brand: 'Visa' },
-    };
-    return respond(201, sandboxBody);
-  }
-
-  // Build Soroban contract payment instructions — agent pays the contract directly.
-  // The watcher in index.js picks up the payment event and kicks off VCC fulfillment.
+  // ── Async pre-work (must happen BEFORE the db.transaction) ─────────────────
+  // usdToXlm is a Horizon fetch; we resolve it up-front and then let
+  // the synchronous transaction below decide what to do with the
+  // result. If the price oracle is down we simply don't advertise an
+  // XLM payment branch for this order.
   let xlmAmount = null;
   try {
     xlmAmount = await usdToXlm(String(amount));
@@ -372,56 +198,290 @@ router.post('/', orderCreateLimiter, async (req, res) => {
     console.warn(`[orders] XLM price lookup failed: ${err.message}`);
   }
 
+  // Stable USDC issuer for the Soroban payment envelope.
   const USDC_ISSUER =
     process.env.STELLAR_USDC_ISSUER || 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
-  const contractPayment = {
-    type: 'soroban_contract',
-    contract_id: process.env.RECEIVER_CONTRACT_ID,
-    order_id: id,
-    usdc: { amount: String(amount), asset: `USDC:${USDC_ISSUER}` },
-    ...(xlmAmount && { xlm: { amount: xlmAmount } }),
-  };
 
-  db.prepare(
-    `
-    INSERT INTO orders (id, status, amount_usdc, expected_xlm_amount, api_key_id,
-                        webhook_url, metadata, vcc_payment_json, request_id)
-    VALUES (@id, 'pending_payment', @amount_usdc, @expected_xlm_amount, @api_key_id,
-            @webhook_url, @metadata, @vcc_payment_json, @request_id)
-  `,
-  ).run({
-    id,
-    amount_usdc: String(amount),
-    // xlmAmount is the XLM quote embedded in the Soroban payment instructions.
-    // Null if the price oracle was down at create time, in which case we
-    // only accept pay_usdc events for this order — the xlm branch is closed.
-    expected_xlm_amount: xlmAmount || null,
-    api_key_id: req.apiKey.id,
-    webhook_url: webhook_url || null,
-    metadata: metadataStr,
-    vcc_payment_json: JSON.stringify(contractPayment),
-    request_id: req.id || null,
-  });
+  // ── Atomic DB work — closes the spend/policy/idempotency TOCTOUs ───────────
+  //
+  // Returns a discriminated union so all post-commit branching lives
+  // outside the transaction. Anything that needs to be retried without
+  // holding the write lock (HTTP response, outbound notifications,
+  // spend-alert emails) runs AFTER the transaction commits.
+  const txnResult = db.transaction(() => {
+    // Re-check the idempotency cache inside the txn. If another
+    // concurrent request finished and wrote the cache while we were
+    // waiting on the BEGIN IMMEDIATE lock, we see their response here
+    // and return it without double-creating an order.
+    if (idempotencyKey) {
+      const cached = /** @type {any} */ (
+        db
+          .prepare(
+            `SELECT response_status, response_body, request_fingerprint
+             FROM idempotency_keys WHERE key = ? AND api_key_id = ?`,
+          )
+          .get(idempotencyKey, req.apiKey.id)
+      );
+      if (cached) {
+        if (cached.request_fingerprint && cached.request_fingerprint !== requestFingerprint) {
+          return { kind: 'idem_conflict' };
+        }
+        return {
+          kind: 'idem_hit',
+          status: cached.response_status,
+          body: JSON.parse(cached.response_body),
+        };
+      }
+    }
 
-  const freshKey = /** @type {any} */ (
-    db.prepare(`SELECT * FROM api_keys WHERE id = ?`).get(req.apiKey.id)
-  );
-  const budget = buildBudget(freshKey);
+    // Spend-limit check. SELECT + INSERT are now both inside the
+    // same txn, so concurrent writers see each other's in-flight
+    // totals.
+    if (req.apiKey.spend_limit_usdc) {
+      const settled = parseFloat(req.apiKey.total_spent_usdc || '0');
+      const inFlightRow = /** @type {any} */ (
+        db
+          .prepare(
+            `SELECT COALESCE(SUM(CAST(amount_usdc AS REAL)), 0) AS total
+             FROM orders
+             WHERE api_key_id = ? AND status IN ('pending_payment','ordering','refund_pending')`,
+          )
+          .get(req.apiKey.id)
+      );
+      const inFlight = inFlightRow ? parseFloat(inFlightRow.total) : 0;
+      const limit = parseFloat(req.apiKey.spend_limit_usdc);
+      if (settled + inFlight + amount > limit) {
+        return {
+          kind: 'spend_limit_exceeded',
+          limit: req.apiKey.spend_limit_usdc,
+          spent: req.apiKey.total_spent_usdc,
+        };
+      }
+    }
 
-  // Spend alert — notify owner if key is near daily or total limit
-  checkSpendAlert(req.apiKey.id, amount).catch(() => {});
+    // Policy engine — its daily_limit query is now ALSO inside the txn,
+    // so daily_limit can't be breached by concurrent POSTs either.
+    const policyResult = checkPolicy(req.apiKey.id, amount_usdc);
+    if (policyResult.decision === 'blocked') {
+      return {
+        kind: 'policy_blocked',
+        rule: policyResult.rule,
+        message: policyResult.reason,
+      };
+    }
 
-  const responseBody = {
-    order_id: id,
-    status: 'pending_payment',
-    phase: 'awaiting_payment',
-    amount_usdc: String(amount),
-    payment: contractPayment,
-    poll_url: `/v1/orders/${id}`,
-    budget,
-  };
+    const id = uuidv4();
 
-  return respond(201, responseBody);
+    // Approval required branch.
+    if (policyResult.decision === 'pending_approval') {
+      db.prepare(
+        `INSERT INTO orders (id, status, amount_usdc, api_key_id, webhook_url, request_id)
+         VALUES (@id, 'awaiting_approval', @amount_usdc, @api_key_id, @webhook_url, @request_id)`,
+      ).run({
+        id,
+        amount_usdc: String(amount),
+        api_key_id: req.apiKey.id,
+        webhook_url: webhook_url || null,
+        request_id: req.id || null,
+      });
+
+      const approvalId = uuidv4();
+      // Configurable approval TTL. Default 2 hours.
+      const approvalTtlMs =
+        Math.max(5, parseInt(process.env.APPROVAL_TTL_MINUTES || '120', 10)) * 60 * 1000;
+      const expiresAt = new Date(Date.now() + approvalTtlMs).toISOString();
+      db.prepare(
+        `INSERT INTO approval_requests (id, api_key_id, order_id, amount_usdc, agent_note, expires_at)
+         VALUES (@id, @api_key_id, @order_id, @amount_usdc, @agent_note, @expires_at)`,
+      ).run({
+        id: approvalId,
+        api_key_id: req.apiKey.id,
+        order_id: id,
+        amount_usdc: String(amount),
+        agent_note:
+          typeof req.body.note === 'string' && req.body.note.length > 0
+            ? req.body.note.slice(0, 1000)
+            : null,
+        expires_at: expiresAt,
+      });
+
+      recordDecision(
+        req.apiKey.id,
+        id,
+        String(amount),
+        'pending_approval',
+        policyResult.rule,
+        policyResult.reason,
+      );
+
+      const approvalBody = {
+        order_id: id,
+        phase: 'awaiting_approval',
+        approval_request_id: approvalId,
+        amount_usdc: String(amount),
+        message: policyResult.reason,
+        note: `The account owner has been notified. Poll GET /v1/orders/${id} to check status.`,
+        expires_at: expiresAt,
+      };
+
+      if (idempotencyKey) {
+        db.prepare(
+          `INSERT OR IGNORE INTO idempotency_keys
+           (key, api_key_id, request_fingerprint, response_status, response_body)
+           VALUES (?, ?, ?, ?, ?)`,
+        ).run(idempotencyKey, req.apiKey.id, requestFingerprint, 202, JSON.stringify(approvalBody));
+      }
+
+      return {
+        kind: 'approval',
+        status: 202,
+        body: approvalBody,
+        approvalId,
+        id,
+        reason: policyResult.reason,
+      };
+    }
+
+    // Sandbox mode — insert 'delivered' row with sealed fake card.
+    if (req.apiKey.mode === 'sandbox') {
+      const { sealCard } = require('../lib/card-vault');
+      const sealed = sealCard({
+        number: '4111111111111111',
+        cvv: '123',
+        expiry: '12/99',
+        brand: 'Visa',
+      });
+      db.prepare(
+        `INSERT INTO orders (id, status, amount_usdc, api_key_id, webhook_url, metadata, request_id,
+                             card_number, card_cvv, card_expiry, card_brand)
+         VALUES (@id, 'delivered', @amount_usdc, @api_key_id, @webhook_url, @metadata, @request_id,
+                 @num, @cvv, @expiry, @brand)`,
+      ).run({
+        id,
+        amount_usdc: String(amount),
+        api_key_id: req.apiKey.id,
+        webhook_url: webhook_url || null,
+        metadata: metadataStr,
+        request_id: req.id || null,
+        num: sealed.number,
+        cvv: sealed.cvv,
+        expiry: sealed.expiry,
+        brand: sealed.brand,
+      });
+      const sandboxBody = {
+        order_id: id,
+        status: 'delivered',
+        phase: 'ready',
+        amount_usdc: String(amount),
+        sandbox: true,
+        card: { number: '4111111111111111', cvv: '123', expiry: '12/99', brand: 'Visa' },
+      };
+      if (idempotencyKey) {
+        db.prepare(
+          `INSERT OR IGNORE INTO idempotency_keys
+           (key, api_key_id, request_fingerprint, response_status, response_body)
+           VALUES (?, ?, ?, ?, ?)`,
+        ).run(idempotencyKey, req.apiKey.id, requestFingerprint, 201, JSON.stringify(sandboxBody));
+      }
+      return { kind: 'order', status: 201, body: sandboxBody };
+    }
+
+    // Real mode — real Soroban contract payment instructions.
+    const contractPayment = {
+      type: 'soroban_contract',
+      contract_id: process.env.RECEIVER_CONTRACT_ID,
+      order_id: id,
+      usdc: { amount: String(amount), asset: `USDC:${USDC_ISSUER}` },
+      ...(xlmAmount && { xlm: { amount: xlmAmount } }),
+    };
+    db.prepare(
+      `INSERT INTO orders (id, status, amount_usdc, expected_xlm_amount, api_key_id,
+                           webhook_url, metadata, vcc_payment_json, request_id)
+       VALUES (@id, 'pending_payment', @amount_usdc, @expected_xlm_amount, @api_key_id,
+               @webhook_url, @metadata, @vcc_payment_json, @request_id)`,
+    ).run({
+      id,
+      amount_usdc: String(amount),
+      expected_xlm_amount: xlmAmount || null,
+      api_key_id: req.apiKey.id,
+      webhook_url: webhook_url || null,
+      metadata: metadataStr,
+      vcc_payment_json: JSON.stringify(contractPayment),
+      request_id: req.id || null,
+    });
+    const freshKey = /** @type {any} */ (
+      db.prepare(`SELECT * FROM api_keys WHERE id = ?`).get(req.apiKey.id)
+    );
+    const budget = buildBudget(freshKey);
+    const responseBody = {
+      order_id: id,
+      status: 'pending_payment',
+      phase: 'awaiting_payment',
+      amount_usdc: String(amount),
+      payment: contractPayment,
+      poll_url: `/v1/orders/${id}`,
+      budget,
+    };
+    if (idempotencyKey) {
+      db.prepare(
+        `INSERT OR IGNORE INTO idempotency_keys
+         (key, api_key_id, request_fingerprint, response_status, response_body)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).run(idempotencyKey, req.apiKey.id, requestFingerprint, 201, JSON.stringify(responseBody));
+    }
+    return { kind: 'order', status: 201, body: responseBody };
+  })();
+
+  // ── Post-commit dispatch ────────────────────────────────────────────────────
+  switch (txnResult.kind) {
+    case 'idem_conflict':
+      bizEvent('idempotency.conflict', {
+        api_key_id: req.apiKey.id,
+        idempotency_key: idempotencyKey.slice(0, 16),
+      });
+      return res.status(409).json({
+        error: 'idempotency_conflict',
+        message: 'Idempotency-Key reused with a different request body.',
+      });
+    case 'idem_hit':
+      bizEvent('idempotency.cache_hit', {
+        api_key_id: req.apiKey.id,
+        idempotency_key: idempotencyKey.slice(0, 16),
+        cached_status: txnResult.status,
+      });
+      return res.status(txnResult.status).json(txnResult.body);
+    case 'spend_limit_exceeded':
+      return res.status(403).json({
+        error: 'spend_limit_exceeded',
+        limit: txnResult.limit,
+        spent: txnResult.spent,
+      });
+    case 'policy_blocked':
+      return res.status(403).json({
+        error: 'policy_blocked',
+        rule: txnResult.rule,
+        message: txnResult.message,
+      });
+    case 'approval':
+      // Fire the owner notification AFTER commit so the email/Discord
+      // ping doesn't hold the write lock on slow SMTP.
+      notifyOwnerApprovalNeeded({
+        approvalId: txnResult.approvalId,
+        orderId: txnResult.id,
+        amountUsdc: amount_usdc,
+        apiKeyId: req.apiKey.id,
+        keyLabel: req.apiKey.label,
+        reason: txnResult.reason,
+      });
+      return res.status(txnResult.status).json(txnResult.body);
+    case 'order':
+      // Spend alert — notify owner if key is near daily or total limit.
+      checkSpendAlert(req.apiKey.id, amount).catch(() => {});
+      return res.status(txnResult.status).json(txnResult.body);
+    default:
+      // Exhaustiveness check — should never hit.
+      return res.status(500).json({ error: 'internal_error' });
+  }
 });
 
 // GET /orders — list agent's own orders.
