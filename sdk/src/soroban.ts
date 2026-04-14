@@ -163,6 +163,23 @@ export async function submitSorobanTx(tx: Transaction, server: rpc.Server): Prom
   // of a longer wait is much less than the cost of a stranded order.
   // Some stellar-sdk versions can't parse newer Soroban RPC response XDR
   // ("Bad union switch: 4"); when that happens, fall back to Horizon.
+  //
+  // Error-handling contract — changed 2026-04-14 after we shipped a
+  // stranded-order bug where FAILED statuses from getTransaction were
+  // silently caught by the inner try/catch and the loop kept polling
+  // until the deadline, at which point a txHash-attached error was
+  // thrown and purchaseCardOWS fell through to waitForCard on a tx
+  // that had actually failed on-chain. The new rules are:
+  //
+  //   - Any throw whose message starts with "Soroban transaction " is
+  //     one of OUR OWN terminal throws; the catch re-raises it out of
+  //     the while loop unchanged.
+  //   - A `txHash` is only attached to the final timeout error when we
+  //     genuinely believe the tx MAY still land on the ledger later
+  //     (Horizon unreachable). In every other terminal state — tx
+  //     applied and failed, or Horizon confirms the tx never made a
+  //     ledger — we throw a plain Error, which purchaseCardOWS will
+  //     propagate to the caller instead of entering waitForCard.
   const POLL_DEADLINE_MS = 120_000;
   const deadline = Date.now() + POLL_DEADLINE_MS;
   while (Date.now() < deadline) {
@@ -170,10 +187,17 @@ export async function submitSorobanTx(tx: Transaction, server: rpc.Server): Prom
       const status = await server.getTransaction(send.hash);
       if (status.status === 'SUCCESS') return send.hash;
       if (status.status === 'FAILED') {
-        throw new Error(`Soroban transaction ${send.hash} failed: ${status.status}`);
+        throw new Error(`Soroban transaction ${send.hash} failed on-chain`);
       }
-      if (status.status !== 'NOT_FOUND') break;
+      // NOT_FOUND (or any transient non-terminal status): keep polling.
     } catch (pollErr: unknown) {
+      // Re-raise our own terminal throws so they escape the loop.
+      if (
+        pollErr instanceof Error &&
+        pollErr.message.startsWith(`Soroban transaction ${send.hash}`)
+      ) {
+        throw pollErr;
+      }
       // "Bad union switch" = XDR version mismatch between SDK and RPC.
       // The TX was accepted by sendTransaction; confirm via Horizon instead.
       if (String((pollErr as Error)?.message || '').includes('Bad union switch')) {
@@ -182,32 +206,70 @@ export async function submitSorobanTx(tx: Transaction, server: rpc.Server): Prom
           if (horizonResp.ok) {
             const horizonData = (await horizonResp.json()) as { successful: boolean };
             if (horizonData.successful) return send.hash;
+            // Horizon can see it and it failed — terminal, no recovery.
+            throw new Error(`Soroban transaction ${send.hash} failed on-chain (Horizon)`);
           }
-        } catch {
+        } catch (horizonErr) {
+          // Re-raise our own terminal Horizon throws
+          if (
+            horizonErr instanceof Error &&
+            horizonErr.message.startsWith(`Soroban transaction ${send.hash}`)
+          ) {
+            throw horizonErr;
+          }
           /* Horizon unreachable — keep polling Soroban RPC */
         }
       }
+      // Any other poll-layer error: treat as transient, keep polling.
     }
     await new Promise((r) => setTimeout(r, 2000));
   }
 
-  // Last-resort Horizon check before giving up
+  // Deadline reached without a terminal status. Before giving up, ask
+  // Horizon what actually happened to the tx — it's the authoritative
+  // record of what hit a ledger, independent of Soroban RPC's state.
   try {
     const horizonResp = await fetch(`https://horizon.stellar.org/transactions/${send.hash}`);
     if (horizonResp.ok) {
       const horizonData = (await horizonResp.json()) as { successful: boolean };
       if (horizonData.successful) return send.hash;
+      // Tx landed and failed. No recovery path — throw without txHash
+      // so the caller propagates the error instead of waiting on a card
+      // that will never come.
+      throw new Error(
+        `Soroban transaction ${send.hash} applied on-chain but failed — no card will be credited. Retry the purchase.`,
+      );
     }
-  } catch {
-    /* ignore */
+    if (horizonResp.status === 404) {
+      // Tx was accepted by Soroban RPC (we have a hash) but it never
+      // made it into a ledger on Horizon. This is the "network rejected
+      // at apply time" case — e.g., source account sequence drifted,
+      // host function errored before any effects landed. It is NOT
+      // going to "eventually land" — throw without txHash.
+      throw new Error(
+        `Soroban transaction ${send.hash} was accepted by the RPC but never applied on the ledger within ${POLL_DEADLINE_MS / 1000}s — the network rejected it pre-apply. Retry the purchase.`,
+      );
+    }
+  } catch (horizonErr) {
+    // Re-raise our own terminal Horizon throws; swallow network errors.
+    if (
+      horizonErr instanceof Error &&
+      horizonErr.message.startsWith(`Soroban transaction ${send.hash}`)
+    ) {
+      throw horizonErr;
+    }
+    /* Horizon itself is unreachable — fall through to the timeout
+       error below, where we attach txHash as a last-resort safety net.
+       The watcher may still credit the order if the tx eventually
+       lands and Horizon comes back up. */
   }
 
-  // Throw with the hash so the caller can recover if the tx eventually
-  // lands. purchaseCardOWS catches this and proceeds to waitForCard,
-  // which subscribes to the cards402 backend SSE and gets credit from
-  // the contract watcher even if Soroban RPC was slow to confirm.
+  // Soroban RPC never saw a terminal state AND Horizon is unreachable
+  // (or the response was neither 2xx nor 404). We genuinely don't know
+  // whether the tx landed, so attach txHash and let purchaseCardOWS
+  // give the cards402 backend watcher a chance to credit the order.
   const err = new Error(
-    `Soroban transaction ${send.hash} did not finalize within ${POLL_DEADLINE_MS / 1000}s`,
+    `Soroban transaction ${send.hash} did not finalize within ${POLL_DEADLINE_MS / 1000}s and Horizon is unreachable`,
   );
   (err as Error & { txHash?: string }).txHash = send.hash;
   throw err;
