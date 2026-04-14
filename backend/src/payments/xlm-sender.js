@@ -10,8 +10,65 @@ const {
   Operation,
   Asset,
   Memo,
+  StrKey,
 } = require('@stellar/stellar-sdk');
 const { log, event: bizEvent } = require('../lib/logger');
+
+// Memo.text's internal guard accepts 28 bytes (Stellar MEMO_TEXT limit).
+// We check UTF-8 byte length ourselves before calling it so the error
+// message points at the offending memo string rather than the deep SDK
+// internals. Applied uniformly across sendXlm / sendUsdc / sendUsdcAsXlm
+// so memo handling is consistent (adversarial audit F3-xlm-sender).
+function safeMemoText(memo) {
+  if (memo === null || memo === undefined || memo === '') return Memo.none();
+  const s = String(memo);
+  if (Buffer.byteLength(s, 'utf8') > 28) {
+    throw new Error(`Memo exceeds 28-byte Stellar limit: ${s}`);
+  }
+  return Memo.text(s);
+}
+
+// Validate a decimal-string / number amount is finite, positive, and
+// within the 7-decimal Stellar precision window. Callers pass amounts
+// sourced from the payment URL (CTX / VCC) and from order rows — both
+// of which could be corrupt. Without this validation a bad value would
+// only surface as a cryptic Horizon result code after a full round-trip
+// to the network.
+function assertValidStellarAmount(amount, fieldName) {
+  if (amount === null || amount === undefined || amount === '') {
+    throw new Error(`${fieldName}: missing amount`);
+  }
+  const n = Number(amount);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new Error(`${fieldName}: invalid amount '${amount}'`);
+  }
+  // Stellar's max supported amount (max int64 / 10^7) is ~9.22e11. Reject
+  // anything above a sane treasury-scale ceiling as a defense-in-depth
+  // against a compromised upstream returning an astronomical value.
+  if (n > 1_000_000) {
+    throw new Error(`${fieldName}: amount '${amount}' exceeds treasury ceiling`);
+  }
+}
+
+// Optional allowlist for CTX payment destinations. If
+// CTX_DESTINATION_ALLOWLIST is set (comma-separated G-addresses), any
+// payCtxOrder call whose parsed destination is not in the list is
+// rejected before it reaches the Stellar submit path. This is the
+// ops-level kill switch for "VCC is compromised and started issuing
+// invoices pointing at an attacker wallet" — set the env var to the
+// known-good CTX accounts to lock treasury outflows to those routes.
+// Unset = no allowlist check; still falls back to the syntactic
+// StrKey validation below.
+function ctxDestinationAllowlist() {
+  const raw = process.env.CTX_DESTINATION_ALLOWLIST;
+  if (!raw) return null;
+  return new Set(
+    raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+}
 
 const NETWORK = process.env.STELLAR_NETWORK || 'mainnet';
 const HORIZON_URL =
@@ -44,10 +101,10 @@ async function submitWithRetry(buildTx, keypair, maxAttempts = 3) {
 async function sendXlm({ destination, amount, memo }) {
   const secret = process.env.STELLAR_XLM_SECRET;
   if (!secret) throw new Error('STELLAR_XLM_SECRET not set');
-
-  if (memo && Buffer.byteLength(memo, 'utf8') > 28) {
-    throw new Error(`Memo exceeds 28-byte Stellar limit: ${memo}`);
+  if (!StrKey.isValidEd25519PublicKey(destination)) {
+    throw new Error('sendXlm: invalid destination address');
   }
+  assertValidStellarAmount(amount, 'sendXlm');
 
   const keypair = Keypair.fromSecret(secret);
   return submitWithRetry(
@@ -56,7 +113,7 @@ async function sendXlm({ destination, amount, memo }) {
         .addOperation(
           Operation.payment({ destination, asset: Asset.native(), amount: String(amount) }),
         )
-        .addMemo(Memo.text(memo))
+        .addMemo(safeMemoText(memo))
         .setTimeout(120)
         .build(),
     keypair,
@@ -67,6 +124,10 @@ async function sendXlm({ destination, amount, memo }) {
 async function sendUsdc({ destination, amount, memo }) {
   const secret = process.env.STELLAR_XLM_SECRET;
   if (!secret) throw new Error('STELLAR_XLM_SECRET not set');
+  if (!StrKey.isValidEd25519PublicKey(destination)) {
+    throw new Error('sendUsdc: invalid destination address');
+  }
+  assertValidStellarAmount(amount, 'sendUsdc');
 
   const USDC_ISSUER =
     process.env.STELLAR_USDC_ISSUER || 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
@@ -81,7 +142,7 @@ async function sendUsdc({ destination, amount, memo }) {
             amount: String(amount),
           }),
         )
-        .addMemo(memo ? Memo.text(String(memo).slice(0, 28)) : Memo.none())
+        .addMemo(safeMemoText(memo))
         .setTimeout(120)
         .build(),
     keypair,
@@ -152,10 +213,11 @@ async function probeUsdcToXlmPath(destXlm) {
 async function sendUsdcAsXlm({ destination, destXlm, maxUsdc, memo }) {
   const secret = process.env.STELLAR_XLM_SECRET;
   if (!secret) throw new Error('STELLAR_XLM_SECRET not set');
-
-  if (memo && Buffer.byteLength(memo, 'utf8') > 28) {
-    throw new Error(`Memo exceeds 28-byte Stellar limit: ${memo}`);
+  if (!StrKey.isValidEd25519PublicKey(destination)) {
+    throw new Error('sendUsdcAsXlm: invalid destination address');
   }
+  assertValidStellarAmount(destXlm, 'sendUsdcAsXlm.destXlm');
+  assertValidStellarAmount(maxUsdc, 'sendUsdcAsXlm.maxUsdc');
 
   const USDC_ISSUER =
     process.env.STELLAR_USDC_ISSUER || 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
@@ -226,17 +288,29 @@ async function sendUsdcAsXlm({ destination, destXlm, maxUsdc, memo }) {
             amount: forwardAmount,
           }),
         )
-        .addMemo(Memo.text(memo))
+        .addMemo(safeMemoText(memo))
         .setTimeout(120)
         .build(),
     keypair,
   );
 }
 
-// Parse a web+stellar:pay URI (SEP-0007) into { destination, amount, memo }
+// Parse a SEP-0007 stellar pay URI into { destination, amount, memo }.
+// Accepts both `web+stellar:pay?` and `stellar:pay?` — the vcc-client
+// response-shape validator accepts both schemes, so the parser must too
+// or a legitimate invoice URL using the bare scheme would crash here
+// after passing upstream validation.
 function parseStellarPayUri(uri) {
-  const raw = uri.replace('web+stellar:pay?', '');
-  const params = new URLSearchParams(raw);
+  if (typeof uri !== 'string') return { destination: null, amount: null, memo: null };
+  const withoutScheme = uri.replace(/^(web\+)?stellar:pay\?/i, '');
+  if (withoutScheme === uri) {
+    // The replace was a no-op — the URI didn't start with a known
+    // scheme prefix. Returning nulls makes the caller trip the
+    // "Invalid CTX payment URL" branch rather than silently parsing
+    // an unrelated query string.
+    return { destination: null, amount: null, memo: null };
+  }
+  const params = new URLSearchParams(withoutScheme);
   return {
     destination: params.get('destination'),
     amount: params.get('amount'),
@@ -286,8 +360,35 @@ async function payCtxOrder(paymentUrl, opts = {}) {
   const { paymentAsset, maxUsdc } = opts;
   const { destination, amount, memo } = parseStellarPayUri(paymentUrl);
   if (!destination || !amount || !memo) {
-    throw new Error(`Invalid CTX payment URL: ${paymentUrl}`);
+    // Don't echo the raw URL in the error — VCC is the upstream and an
+    // attacker-controlled string shouldn't end up verbatim in logs or
+    // the order error column. A short prefix is enough for ops.
+    throw new Error(`Invalid CTX payment URL: ${String(paymentUrl).slice(0, 32)}…`);
   }
+  // Syntactic G-address check — protects against a malformed or
+  // hostile paymentUrl redirecting treasury funds to "ATTACKER" or
+  // similar. The vcc-client scheme validator only checks the URI
+  // prefix, so this is the first place a bad destination would be
+  // caught without it. Adversarial audit F1-xlm-sender.
+  if (!StrKey.isValidEd25519PublicKey(destination)) {
+    bizEvent('ctx.invalid_destination', {
+      payment_url_prefix: String(paymentUrl).slice(0, 24),
+    });
+    throw new Error('payCtxOrder: invalid destination address');
+  }
+  // Optional allowlist enforcement (F2-xlm-sender). If ops has pinned
+  // CTX_DESTINATION_ALLOWLIST, any destination outside that set is
+  // rejected regardless of what VCC returned — the emergency lockdown
+  // for "VCC is compromised and issuing invoices to an attacker wallet".
+  const allowlist = ctxDestinationAllowlist();
+  if (allowlist && !allowlist.has(destination)) {
+    bizEvent('ctx.destination_not_allowlisted', {
+      destination: maskStellarAddress(destination),
+    });
+    throw new Error('payCtxOrder: destination not in CTX_DESTINATION_ALLOWLIST');
+  }
+  // Reject obviously-wrong amounts before we burn submission fees.
+  assertValidStellarAmount(amount, 'payCtxOrder.amount');
 
   // Accept anything that contains 'usdc' as the USDC branch (legacy rows
   // use literal 'usdc'; newer ones may use 'usdc_soroban' or similar).
