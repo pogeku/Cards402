@@ -580,7 +580,8 @@ Content-Type: application/json
           </Para>
           <CodeBlock label="Shell">
             {`npx cards402 purchase --amount 25
-# optional: --asset usdc  (default: xlm)`}
+# optional: --asset xlm|usdc
+# default is "auto" — picks USDC if the wallet has enough, else XLM`}
           </CodeBlock>
 
           <SubTitle>USDC vs XLM — which to use?</SubTitle>
