@@ -115,9 +115,8 @@ export default function PrivacyPage() {
                 <p>We use the following sub-processors:</p>
                 <ul>
                   <li>
-                    <strong>Pathward, N.A.</strong> — card issuance (via Interactive Communications
-                    International, Inc., doing business as InComm Payments). Receives the order
-                    amount at issuance time.
+                    <strong>Pathward, N.A.</strong> — card issuance. Receives the order amount at
+                    issuance time.
                   </li>
                   <li>
                     <strong>Stellar Development Foundation infrastructure</strong> — the Stellar
@@ -125,7 +124,7 @@ export default function PrivacyPage() {
                     Cards402 does not control this data and cannot delete it.
                   </li>
                   <li>
-                    <strong>Postmark</strong> — transactional email delivery (login codes, order
+                    <strong>Resend</strong> — transactional email delivery (login codes, order
                     notifications). Receives your email address.
                   </li>
                   <li>

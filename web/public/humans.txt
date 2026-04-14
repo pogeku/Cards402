@@ -14,7 +14,6 @@ Location: Remote-first · London HQ
 - Stellar Development Foundation, for a payment network that agents can
   actually settle on.
 - Pathward, N.A., for issuing the cards we sell at face value.
-- InComm Payments, for operating the upstream card programme we plug into.
 - Every customer who shipped an agent on top of this in the first quarter
   and told us what was broken.
 

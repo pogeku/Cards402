@@ -28,7 +28,7 @@ const SESSION_TTL_DAYS = 7;
 // ── Rate limiters ──────────────────────────────────────────────────────────
 //
 // /auth/login — caps how many codes can be minted per IP. Sends an email on
-// every success, so each request has a real cost (Postmark quota +
+// every success, so each request has a real cost (Resend quota +
 // sender-reputation risk if we get flagged for volume). Tight limit, IP-keyed.
 //
 // /auth/verify — two-layer brute-force protection for 6-digit OTP codes

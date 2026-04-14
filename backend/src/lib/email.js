@@ -1,6 +1,6 @@
 // @ts-check
 // Email sender — thin wrapper around nodemailer using SMTP.
-// Works with any SMTP provider: SES (via SMTP endpoint), Postmark, Resend, etc.
+// Works with any SMTP provider: Resend, SES (via SMTP endpoint), etc.
 // Transporter is created lazily so the module can be imported in test environments
 // without SMTP credentials configured.
 //
