@@ -24,7 +24,7 @@ const card = await purchaseCardOWS({
 // { number, cvv, expiry, brand, order_id }`;
 
 const METRICS = [
-  { label: 'Time to card', value: '≈60s', sub: 'pay → PAN' },
+  { label: 'Time to card', value: '≈60s', sub: 'pay → card' },
   { label: 'Network', value: 'Stellar', sub: 'mainnet' },
   { label: 'Custody', value: 'None', sub: 'agent pays direct' },
   { label: 'Pricing', value: 'Face value', sub: 'no fees' },
