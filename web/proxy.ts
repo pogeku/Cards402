@@ -25,6 +25,14 @@ import type { NextRequest } from 'next/server';
 
 const STATUS_HOST = 'status.cards402.com';
 
+// Match /logo.svg, /icon.png, /skill.md, /robots.txt, /sitemap.xml,
+// /humans.txt, /manifest.webmanifest, /.well-known/*, etc. Anything
+// with a dot in the last path segment is a static file that should
+// pass through unchanged; rewriting /logo.svg to /status would return
+// the status page HTML with Content-Type text/html, which the browser
+// can't use as a CSS mask-image → the wordmark disappears.
+const STATIC_FILE_RE = /\.[a-zA-Z0-9]+$/;
+
 export function proxy(request: NextRequest) {
   // Host-based routing for the status subdomain. Next's matcher can
   // filter on host via `has: [{ type: 'host' }]`, but we double-check
@@ -33,10 +41,21 @@ export function proxy(request: NextRequest) {
   const host = request.headers.get('host') || '';
   if (host === STATUS_HOST || host.startsWith(`${STATUS_HOST}:`)) {
     const url = request.nextUrl.clone();
-    // Pass assets through so the rewritten page can hydrate. If we
-    // rewrote _next/static/* to /status the page would render with
-    // no CSS/JS — matcher already excludes these, but belt+braces.
-    if (url.pathname.startsWith('/_next') || url.pathname.startsWith('/api')) {
+    const path = url.pathname;
+    // Pass through:
+    //   - Next asset pipeline (/_next/*)
+    //   - API routes (/api/*)
+    //   - Well-known endpoints (/.well-known/security.txt etc.)
+    //   - Any path whose last segment has a file extension (static
+    //     assets from /public — logo.svg, icon.png, skill.md, ...)
+    // Everything else rewrites to /status so the subdomain is a
+    // dedicated health page regardless of path.
+    if (
+      path.startsWith('/_next') ||
+      path.startsWith('/api') ||
+      path.startsWith('/.well-known') ||
+      STATIC_FILE_RE.test(path)
+    ) {
       return NextResponse.next();
     }
     url.pathname = '/status';
@@ -58,7 +77,18 @@ export const config = {
       // NB: matcher values must be literal strings — Next 16 statically
       // analyses the config at build time and can't follow variable refs.
       // If STATUS_HOST above changes, update this literal too.
-      source: '/((?!_next|api).*)',
+      //
+      // The negative lookahead excludes:
+      //   _next                  → Next asset pipeline
+      //   api                    → API routes
+      //   \.well-known           → security.txt, etc.
+      //   .*\.[a-zA-Z0-9]+$      → any path ending in a file extension,
+      //                            which in Next's flat /public layout
+      //                            catches logo.svg / icon.png / skill.md
+      //                            / robots.txt / humans.txt / sitemap.xml
+      //                            / manifest.webmanifest / favicon.ico
+      // Everything else passes through to the proxy() function above.
+      source: '/((?!_next|api|\\.well-known|.*\\.[a-zA-Z0-9]+$).*)',
       has: [{ type: 'header', key: 'host', value: 'status.cards402.com' }],
     },
   ],

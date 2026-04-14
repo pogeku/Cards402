@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import { Fraunces, IBM_Plex_Sans, IBM_Plex_Mono } from 'next/font/google';
+import { headers } from 'next/headers';
 import { MarketingChrome } from '@/app/components/MarketingChrome';
 import './globals.css';
 
@@ -167,11 +168,23 @@ const jsonLdSite = {
   inLanguage: 'en-GB',
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Suppress marketing chrome on the status.cards402.com subdomain.
+  // The subdomain is a standalone "is the API up" surface — rendering
+  // the marketing nav + footer there would both pollute the page and
+  // create broken navigation links (every /pricing, /docs, /blog etc.
+  // would resolve against the status host and bounce back to /status
+  // via proxy.ts). Detect via the Host header in the root layout so
+  // the decision is server-rendered and doesn't flicker.
+  const hdrs = await headers();
+  const host = hdrs.get('host') || '';
+  const isStatusSubdomain =
+    host === 'status.cards402.com' || host.startsWith('status.cards402.com:');
+
   return (
     <html
       lang="en"
@@ -209,7 +222,7 @@ export default function RootLayout({
           MozOsxFontSmoothing: 'grayscale',
         }}
       >
-        <MarketingChrome>{children}</MarketingChrome>
+        {isStatusSubdomain ? children : <MarketingChrome>{children}</MarketingChrome>}
       </body>
     </html>
   );
