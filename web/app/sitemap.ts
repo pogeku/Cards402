@@ -17,6 +17,7 @@ const ROUTES: Array<{
   { path: '/pricing', changeFrequency: 'monthly', priority: 0.9 },
   { path: '/security', changeFrequency: 'monthly', priority: 0.8 },
   { path: '/status', changeFrequency: 'hourly', priority: 0.75 },
+  { path: '/blog', changeFrequency: 'weekly', priority: 0.75 },
   { path: '/changelog', changeFrequency: 'weekly', priority: 0.7 },
   { path: '/company', changeFrequency: 'monthly', priority: 0.7 },
   { path: '/careers', changeFrequency: 'weekly', priority: 0.7 },

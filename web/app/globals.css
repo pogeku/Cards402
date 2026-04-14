@@ -127,6 +127,10 @@ html {
   text-rendering: optimizeLegibility;
   /* Keep tap-highlights out of mobile nav interactions — dated look. */
   -webkit-tap-highlight-color: transparent;
+  /* Smooth anchor navigation — important for the legal pages with
+     sticky ToCs and the changelog anchor fragments. The reduced-motion
+     query below overrides this to `auto` for users who want it. */
+  scroll-behavior: smooth;
 }
 
 body {
