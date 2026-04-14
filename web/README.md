@@ -17,22 +17,30 @@ npm run lint              # ESLint (run from monorepo root)
 | -------------------------- | --------------- | ----------------------------------------------------- |
 | `NEXT_PUBLIC_API_BASE_URL` | Production only | Backend API base URL, e.g. `https://api.cards402.com` |
 
-In development the admin page defaults to `http://localhost:4000`.
+In development the dashboard defaults to `http://localhost:4000` for its API base.
 
 ## Structure
 
 ```
 app/
-  page.tsx          Marketing landing page
-  docs/page.tsx     API reference docs
-  admin/page.tsx    Internal ops dashboard (protected by email OTP auth)
-  components/       Shared UI components
-  globals.css       Global styles + CSS variables
+  page.tsx             Marketing landing page
+  docs/                HTTP API reference + quickstart
+  dashboard/           Operator dashboard (email OTP auth, redirects to /overview)
+  pricing/ company/    Marketing pages (careers, press, security, etc.)
+  blog/ changelog/     Editorial surface + RSS feed
+  legal/ privacy/ terms/  Legal pages
+  components/          Shared UI components
+  globals.css          Global styles + brand CSS variables
+  layout.tsx           Root layout: fonts, metadata template, JSON-LD
+  sitemap.ts robots.ts manifest.ts opengraph-image.tsx
 public/
-  agents.txt        Machine-readable service description for AI agents
+  skill.md             Agent-facing setup guide
+  llms.txt             Machine-readable service index
+  logo-light.svg       Brand logo (dark-bg variant)
 ```
 
 ## Notes
 
-- The web app uses `next/font/google` (Geist). The build downloads font files from Google Fonts at build time — ensure outbound HTTPS access is available in your build environment.
-- The admin dashboard is not authenticated at the network level; protect `/admin` via Cloudflare Access or similar if exposed publicly.
+- Uses `next/font/google` for Fraunces (display), IBM Plex Sans (body), and IBM Plex Mono (data). The build downloads font files from Google Fonts at build time — ensure outbound HTTPS access is available in your build environment.
+- The dashboard authenticates via email OTP (6-digit code), session cookie is `sameSite: strict`. The marketing surface is fully public.
+- Next.js 16 file conventions are in force: middleware lives in `proxy.ts` at the web root (not `middleware.ts`), and `next/font` is replaced by `next/font/google`/`next/font/local` imports.
