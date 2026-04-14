@@ -85,6 +85,14 @@ const FAQ = [
     q: 'Can I get a refund?',
     a: "If an order fails before the card is issued, the USDC/XLM you paid is automatically refunded to your sender address. Once a card is issued, the funds sit on the card — we can't reverse them, but your agent can spend them.",
   },
+  {
+    q: 'What if I need a card larger than $1,000?',
+    a: "Cards402 caps individual card orders at $1,000 USD as a guardrail against agent runaway spend. If you need more than that for a single purchase, issue multiple cards and split the purchase — this also limits your blast radius if one card leaks. Enterprise agents with a sustained need for larger cards can email hello@cards402.com; we'll raise the cap on your key once we understand the use case.",
+  },
+  {
+    q: 'How does Cards402 stay non-custodial if you can refund me?',
+    a: "Refunds go from the Cards402 treasury wallet, not from a hold on your funds. Your payment already settled to the receiver contract at the time of the order — the refund is a separate outbound Stellar payment that we send you after verifying the order failed. We never take custody of your inbound USDC/XLM and we never promise your funds will be returned if our treasury is drained; the architecture is non-custodial because you can always verify where your funds went on-chain, not because we're holding them for you in escrow.",
+  },
 ];
 
 // FAQPage structured data — Google uses this to surface FAQ rich
