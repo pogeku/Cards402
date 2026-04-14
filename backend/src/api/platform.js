@@ -40,6 +40,20 @@ function capLimit(raw, def = 100, max = 500) {
   return Math.min(n, max);
 }
 
+// Response-size cap on Horizon fetches. An Horizon account response
+// for a normal treasury is ~5–10 KB; outflow pages are ~20–30 KB. A
+// 2 MB ceiling gives comfortable headroom for busy accounts while
+// refusing to buffer a malicious 30 MB blob from a compromised
+// upstream into memory via await res.json(). Beyond 2 MB we abort
+// and return an error so /overview and /treasury stay responsive
+// under adversarial conditions.
+const HORIZON_RESPONSE_MAX_BYTES = 2 * 1024 * 1024;
+
+function isHorizonBodyTooBig(res) {
+  const len = parseInt(res.headers.get('content-length') || '0', 10);
+  return Number.isFinite(len) && len > HORIZON_RESPONSE_MAX_BYTES;
+}
+
 // Live treasury balances via Horizon. Best-effort — if Horizon is
 // unreachable we return nulls so /overview still loads.
 async function fetchTreasuryBalance() {
@@ -58,6 +72,14 @@ async function fetchTreasuryBalance() {
     });
     if (!res.ok) {
       return { public_key: publicKey, xlm: null, usdc: null, error: `horizon http ${res.status}` };
+    }
+    if (isHorizonBodyTooBig(res)) {
+      return {
+        public_key: publicKey,
+        xlm: null,
+        usdc: null,
+        error: 'horizon response too large',
+      };
     }
     const body = /** @type {any} */ (await res.json());
     const balances = body.balances || [];
@@ -344,7 +366,7 @@ router.get('/treasury', async (req, res) => {
     try {
       const url = `${horizon}/accounts/${balance.public_key}/payments?order=desc&limit=20`;
       const r = await fetch(url, { signal: AbortSignal.timeout(5000) });
-      if (r.ok) {
+      if (r.ok && !isHorizonBodyTooBig(r)) {
         const body = /** @type {any} */ (await r.json());
         const records = body?._embedded?.records || [];
         for (const rec of records) {
@@ -432,9 +454,19 @@ router.get('/approvals', (req, res) => {
 });
 
 // ── GET /unmatched-payments ───────────────────────────────────────────────────
+// Explicit column list (not SELECT *) so a future migration that adds
+// a sensitive column to unmatched_payments doesn't automatically leak
+// it through this read endpoint.
 router.get('/unmatched-payments', (req, res) => {
   const rows = /** @type {any[]} */ (
-    db.prepare(`SELECT * FROM unmatched_payments ORDER BY created_at DESC LIMIT 200`).all()
+    db
+      .prepare(
+        `SELECT id, stellar_txid, sender_address, payment_asset, amount_usdc, amount_xlm,
+                claimed_order_id, reason, refund_stellar_txid, created_at
+         FROM unmatched_payments
+         ORDER BY created_at DESC LIMIT 200`,
+      )
+      .all()
   );
   res.json(rows);
 });
