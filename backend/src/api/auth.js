@@ -25,30 +25,46 @@ const CODE_TTL_MINUTES = 15;
 const CODE_MAX_PER_WINDOW = 3;
 const SESSION_TTL_DAYS = 7;
 
-// Adversarial audit F3 — OTP brute-force protection.
+// ── Rate limiters ──────────────────────────────────────────────────────────
 //
-// The login code is 6 digits (10^6 possible values) and the old
-// /auth/verify had no per-IP throttling and no per-email failed-attempt
-// counter, so a 10M-request brute force could have guessed any active
-// code in under an hour. Two layers here:
+// /auth/login — caps how many codes can be minted per IP. Sends an email on
+// every success, so each request has a real cost (Postmark quota +
+// sender-reputation risk if we get flagged for volume). Tight limit, IP-keyed.
 //
-//  1. Per-IP express-rate-limit on /auth/verify: 20 attempts per 10
-//     minutes is well above any legitimate user flow (they type one
-//     code once, maybe retype once if they fat-fingered) while cutting
-//     the keyspace-search rate by ~5 orders of magnitude.
+// /auth/verify — two-layer brute-force protection for 6-digit OTP codes
+// (adversarial audit F3). The inline per-email failed-attempts lockout is
+// the tighter of the two; the IP limiter just keeps distributed guessers
+// from cycling addresses to avoid the per-email ceiling.
 //
-//  2. Per-email failed-attempts lockout on the auth_codes row itself
-//     (see the inline logic in POST /auth/verify). After 5 bad tries,
-//     every active code for the email is marked used, forcing the user
-//     back through /auth/login to mint a fresh one.
+// /auth/me and /auth/logout intentionally bypass these limits — /auth/me
+// is a pure session-read that the dashboard layout calls on every hard
+// refresh, and /auth/logout is an idempotent DELETE that does nothing on
+// a missing-or-stale token. Rate-limiting either would cause legit users
+// on NAT'd networks to collide with each other during normal browsing
+// while giving no real brute-force protection (neither endpoint exposes
+// anything the attacker couldn't already learn).
 const VERIFY_FAILED_ATTEMPT_LIMIT = 5;
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  keyGenerator: (/** @type {any} */ req) => ipKeyGenerator(req),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  handler: (_, res) =>
+    res.status(429).json({
+      error: 'too_many_requests',
+      message: 'Too many login requests from this IP. Try again in a few minutes.',
+    }),
+});
+
 const verifyLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
   limit: 20,
-  keyGenerator: (req) => /** @type {any} */ (ipKeyGenerator)(req),
+  keyGenerator: (/** @type {any} */ req) => ipKeyGenerator(req),
   standardHeaders: 'draft-7',
   legacyHeaders: false,
-  handler: (req, res) =>
+  handler: (_, res) =>
     res.status(429).json({
       error: 'too_many_attempts',
       message: 'Too many verification attempts from this IP. Try again in a few minutes.',
@@ -70,7 +86,7 @@ function normalizeEmail(email) {
 
 // ── POST /auth/login ─────────────────────────────────────────────────────────
 
-router.post('/login', async (req, res) => {
+router.post('/login', loginLimiter, async (req, res) => {
   const { email } = req.body;
   if (!email || typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
     return res

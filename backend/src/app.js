@@ -89,18 +89,14 @@ const adminLimiter = rateLimit({
   handler: (_, res) => res.status(429).json({ error: 'too_many_requests' }),
 });
 
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 10,
-  keyGenerator: (/** @type {any} */ req) => ipKeyGenerator(req),
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  handler: (_, res) =>
-    res.status(429).json({
-      error: 'too_many_requests',
-      message: 'Too many requests. Wait a few minutes and try again.',
-    }),
-});
+// Note: /auth/login and /auth/verify carry their own per-path rate
+// limiters in api/auth.js. We used to mount a blanket `authLimiter`
+// here covering every /auth/* endpoint at 10 req / 15 min / IP, but
+// that also gated /auth/me — the pure session-read the dashboard
+// layout calls on every hard refresh — and produced 429s for users
+// sharing a NAT'd network while doing nothing brute-forceable. The
+// limiters now live inside the auth router so only the mutating
+// endpoints (minting codes, verifying codes) get throttled.
 
 // Audit C-9: API version endpoint for deploy-time compatibility checks.
 const versionLimiter = rateLimit({
@@ -443,7 +439,7 @@ app.get('/v1/usage', (req, res) => {
   });
 });
 
-app.use('/auth', authLimiter, authRouter);
+app.use('/auth', authRouter);
 app.use('/dashboard', adminLimiter, dashboardRouter);
 app.use('/internal', adminLimiter, internalRouter);
 // VCC callback — HMAC-authenticated, no session required.
