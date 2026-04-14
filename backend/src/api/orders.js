@@ -36,6 +36,52 @@ const orderCreateLimiter = rateLimit({
     }),
 });
 
+// Concurrent-stream tracking. Each open SSE connection on
+// /v1/orders/:id/stream or /dashboard/stream increments the relevant
+// bucket; the req.on('close') handler decrements. Two purposes:
+//
+//   1. Cap per-api-key concurrent streams so a hostile or buggy
+//      agent can't open thousands of streams against their own
+//      api key and pin ~5-10KB + two setInterval timers per
+//      connection in memory.
+//   2. Expose `openSSEStreamCount()` to /status so ops can see the
+//      number of live SSE connections at any given moment. Without
+//      this, an accidental stream leak is invisible until the
+//      process starts growing RSS.
+//
+// Map lives at module scope so both /:id/stream (orders router) and
+// /dashboard/stream (dashboard router) can share the same per-key
+// ceiling and the same /status counter.
+const MAX_STREAMS_PER_KEY = parseInt(process.env.MAX_SSE_STREAMS_PER_KEY || '20', 10);
+const MAX_STREAMS_TOTAL = parseInt(process.env.MAX_SSE_STREAMS_TOTAL || '1000', 10);
+const openStreamsByKey = new Map(); // api_key_id → count
+let openStreamsTotal = 0;
+
+function tryAcquireStreamSlot(apiKeyId) {
+  if (openStreamsTotal >= MAX_STREAMS_TOTAL) {
+    return { ok: false, reason: 'server_stream_limit' };
+  }
+  const current = openStreamsByKey.get(apiKeyId) || 0;
+  if (current >= MAX_STREAMS_PER_KEY) {
+    return { ok: false, reason: 'key_stream_limit' };
+  }
+  openStreamsByKey.set(apiKeyId, current + 1);
+  openStreamsTotal += 1;
+  return { ok: true };
+}
+
+function releaseStreamSlot(apiKeyId) {
+  const current = openStreamsByKey.get(apiKeyId) || 0;
+  if (current <= 1) openStreamsByKey.delete(apiKeyId);
+  else openStreamsByKey.set(apiKeyId, current - 1);
+  if (openStreamsTotal > 0) openStreamsTotal -= 1;
+}
+
+// Exported so /status + dashboard.js can read the same counters.
+function openSSEStreamCount() {
+  return { total: openStreamsTotal, unique_keys: openStreamsByKey.size };
+}
+
 // Rate limit status polling — 600/min per API key (10/s, generous but capped)
 const orderPollLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -636,6 +682,22 @@ router.get('/:id/stream', (req, res) => {
     return res.status(404).json({ error: 'order_not_found' });
   }
 
+  // Acquire a concurrent-stream slot before flushing headers. If the
+  // api key is at its MAX_STREAMS_PER_KEY ceiling or the backend is at
+  // its global MAX_STREAMS_TOTAL, reject with 429 so the agent backs
+  // off. A legitimate SDK opens exactly one stream per outstanding
+  // order; hitting this limit means the agent is leaking streams or
+  // trying a DoS.
+  const slot = tryAcquireStreamSlot(keyId);
+  if (!slot.ok) {
+    return res.status(429).json({
+      error: 'too_many_streams',
+      reason: slot.reason,
+      message:
+        'This api key has too many concurrent SSE streams open. Close some before opening more.',
+    });
+  }
+
   res.set({
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache, no-transform',
@@ -658,8 +720,22 @@ router.get('/:id/stream', (req, res) => {
   // Initial state — so reconnects always see current phase on first message.
   lastUpdated = initial.updated_at;
   if (emit(initial)) {
+    releaseStreamSlot(keyId);
     res.end();
     return;
+  }
+
+  // Close-and-cleanup helper. Called from both terminal-state branches
+  // inside the tick and idempotent with the req.on('close') handler —
+  // releasing the stream slot twice would under-count the per-key
+  // total, so we use the `closed` flag as the single source of truth.
+  function closeStream() {
+    if (closed) return;
+    closed = true;
+    clearInterval(tick);
+    clearInterval(keepalive);
+    releaseStreamSlot(keyId);
+    res.end();
   }
 
   const tick = setInterval(() => {
@@ -668,18 +744,12 @@ router.get('/:id/stream', (req, res) => {
       db.prepare(`SELECT * FROM orders WHERE id = ? AND api_key_id = ?`).get(orderId, keyId)
     );
     if (!row) {
-      clearInterval(tick);
-      clearInterval(keepalive);
-      res.end();
+      closeStream();
       return;
     }
     if (row.updated_at !== lastUpdated) {
       lastUpdated = row.updated_at;
-      if (emit(row)) {
-        clearInterval(tick);
-        clearInterval(keepalive);
-        res.end();
-      }
+      if (emit(row)) closeStream();
     }
   }, 500);
 
@@ -689,9 +759,11 @@ router.get('/:id/stream', (req, res) => {
   }, 15000);
 
   req.on('close', () => {
+    if (closed) return; // idempotent — 'close' can fire twice on some clients
     closed = true;
     clearInterval(tick);
     clearInterval(keepalive);
+    releaseStreamSlot(keyId);
   });
 });
 
@@ -843,6 +915,9 @@ async function checkSpendAlert(apiKeyId, newAmount) {
 module.exports = router;
 module.exports.buildBudget = buildBudget;
 module.exports.policyCheck = policyCheck;
+module.exports.openSSEStreamCount = openSSEStreamCount;
+module.exports.tryAcquireStreamSlot = tryAcquireStreamSlot;
+module.exports.releaseStreamSlot = releaseStreamSlot;
 // Exported so app.js can reuse the same per-key bucket on the small
 // read endpoints it still owns (/v1/policy/check, /v1/usage). Keeping
 // a single limiter for "agent reads" means one noisy key can't steal

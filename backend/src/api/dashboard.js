@@ -52,7 +52,21 @@ function shortString(value, max) {
 // their full state on 'refresh' and patch on the typed events.
 router.get('/stream', (req, res) => {
   const { subscribe } = require('../lib/event-bus');
+  const { tryAcquireStreamSlot, releaseStreamSlot } = require('./orders');
   const dashboardId = req.dashboard.id;
+
+  // Concurrent-stream cap — see the matching comment in orders.js.
+  // The stream slot is keyed by dashboard id here (not api key) so
+  // the dashboard and agent ceilings count independently.
+  const slotKey = `dashboard:${dashboardId}`;
+  const slot = tryAcquireStreamSlot(slotKey);
+  if (!slot.ok) {
+    return res.status(429).json({
+      error: 'too_many_streams',
+      reason: slot.reason,
+      message: 'This dashboard has too many concurrent SSE streams open.',
+    });
+  }
 
   // Pre-load the set of api_key_ids this dashboard owns so we can
   // filter events cheaply. Re-read on each event would hammer the DB
@@ -109,9 +123,13 @@ router.get('/stream', (req, res) => {
     res.write(': keepalive\n\n');
   }, 15000);
 
+  let closed = false;
   req.on('close', () => {
+    if (closed) return;
+    closed = true;
     clearInterval(keepalive);
     unsubscribe();
+    releaseStreamSlot(slotKey);
   });
 });
 

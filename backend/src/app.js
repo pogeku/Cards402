@@ -11,7 +11,7 @@ const db = require('./db');
 const { log } = require('./lib/logger');
 const auth = require('./middleware/auth');
 const ordersRouter = require('./api/orders');
-const { buildBudget, policyCheck, orderPollLimiter } = require('./api/orders');
+const { buildBudget, policyCheck, orderPollLimiter, openSSEStreamCount } = require('./api/orders');
 // Legacy /admin/* router was retired with the ampersand dashboard rewrite.
 // The new /dashboard surface (mounted below) is the canonical operator API
 // and is what /api/admin-proxy on the web app forwards to.
@@ -403,6 +403,7 @@ app.get('/status', statusLimiter, (req, res) => {
     webhooks: {
       failed_permanent_24h: webhooksFailedPermanent24h,
     },
+    sse: openSSEStreamCount(),
     process: {
       uptime_seconds: Math.round((Date.now() - PROCESS_STARTED_AT) / 1000),
       started_at: new Date(PROCESS_STARTED_AT).toISOString(),
