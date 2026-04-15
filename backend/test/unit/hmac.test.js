@@ -475,6 +475,243 @@ describe('verifyCallback — edge cases', () => {
   });
 });
 
+// ── F1-hmac: strict digits-only timestamp format ────────────────────────────
+//
+// parseInt('1700000000000abc', 10) used to return 1700000000000 and pass
+// the skew check, while signCallback hashed the full "1700000000000abc"
+// string as the timestamp component. Sign and verify disagreed on the
+// canonical byte form — a latent footgun if a legitimate client library
+// ever forgot to strip whitespace or a locale-formatted number.
+
+describe('F1-hmac: strict digits-only timestamp', () => {
+  it('signCallback rejects a timestamp with trailing garbage', () => {
+    assert.throws(
+      () =>
+        signCallback({
+          secret: SECRET,
+          timestamp: '1700000000000abc',
+          orderId: ORDER_ID,
+          rawBody: BODY,
+        }),
+      /digits-only/,
+    );
+  });
+
+  it('signCallback rejects a timestamp with a decimal point', () => {
+    assert.throws(
+      () =>
+        signCallback({
+          secret: SECRET,
+          timestamp: '1700000000000.5',
+          orderId: ORDER_ID,
+          rawBody: BODY,
+        }),
+      /digits-only/,
+    );
+  });
+
+  it('signCallback rejects a timestamp with surrounding whitespace', () => {
+    assert.throws(
+      () =>
+        signCallback({
+          secret: SECRET,
+          timestamp: '  1700000000000  ',
+          orderId: ORDER_ID,
+          rawBody: BODY,
+        }),
+      /digits-only/,
+    );
+  });
+
+  it('verifyCallback rejects a timestamp with trailing garbage (no skew-check bypass)', () => {
+    // Attacker constructs a header with digits-plus-garbage that would
+    // pass parseInt-based skew but desync the payload byte form.
+    const v = verifyCallback({
+      secret: SECRET,
+      timestamp: `${Date.now()}xyz`,
+      signatureHeader: 'sha256=deadbeef',
+      orderId: ORDER_ID,
+      rawBody: BODY,
+    });
+    assert.equal(v.ok, false);
+    assert.equal(v.reason, 'missing_fields');
+  });
+
+  it('verifyCallback rejects a timestamp with a leading plus sign', () => {
+    // parseInt('+1700000000000') returns 1700000000000 — another source
+    // of sign/verify desync.
+    const v = verifyCallback({
+      secret: SECRET,
+      timestamp: `+${Date.now()}`,
+      signatureHeader: 'sha256=deadbeef',
+      orderId: ORDER_ID,
+      rawBody: BODY,
+    });
+    assert.equal(v.ok, false);
+    assert.equal(v.reason, 'missing_fields');
+  });
+
+  it('accepts a plain digits-only timestamp (regression guard)', () => {
+    const ts = String(Date.now());
+    const sig = signCallback({ secret: SECRET, timestamp: ts, orderId: ORDER_ID, rawBody: BODY });
+    const v = verifyCallback({
+      secret: SECRET,
+      timestamp: ts,
+      signatureHeader: `sha256=${sig}`,
+      orderId: ORDER_ID,
+      rawBody: BODY,
+    });
+    assert.equal(v.ok, true);
+  });
+});
+
+// ── F2-hmac: orderId/nonce canonicalization guard ───────────────────────────
+//
+// The signing payload uses `.` as a component delimiter, so an orderId
+// or nonce containing `.` makes the split ambiguous. Concretely:
+//   sign v3 (orderId="alice", nonce="bob") === sign v2 orderId="alice.bob"
+// — byte-identical payloads, identical HMAC outputs, different semantic
+// meaning. A compromised v2 signer becomes a v3 forgery oracle for any
+// (x, y) pair. cards402 uses UUIDs so no live exploit exists today, but
+// the library has no defense against a future caller with permissive IDs.
+
+describe('F2-hmac: orderId/nonce canonicalization', () => {
+  it('signCallback throws on orderId containing a `.`', () => {
+    assert.throws(
+      () =>
+        signCallback({
+          secret: SECRET,
+          timestamp: '1700000000000',
+          orderId: 'alice.bob',
+          rawBody: BODY,
+        }),
+      /canonicalization/,
+    );
+  });
+
+  it('signCallback throws on nonce containing a `.`', () => {
+    assert.throws(
+      () =>
+        signCallback({
+          secret: SECRET,
+          timestamp: '1700000000000',
+          orderId: ORDER_ID,
+          rawBody: BODY,
+          nonce: 'my.nonce',
+        }),
+      /canonicalization/,
+    );
+  });
+
+  it('signCallback throws on orderId containing CR/LF', () => {
+    assert.throws(
+      () =>
+        signCallback({
+          secret: SECRET,
+          timestamp: '1700000000000',
+          orderId: 'alice\r\nbob',
+          rawBody: BODY,
+        }),
+      /canonicalization/,
+    );
+  });
+
+  it('signCallback throws on nonce containing a NUL byte', () => {
+    assert.throws(
+      () =>
+        signCallback({
+          secret: SECRET,
+          timestamp: '1700000000000',
+          orderId: ORDER_ID,
+          rawBody: BODY,
+          nonce: 'x\x00y',
+        }),
+      /canonicalization/,
+    );
+  });
+
+  it('verifyCallback rejects an orderId containing a `.` as bad_signature', () => {
+    // Does not throw — returns bad_signature so a hostile caller can't
+    // weaponise canonicalization failures into a 500.
+    const ts = String(Date.now());
+    const v = verifyCallback({
+      secret: SECRET,
+      timestamp: ts,
+      signatureHeader: 'sha256=deadbeef',
+      orderId: 'alice.bob',
+      rawBody: BODY,
+    });
+    assert.equal(v.ok, false);
+    assert.equal(v.reason, 'bad_signature');
+  });
+
+  it('verifyCallback rejects a nonce containing a `.` as bad_signature', () => {
+    const ts = String(Date.now());
+    const v = verifyCallback({
+      secret: SECRET,
+      timestamp: ts,
+      signatureHeader: 'sha256=deadbeef',
+      orderId: ORDER_ID,
+      nonce: 'my.nonce',
+      rawBody: BODY,
+    });
+    assert.equal(v.ok, false);
+    assert.equal(v.reason, 'bad_signature');
+  });
+
+  it('documents the canonicalization collision the guard closes', () => {
+    // Without the F2 guard, these two calls produce the SAME HMAC:
+    //
+    //   signV2(orderId="alice.bob", body=B)    -> HMAC("ts.alice.bob.B")
+    //   signV3(orderId="alice", nonce="bob", body=B) -> HMAC("ts.alice.bob.B")
+    //
+    // A compromised or permissive v2 signer (orderId sourced from an
+    // untrusted field) becomes a v3 forgery oracle. The guard now
+    // throws on the v2 side before reaching createHmac. The v3 side
+    // with clean fields still works — canonicalization is only a
+    // problem when the components themselves contain the delimiter.
+    assert.throws(
+      () =>
+        signCallback({
+          secret: SECRET,
+          timestamp: '1700000000000',
+          orderId: 'alice.bob',
+          rawBody: BODY,
+        }),
+      /canonicalization/,
+    );
+    // Positive control: clean v3 still works.
+    const cleanV3 = signCallback({
+      secret: SECRET,
+      timestamp: '1700000000000',
+      orderId: 'alice',
+      nonce: 'bob',
+      rawBody: BODY,
+    });
+    assert.match(cleanV3, /^[0-9a-f]{64}$/);
+  });
+
+  it('accepts UUID orderId and nonce unchanged (regression guard)', () => {
+    const ts = String(Date.now());
+    const sig = signCallback({
+      secret: SECRET,
+      timestamp: ts,
+      orderId: ORDER_ID, // UUID, no dots
+      rawBody: BODY,
+      nonce: 'abcdef-1234-5678',
+    });
+    const v = verifyCallback({
+      secret: SECRET,
+      timestamp: ts,
+      signatureHeader: `sha256=${sig}`,
+      orderId: ORDER_ID,
+      nonce: 'abcdef-1234-5678',
+      rawBody: BODY,
+    });
+    assert.deepEqual(v, { ok: true, version: 3 });
+  });
+});
+
 describe('safeEqHex', () => {
   it('returns true for equal hex strings', () => {
     assert.equal(safeEqHex('deadbeef', 'deadbeef'), true);

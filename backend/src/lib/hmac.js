@@ -31,6 +31,69 @@ const crypto = require('crypto');
 // Default replay-protection window. Callers can override per-call for tests.
 const DEFAULT_SKEW_MS = 10 * 60 * 1000; // 10 min
 
+// F1-hmac (2026-04-15): Strict digits-only timestamp format. parseInt
+// is lax — `parseInt('1700000000000abc', 10)` returns 1700000000000, so
+// the skew check passes while signCallback hashes the full string
+// including the garbage. A legitimate signer never produces such input,
+// but a buggy client library (unstripped whitespace, trailing newline,
+// locale-formatted number with a dot) creates a sig that verifyCallback
+// would reject while the skew check happily accepts it — hard-to-debug
+// asymmetry. Enforcing `^\d+$` locks sign and verify to the same
+// canonical form. Applied at both signCallback (throw) and verifyCallback
+// (missing_fields) so the constraint is symmetric.
+const TIMESTAMP_STRICT = /^\d+$/;
+
+// F2-hmac (2026-04-15): Canonicalization guard for the orderId and
+// nonce fields.
+//
+// The signing payload uses `.` as a component delimiter:
+//   v3: ${ts}.${orderId}.${nonce}.${rawBody}
+//   v2: ${ts}.${orderId}.${rawBody}
+//
+// If any field ITSELF contains a `.`, the split is ambiguous. Concretely:
+// signing v3 for (orderId="alice", nonce="bob") is byte-identical to
+// signing v2 for orderId="alice.bob" over the same body. The HMAC output
+// is the same 64-char hex string for both semantic meanings. A compromised
+// v2 signer (or a signer that accepts operator-chosen orderIds without
+// validation) becomes a v3 forgery oracle: sign v2 with orderId="X.Y",
+// lift the hex, present it as v3 with (orderId="X", nonce="Y"). Today's
+// orderIds and nonces are UUIDs (no dots), so no live exploit exists,
+// but the library has no defense against a future caller with a
+// permissive identifier scheme (slugs, paths, labels, operator-chosen
+// keys). CR/LF and C0 control chars are rejected for the same reason as
+// email header injection: a field value spanning multiple lines is a
+// strong signal of tampering and has no legitimate use.
+const FIELD_UNSAFE = /[.\r\n\x00-\x1f]/;
+
+/**
+ * @param {string} name   Field name, for error message.
+ * @param {string} value  Field value.
+ * @throws if value is missing, non-string, or contains an unsafe char.
+ */
+function assertCanonicalField(name, value) {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`${name} must be a non-empty string`);
+  }
+  if (FIELD_UNSAFE.test(value)) {
+    throw new Error(
+      `${name} must not contain '.', CR, LF, or C0 control chars ` +
+        `(HMAC payload canonicalization — see F2-hmac)`,
+    );
+  }
+}
+
+/**
+ * Verify-time counterpart of assertCanonicalField: returns true if the
+ * field is safe, false otherwise. Callers translate false into a
+ * bad_signature / missing_fields result rather than throwing, so a
+ * hostile caller cannot weaponise canonicalization failures into a
+ * 500 that knocks the handler offline.
+ * @param {string | undefined | null} value
+ */
+function isCanonicalField(value) {
+  return typeof value === 'string' && value.length > 0 && !FIELD_UNSAFE.test(value);
+}
+
 /**
  * Produce the hex HMAC for a callback.
  *
@@ -57,6 +120,15 @@ function signCallback({ secret, timestamp, orderId, rawBody, nonce }) {
   if (!orderId) throw new Error('signCallback: orderId is required');
   if (rawBody === null || rawBody === undefined)
     throw new Error('signCallback: rawBody is required');
+  // F1-hmac: reject non-digit timestamps so sign and verify agree on
+  // the canonical byte form.
+  if (typeof timestamp !== 'string' || !TIMESTAMP_STRICT.test(timestamp)) {
+    throw new Error(`signCallback: timestamp must be digits-only string, got ${typeof timestamp}`);
+  }
+  // F2-hmac: reject orderId/nonce containing the `.` delimiter or
+  // control chars. Prevents HMAC-payload-split canonicalization attacks.
+  assertCanonicalField('orderId', orderId);
+  if (nonce !== undefined) assertCanonicalField('nonce', nonce);
   const payload = nonce
     ? `${timestamp}.${orderId}.${nonce}.${rawBody}`
     : `${timestamp}.${orderId}.${rawBody}`;
@@ -115,6 +187,15 @@ function verifyCallback({
     return { ok: false, reason: 'missing_fields' };
   }
 
+  // F1-hmac: strict digits-only timestamp format. Must come before the
+  // parseInt skew check so non-canonical inputs (e.g. '1700000000000abc',
+  // '  1700000000000  ', '1700000000000.5') are rejected outright rather
+  // than slipping through the skew check while desynchronising the
+  // payload byte form between sign and verify.
+  if (typeof timestamp !== 'string' || !TIMESTAMP_STRICT.test(timestamp)) {
+    return { ok: false, reason: 'missing_fields' };
+  }
+
   const ts = parseInt(timestamp, 10);
   if (!Number.isFinite(ts)) return { ok: false, reason: 'missing_fields' };
   if (Math.abs(now - ts) > maxSkewMs) return { ok: false, reason: 'timestamp_expired' };
@@ -122,6 +203,19 @@ function verifyCallback({
   // Accept either "sha256=<hex>" or "<hex>" for forgiving parsers.
   const provided = String(signatureHeader).replace(/^sha256=/, '');
   if (!/^[0-9a-f]+$/i.test(provided)) return { ok: false, reason: 'bad_signature' };
+
+  // F2-hmac: canonicalization guard on orderId/nonce. Reject any caller
+  // whose fields contain the HMAC payload delimiter or control chars
+  // rather than passing them through to signCallback (which would throw
+  // inside the try/catch and then fall through to v2 anyway). Mapping
+  // to bad_signature is the right verdict: a request that can't even
+  // produce a well-formed signing payload cannot have a valid sig.
+  if (orderId !== undefined && orderId !== null && !isCanonicalField(orderId)) {
+    return { ok: false, reason: 'bad_signature' };
+  }
+  if (nonce !== undefined && nonce !== null && !isCanonicalField(nonce)) {
+    return { ok: false, reason: 'bad_signature' };
+  }
 
   // v3: order_id + nonce in the signing payload. Strongest — per-job scoped.
   if (orderId && nonce) {
