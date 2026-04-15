@@ -225,11 +225,29 @@ async function fireWebhook(url, payload, webhookSecret, _log, context = {}) {
 // REDACTED copy to webhook_queue for retry by jobs.js. The retry
 // handler rehydrates card fields from the sealed card vault before
 // firing, so the queue table never stores PAN/CVV/expiry at rest.
+//
+// Adversarial audit F2-fulfillment (2026-04-15): the webhook_queue
+// INSERT used to run outside its own try/catch. If the INSERT itself
+// failed (disk full, constraint violation, lock contention), the
+// exception bubbled up past enqueueWebhook's outer `try` — and
+// every production caller wraps this function in `.catch(() => {})`
+// to keep a customer webhook failure from breaking the order flow.
+// Net result: the delivery was lost with zero forensic trace.
+//
+// Now: inner try/catch around the INSERT, emit a loud bizEvent on
+// failure so alerting pipelines see it, still swallow after logging
+// so the surrounding order flow still commits.
 async function enqueueWebhook(url, payload, webhookSecret) {
+  let deliveryErr;
   try {
     await fireWebhook(url, payload, webhookSecret, null);
+    return;
   } catch (err) {
-    const nextAttempt = new Date(Date.now() + WEBHOOK_RETRY_DELAYS_MS[0]).toISOString();
+    deliveryErr = err;
+  }
+  const nextAttempt = new Date(Date.now() + WEBHOOK_RETRY_DELAYS_MS[0]).toISOString();
+  const errMessage = /** @type {Error} */ (deliveryErr)?.message || String(deliveryErr);
+  try {
     db.prepare(
       `
       INSERT INTO webhook_queue (id, url, payload, secret, attempts, next_attempt, last_error)
@@ -241,7 +259,17 @@ async function enqueueWebhook(url, payload, webhookSecret) {
       JSON.stringify(redactCardFields(payload)),
       webhookSecret || null,
       nextAttempt,
-      err.message,
+      errMessage,
+    );
+  } catch (insertErr) {
+    bizEvent('webhook.queue_insert_failed', {
+      url,
+      original_delivery_error: errMessage,
+      insert_error: /** @type {Error} */ (insertErr)?.message || String(insertErr),
+    });
+    console.error(
+      `[webhook] failed to persist ${url} to webhook_queue after delivery error — delivery LOST: ` +
+        `original=${errMessage}; insert=${/** @type {Error} */ (insertErr)?.message}`,
     );
   }
 }
@@ -256,6 +284,66 @@ function isValidRefundAmount(amount) {
   if (!/^\d+(\.\d+)?$/.test(s)) return false;
   // Stellar precision is 7 decimal places. Ensure at least one non-zero digit.
   return parseFloat(s) > 0;
+}
+
+// Adversarial audit F1-fulfillment (2026-04-15). xlm-sender's submitWithRetry
+// now annotates submit failures with `stellarStatus` ('not_landed' | 'applied_
+// failed' | 'unknown') and a pre-computed `txHash` (see audit F1-xlm-sender in
+// the previous cycle). A refund tx that might have landed during a lost-
+// response window — stellarStatus='unknown' — is ambiguous: the tx may be on
+// chain, or it may not. The previous catch blocks in scheduleRefund discarded
+// both fields, leaving the order in refund_pending with no on-chain hash for
+// ops to verify against and no structured telemetry for the reconciler.
+//
+// This helper persists whatever forensics we do have:
+//
+//   - If the thrown error carries a txHash (stellarStatus='unknown' or
+//     'applied_failed'), write it to orders.refund_stellar_txid so ops can
+//     check Horizon directly. The order stays in refund_pending — we DO NOT
+//     mark it refunded, because we're not sure the money actually moved.
+//
+//   - Emit a structured bizEvent (refund.send_failed) capturing order_id,
+//     asset, amount, stellarStatus, txHash, and the error message so an
+//     alerting pipeline can page on the must-verify states instead of
+//     burying them in stdout.
+//
+// Legacy errors (no stellarStatus marker — e.g. an SDK throw we never
+// touched) fall through the same code path but with stellarStatus='legacy'
+// so telemetry can distinguish them from the annotated variants.
+function recordRefundSendFailure(orderId, asset, amount, err) {
+  const txHash = /** @type {any} */ (err)?.txHash || null;
+  const stellarStatus = /** @type {any} */ (err)?.stellarStatus || 'legacy';
+  // Only write the hash if we actually have one AND the column is still
+  // null — a partial rollback from a prior attempt shouldn't get
+  // overwritten by a fresh attempt's hash.
+  if (txHash) {
+    db.prepare(
+      `UPDATE orders
+       SET refund_stellar_txid = COALESCE(refund_stellar_txid, @txid),
+           updated_at = @now
+       WHERE id = @id`,
+    ).run({ id: orderId, txid: txHash, now: new Date().toISOString() });
+  }
+  bizEvent('refund.send_failed', {
+    order_id: orderId,
+    asset,
+    amount,
+    stellar_status: stellarStatus,
+    tx_hash: txHash,
+    error: /** @type {Error} */ (err)?.message || String(err),
+  });
+  // Human-readable status tag for the console log so on-call can quickly
+  // tell "must verify on chain" (unknown, applied_failed) from "genuinely
+  // failed, safe to retry" (not_landed, legacy).
+  const reviewTag =
+    stellarStatus === 'unknown' || stellarStatus === 'applied_failed'
+      ? 'VERIFY_ON_CHAIN'
+      : 'SAFE_TO_RETRY';
+  console.log(
+    `[refund] ${orderId}: ${asset} refund failed [${stellarStatus}] [${reviewTag}] txHash=${
+      txHash || 'none'
+    }: ${/** @type {Error} */ (err)?.message} — remains refund_pending`,
+  );
 }
 
 // Refund the payment for an order. Sends USDC or XLM back to the sender address.
@@ -334,9 +422,7 @@ async function scheduleRefund(orderId) {
       ).run({ id: orderId, txid: txHash, now: new Date().toISOString() });
       bizEvent('refund.sent', { order_id: orderId, asset: 'xlm', amount: xlmAmount, txid: txHash });
     } catch (err) {
-      console.log(
-        `[refund] ${orderId}: XLM refund failed: ${err.message} — remains refund_pending`,
-      );
+      recordRefundSendFailure(orderId, 'xlm', xlmAmount, err);
     }
   } else {
     if (!isValidRefundAmount(order.amount_usdc)) {
@@ -361,9 +447,7 @@ async function scheduleRefund(orderId) {
         txid: txHash,
       });
     } catch (err) {
-      console.log(
-        `[refund] ${orderId}: USDC refund failed: ${err.message} — remains refund_pending`,
-      );
+      recordRefundSendFailure(orderId, 'usdc', order.amount_usdc, err);
     }
   }
 }

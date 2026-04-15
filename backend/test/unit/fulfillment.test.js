@@ -177,6 +177,230 @@ describe('scheduleRefund', () => {
   });
 });
 
+// ── F1: refund-send-failure hash capture (audit 2026-04-15) ──────────────
+//
+// xlm-sender's submitWithRetry now annotates thrown errors with
+// stellarStatus ('unknown' | 'applied_failed' | 'not_landed') and a
+// pre-computed txHash. scheduleRefund must persist that forensic data on
+// the order row so ops can verify the on-chain outcome instead of losing
+// it entirely when the refund is ambiguous. These tests pin the contract.
+
+describe('scheduleRefund — F1 stellarStatus + txHash capture', () => {
+  beforeEach(() => {
+    resetDb();
+    xlmSenderMock.sendUsdc = async () => 'refund_usdc_txhash';
+    xlmSenderMock.sendXlm = async () => 'refund_xlm_txhash';
+  });
+
+  function makeAnnotatedError(message, stellarStatus, txHash) {
+    const err = /** @type {any} */ (new Error(message));
+    err.stellarStatus = stellarStatus;
+    err.txHash = txHash;
+    return err;
+  }
+
+  it('USDC refund: unknown network outcome writes txHash but leaves refund_pending', async () => {
+    // The critical safety property: a tx that MIGHT have landed during a
+    // lost-response window must NOT mark the order refunded (that would
+    // let a manual operator retry and double-spend), but MUST record the
+    // hash so an operator can verify via Horizon directly.
+    const AMBIGUOUS_HASH = 'a'.repeat(64);
+    xlmSenderMock.sendUsdc = async () => {
+      throw makeAnnotatedError(
+        'submit network error and Horizon lookup also failed',
+        'unknown',
+        AMBIGUOUS_HASH,
+      );
+    };
+
+    const id = seedOrder({
+      sender_address: 'GREFUND_DEST',
+      payment_asset: 'usdc_soroban',
+      amount_usdc: '10.00',
+    });
+    await scheduleRefund(id);
+
+    const order = getOrder(id);
+    assert.equal(order.status, 'refund_pending', 'must NOT be refunded — outcome is ambiguous');
+    assert.equal(
+      order.refund_stellar_txid,
+      AMBIGUOUS_HASH,
+      'hash must be captured so ops can verify on-chain',
+    );
+  });
+
+  it('XLM refund: applied_failed (tx landed but failed) writes txHash + stays refund_pending', async () => {
+    const FAILED_HASH = 'b'.repeat(64);
+    xlmSenderMock.sendXlm = async () => {
+      throw makeAnnotatedError(
+        'tx applied on-chain but failed (tx_failed)',
+        'applied_failed',
+        FAILED_HASH,
+      );
+    };
+
+    const id = seedOrder({
+      sender_address: 'GREFUND_DEST',
+      payment_asset: 'xlm_soroban',
+      payment_xlm_amount: '50.00',
+    });
+    await scheduleRefund(id);
+
+    const order = getOrder(id);
+    assert.equal(order.status, 'refund_pending');
+    assert.equal(order.refund_stellar_txid, FAILED_HASH);
+  });
+
+  it('USDC refund: not_landed (safe retry) still persists hash for audit trail', async () => {
+    const NOT_LANDED_HASH = 'c'.repeat(64);
+    xlmSenderMock.sendUsdc = async () => {
+      throw makeAnnotatedError(
+        'submit network error and tx not on ledger — safe to retry',
+        'not_landed',
+        NOT_LANDED_HASH,
+      );
+    };
+
+    const id = seedOrder({
+      sender_address: 'GREFUND_DEST',
+      payment_asset: 'usdc_soroban',
+      amount_usdc: '10.00',
+    });
+    await scheduleRefund(id);
+
+    const order = getOrder(id);
+    assert.equal(order.status, 'refund_pending');
+    // Even on 'not_landed' we still save the hash — operators can use it
+    // to confirm the tx really never landed before approving a manual
+    // resend from a fresh account state.
+    assert.equal(order.refund_stellar_txid, NOT_LANDED_HASH);
+  });
+
+  it('legacy error without stellarStatus leaves refund_stellar_txid null', async () => {
+    // The pre-audit error shape — just an Error with a message, no
+    // stellarStatus or txHash. Behaviour must be backwards-compatible:
+    // refund_pending with null txid (no forensic data available).
+    xlmSenderMock.sendUsdc = async () => {
+      throw new Error('Stellar unavailable'); // no markers
+    };
+
+    const id = seedOrder({
+      sender_address: 'GREFUND_DEST',
+      payment_asset: 'usdc_soroban',
+      amount_usdc: '10.00',
+    });
+    await scheduleRefund(id);
+
+    const order = getOrder(id);
+    assert.equal(order.status, 'refund_pending');
+    assert.equal(order.refund_stellar_txid, null);
+  });
+
+  it('preserves a prior refund_stellar_txid if already set (does not overwrite)', async () => {
+    // A second refund attempt (e.g. manual ops re-run after fixing the
+    // underlying issue) must not clobber the forensic hash from the
+    // first attempt. COALESCE in recordRefundSendFailure handles this.
+    const FIRST_HASH = 'f'.repeat(64);
+    const SECOND_HASH = 's'.repeat(64);
+
+    const id = seedOrder({
+      sender_address: 'GREFUND_DEST',
+      payment_asset: 'usdc_soroban',
+      amount_usdc: '10.00',
+    });
+    // Pre-seed the column as if a prior attempt had already failed.
+    db.prepare(`UPDATE orders SET status = 'failed', refund_stellar_txid = ? WHERE id = ?`).run(
+      FIRST_HASH,
+      id,
+    );
+
+    xlmSenderMock.sendUsdc = async () => {
+      throw (() => {
+        const err = /** @type {any} */ (new Error('still unknown'));
+        err.stellarStatus = 'unknown';
+        err.txHash = SECOND_HASH;
+        return err;
+      })();
+    };
+    await scheduleRefund(id);
+
+    const order = getOrder(id);
+    assert.equal(order.status, 'refund_pending');
+    // The original hash must survive.
+    assert.equal(order.refund_stellar_txid, FIRST_HASH);
+  });
+});
+
+// ── F2: enqueueWebhook queue-INSERT fail-loud (audit 2026-04-15) ─────────
+
+describe('enqueueWebhook — F2 queue INSERT fail-loud', () => {
+  beforeEach(() => {
+    resetDb();
+    fetchCalls.length = 0;
+    fetchShouldFail = false;
+    ssrfMock.assertSafeUrl = async () => {};
+  });
+
+  it('swallows the webhook_queue INSERT failure but does not throw to the caller', async () => {
+    // Simulate the pathological case: delivery fails (fetch 500) AND
+    // the webhook_queue INSERT fails too. Pre-F2 this threw from
+    // enqueueWebhook up to the caller, and every production caller
+    // wraps in .catch(() => {}) — so the delivery was silently lost.
+    // Post-F2 the inner try/catch converts the insert failure into a
+    // bizEvent and a return, preserving the order-flow semantics.
+    fetchShouldFail = true;
+
+    // Monkey-patch webhook_queue insert to explode. Save the original
+    // to restore afterwards so other tests aren't affected.
+    const originalPrepare = db.prepare.bind(db);
+    let insertAttempted = false;
+    // @ts-ignore — overriding bound method for the test duration.
+    db.prepare = (sql) => {
+      if (typeof sql === 'string' && /INSERT INTO webhook_queue/i.test(sql)) {
+        insertAttempted = true;
+        return {
+          run: () => {
+            throw new Error('disk full');
+          },
+        };
+      }
+      return originalPrepare(sql);
+    };
+    try {
+      // This MUST NOT throw — pre-F2 it did.
+      await enqueueWebhook(
+        'https://hooks.example.com/order-failed',
+        { order_id: 'abc', status: 'failed' },
+        null,
+      );
+      assert.equal(insertAttempted, true, 'INSERT must have been attempted');
+    } finally {
+      // @ts-ignore — restore.
+      db.prepare = originalPrepare;
+    }
+  });
+
+  it('persists to webhook_queue normally when INSERT works (regression guard for refactor)', async () => {
+    // Make sure the inner try/catch didn't accidentally break the happy
+    // failure-and-queue path — that's still the dominant code path.
+    fetchShouldFail = true;
+    await enqueueWebhook(
+      'https://hooks.example.com/delivered',
+      { order_id: 'xyz', status: 'delivered', card: { number: '4111', cvv: '123' } },
+      'secret-for-retry',
+    );
+    const row = db
+      .prepare(`SELECT * FROM webhook_queue WHERE url = 'https://hooks.example.com/delivered'`)
+      .get();
+    assert.ok(row, 'queue row must exist');
+    assert.equal(row.secret, 'secret-for-retry');
+    // Card fields must be redacted in the at-rest payload.
+    const payload = JSON.parse(row.payload);
+    assert.equal(payload.card.number, null);
+    assert.equal(payload.card.cvv, null);
+  });
+});
+
 // ── fireWebhook ───────────────────────────────────────────────────────────────
 
 describe('fireWebhook', () => {
