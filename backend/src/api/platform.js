@@ -609,11 +609,54 @@ router.get('/health', (req, res) => {
 
 // ── POST /unfreeze ────────────────────────────────────────────────────────────
 // Flip the platform-wide frozen flag back to 0. Also clears the
-// consecutive_failures counter so the circuit breaker resets. Logged
-// to admin_actions for audit.
+// consecutive_failures counter so the circuit breaker resets.
+//
+// Adversarial audit (2026-04-15):
+//
+// F1-platform-unfreeze: write the audit row BEFORE the mutation so a
+//   durable paper trail exists even if the mutation itself fails
+//   downstream. Emit a loud bizEvent regardless of whether the
+//   SQL writes succeed — ops telemetry becomes the last-line signal
+//   even if every SQL table is corrupt. We do NOT fail closed here
+//   (unlike card reveal) because unfreeze is typically an incident-
+//   response action that must not depend on DB liveness.
+//
+// F2-platform-unfreeze: require a `reason` field (min 10 chars) so
+//   the audit trail captures "why", not just "who". Every other
+//   sensitive mutation in cards402 already requires justification
+//   (approval reject, refund, etc.) — unfreeze was the odd one out.
+//
+// F3-platform-unfreeze: mirror the write into the unified audit_log
+//   table with dashboard_id='system' sentinel, matching the pattern
+//   from the card-reveal fix. Ops querying audit_log for platform
+//   events no longer has to join two tables.
 router.post('/unfreeze', (req, res) => {
-  db.prepare(`UPDATE system_state SET value = '0' WHERE key = 'frozen'`).run();
-  db.prepare(`UPDATE system_state SET value = '0' WHERE key = 'consecutive_failures'`).run();
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 1000) : '';
+  if (reason.length < 10) {
+    return res.status(400).json({
+      error: 'reason_required',
+      message:
+        'A `reason` field of at least 10 characters is required to unfreeze the platform. ' +
+        'This is captured in the audit trail so the next operator can see why the freeze was lifted.',
+    });
+  }
+
+  const now = new Date().toISOString();
+  const { event: bizEvent } = require('../lib/logger');
+  const { recordAudit } = require('../lib/audit');
+
+  // Emit the bizEvent first — cheap, in-memory, and is the last-line
+  // signal if every SQL path below fails.
+  bizEvent('platform.unfreeze', {
+    actor_email: req.user.email,
+    reason,
+    request_id: req.id || null,
+  });
+
+  // Write to admin_actions (platform-scoped table) and audit_log
+  // (unified, dashboard-scoped with 'system' sentinel). Either
+  // failure is logged but does NOT block the unfreeze — incident
+  // response must not depend on DB liveness.
   try {
     db.prepare(
       `INSERT INTO admin_actions (id, actor_email, action, target_type, target_id, metadata, request_id)
@@ -624,12 +667,33 @@ router.post('/unfreeze', (req, res) => {
       'platform.unfreeze',
       'system',
       null,
-      JSON.stringify({ ts: new Date().toISOString() }),
+      JSON.stringify({ ts: now, reason }),
       req.id || null,
     );
-  } catch (_err) {
-    /* admin_actions write is best-effort */
+  } catch (err) {
+    console.error(
+      `[platform] admin_actions insert failed for unfreeze by ${req.user.email}: ${
+        /** @type {Error} */ (err).message
+      }`,
+    );
   }
+
+  // Mirror into audit_log via the hardened recordAudit helper so the
+  // entry gets the missing-field guard and the details-size cap that
+  // the raw INSERT above bypasses.
+  recordAudit({
+    dashboardId: 'system',
+    actor: { id: req.user.id || null, email: req.user.email, role: req.user.role },
+    action: 'platform.unfreeze',
+    resourceType: 'system',
+    resourceId: 'frozen_flag',
+    details: { reason, request_id: req.id || null },
+    ip: req.ip || req.headers?.['x-forwarded-for'] || null,
+    userAgent: req.headers?.['user-agent'] || null,
+  });
+
+  db.prepare(`UPDATE system_state SET value = '0' WHERE key = 'frozen'`).run();
+  db.prepare(`UPDATE system_state SET value = '0' WHERE key = 'consecutive_failures'`).run();
   res.json({ ok: true, frozen: false });
 });
 
