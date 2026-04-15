@@ -211,4 +211,82 @@ describe('assertSafeUrl — SSRF protection', () => {
       );
     }
   });
+
+  // ── F1-ssrf (2026-04-15): IPv4-compatible IPv6 range (::/96) ────────────
+  //
+  // The deprecated RFC 4291 §2.5.5.1 form embeds an IPv4 at the low 32
+  // bits WITHOUT the ::ffff: marker — e.g. ::127.0.0.1 or ::7f00:1. The
+  // existing IPv4-mapped handling (`::ffff:*`) only covers the mapped
+  // form; the compatible form fell through every check and returned
+  // "not private". Wholesale-block the /96 subnet.
+
+  it('blocks IPv4-compatible IPv6 dotted form ::127.0.0.1 (F1)', async () => {
+    await assert.rejects(() => assertSafeUrl('http://[::127.0.0.1]/x'), /private IP/);
+  });
+
+  it('blocks IPv4-compatible IPv6 hex form ::7f00:1 (F1)', async () => {
+    await assert.rejects(() => assertSafeUrl('http://[::7f00:1]/x'), /private IP/);
+  });
+
+  it('blocks IPv4-compatible IPv6 middle range ::a00:1 = 10.0.0.1 (F1)', async () => {
+    // Any IPv4-compatible form is in ::/96 so the specific IPv4 doesn't
+    // matter — we block the whole /96 wholesale because it's deprecated.
+    await assert.rejects(() => assertSafeUrl('http://[::a00:1]/x'), /private IP/);
+  });
+
+  it('still allows ::ffff:* (IPv4-mapped) form separately — mapped 8.8.8.8 not private', async () => {
+    // Regression guard: adding ::/96 must NOT affect the ::ffff:*
+    // IPv4-mapped range. An IPv4-mapped public IP (::ffff:8.8.8.8)
+    // should still pass the SSRF check because its embedded IPv4 is
+    // public. The regex fallback in isPrivateIp extracts 8.8.8.8 and
+    // confirms it's not in any blocked IPv4 CIDR.
+    try {
+      await assertSafeUrl('http://[::ffff:8.8.8.8]/x');
+    } catch (err) {
+      assert.ok(
+        !/private IP/.test(err.message),
+        `::ffff:8.8.8.8 should not be classified as private, got: ${err.message}`,
+      );
+    }
+  });
+
+  // ── F2-ssrf (2026-04-15): error path separation ────────────────────────
+  //
+  // The previous code used `err.message.includes('blocked')` to decide
+  // whether to rethrow the original error or wrap it as
+  // "DNS resolution failed". Splitting the DNS try/catch from the
+  // blocklist check removes that substring-matching coupling so both
+  // error classes surface with the right message for the right failure.
+
+  it('surfaces DNS resolution failures with a DNS-prefixed error (F2)', async () => {
+    // A syntactically valid hostname that fails to resolve. The error
+    // message must identify the failure as DNS, not misclassify it as
+    // a private-IP block (which is what the substring-matching approach
+    // would silently get wrong if anyone changed the block message).
+    await assert.rejects(
+      () =>
+        assertSafeUrl(
+          'http://this-hostname-does-not-exist-cards402-ssrf-test-1234567890.invalid/x',
+        ),
+      (err) => {
+        assert.match(err.message, /DNS resolution failed/);
+        assert.doesNotMatch(err.message, /private IP/);
+        return true;
+      },
+    );
+  });
+
+  it('private-IP errors are NOT wrapped as DNS resolution failures (F2)', async () => {
+    // Regression guard: before the restructure, a throw inside the
+    // blocklist loop was caught by the outer catch and filtered via
+    // substring match. Now the block error propagates unchanged.
+    await assert.rejects(
+      () => assertSafeUrl('http://127.0.0.1/x'),
+      (err) => {
+        assert.match(err.message, /private IP/);
+        assert.doesNotMatch(err.message, /DNS resolution failed/);
+        return true;
+      },
+    );
+  });
 });

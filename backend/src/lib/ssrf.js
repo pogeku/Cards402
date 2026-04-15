@@ -68,8 +68,20 @@ blockList.addSubnet('240.0.0.0', 4);
 //                     route to. Example: 64:ff9b::7f00:1 → 127.0.0.1.
 //                     Not deployed on most hosts but present on
 //                     dual-stack networks running NAT64/DNS64.
+// ::/96               IPv4-compatible IPv6 addresses (RFC 4291 §2.5.5.1).
+//                     Deprecated form where an IPv4 is embedded at the
+//                     low 32 bits WITHOUT the ::ffff: marker — e.g.
+//                     ::7f00:1 or ::127.0.0.1. Modern stacks don't
+//                     route these as loopback (unlike the ::ffff:*
+//                     IPv4-mapped form), but older kernels and some
+//                     dual-stack NAT64 paths still process them. The
+//                     regex-based IPv4-mapped fallback in isPrivateIp
+//                     below only catches `::ffff:*`, so this subnet
+//                     is the wholesale block for the compatible form.
+//                     F1-ssrf adversarial audit (2026-04-15).
 blockList.addAddress('::', 'ipv6');
 blockList.addAddress('::1', 'ipv6');
+blockList.addSubnet('::', 96, 'ipv6');
 blockList.addSubnet('fc00::', 7, 'ipv6');
 blockList.addSubnet('fe80::', 10, 'ipv6');
 blockList.addSubnet('ff00::', 8, 'ipv6');
@@ -154,21 +166,39 @@ async function assertSafeUrl(urlString) {
     return null;
   }
 
-  // Resolve DNS and validate every returned address
+  // Resolve DNS. Scope this try/catch ONLY around the lookup call so
+  // the private-IP throw further down can propagate unchanged instead
+  // of routing through a substring-matching rethrow. F2-ssrf adversarial
+  // audit (2026-04-15): the previous structure used
+  //   if (err.message.includes('blocked')) throw err;
+  //   else throw new Error(`DNS resolution failed: ${err.message}`);
+  // which silently misclassified blocked throws if anyone ever edited
+  // the "blocked" error message. Splitting the blocks eliminates the
+  // substring-matching coupling.
+  let addresses;
   try {
     const result = await dns.lookup(hostname, { all: true });
-    const addresses = Array.isArray(result) ? result : [result];
-    for (const { address } of addresses) {
-      if (isPrivateIp(address)) {
-        throw new Error(`Webhook URL resolves to a private IP (${address}) — blocked`);
-      }
-    }
-    // Return the first resolved address so callers can pin the connection
-    return addresses[0] ?? null;
+    addresses = Array.isArray(result) ? result : [result];
   } catch (err) {
-    if (err.message.includes('blocked')) throw err;
     throw new Error(`Webhook URL DNS resolution failed: ${err.message}`);
   }
+
+  // F3-ssrf adversarial audit (2026-04-15): an empty result array must
+  // be an error, not a silent "no private IPs found → approved". In
+  // practice `dns.lookup` throws ENOTFOUND for unresolvable hosts so
+  // this branch is a defensive guard, but a silent approval path would
+  // let a caller proceed to fetch() without having checked anything.
+  if (addresses.length === 0) {
+    throw new Error(`Webhook URL DNS returned no addresses for ${hostname}`);
+  }
+
+  for (const { address } of addresses) {
+    if (isPrivateIp(address)) {
+      throw new Error(`Webhook URL resolves to a private IP (${address}) — blocked`);
+    }
+  }
+  // Return the first resolved address so callers can pin the connection
+  return addresses[0] ?? null;
 }
 
 module.exports = { assertSafeUrl };
