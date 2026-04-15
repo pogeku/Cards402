@@ -158,6 +158,28 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a typeof guard to `decryptToken` so a non-string
   `system_state.value` can't wedge the token path with an opaque
   TypeError. Audit F1/F2/F3-vcc-client.
+- **Payment handler treasury-drain guard + catch-block resilience** —
+  three fixes in the Soroban payment handler that gates the
+  pending_payment → ordering transition. (1) `toStroops('')` returns
+  `0n`, so if `order.amount_usdc` was ever empty (migration, manual
+  UPDATE, schema drift), any positive on-chain payment compared as
+  "overpayment of 0" and the order transitioned to ordering — cards402
+  would then spend treasury to fulfill a $0-quoted order. Added
+  `parseStrictPositiveStroops()` which requires a non-empty digits-
+  only decimal string parsing to a positive stroop value; corrupt rows
+  now route the incoming event to unmatched_payments with
+  reason=corrupt_order and the order stays in pending_payment. (2) The
+  outer fulfillment catch handler used to read `err.message` with no
+  defence — a non-Error thrown value or an Error with a getter-thrown
+  `.message` would crash the catch block itself, skipping the
+  "mark failed + schedule refund" cleanup and leaving the order
+  wedged in ordering status until the reconciler picked it up minutes
+  later. Added `safeErrorMessage()` helper (same pattern as
+  lib/retry.js). (3) USDC overpayment now emits a symmetric
+  `payment.usdc_overpaid` bizEvent — XLM already had
+  `payment.xlm_overpaid` but USDC was silent, so a buggy SDK
+  systematically over-paying would have silently accumulated excess
+  without ops visibility. Audit F1/F2/F3-payment-handler.
 - **Stellar watcher dispatch-retry correctness** — two latent bugs in
   the Soroban payment watcher's poison-pill breakout. (1) The
   per-event retry map used a 1024-entry "LRU" eviction that was

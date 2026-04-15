@@ -24,7 +24,12 @@ const { getInvoice, notifyPaid } = require('./vcc-client');
 // a full patchCache refactor. Same pattern applied in jobs.js.
 const xlmSender = require('./payments/xlm-sender');
 const { scheduleRefund } = require('./fulfillment');
-const { event: bizEvent } = require('./lib/logger');
+// Deferred logger reference so tests can monkey-patch `logger.event`
+// at runtime without having to patchCache before module load. Same
+// pattern used by src/middleware/requireCardReveal.js after the
+// adversarial audit. The call sites below invoke through the module
+// object (`logger.event(...)`) rather than a destructured local.
+const logger = require('./lib/logger');
 const { publicMessage } = require('./lib/sanitize-error');
 
 /**
@@ -53,6 +58,54 @@ function toStroops(s) {
   const paddedFrac = (frac + '0000000').slice(0, 7);
   const value = BigInt(whole || '0') * 10_000_000n + BigInt(paddedFrac || '0');
   return neg ? -value : value;
+}
+
+/**
+ * Parse a decimal-string amount as stroops, enforcing strict positivity.
+ * Returns the BigInt stroops value if the string parses to a positive
+ * number, or null if the string is empty / null / non-numeric / zero /
+ * negative / contains garbage. Used by handlePayment to validate
+ * order.amount_usdc before the comparison — see F2-payment-handler
+ * below for the "corrupt amount becomes treasury drain" scenario.
+ * @param {string|null|undefined} s
+ * @returns {bigint|null}
+ */
+function parseStrictPositiveStroops(s) {
+  if (s === null || s === undefined) return null;
+  if (typeof s !== 'string') return null;
+  const str = s.trim();
+  if (str.length === 0) return null;
+  // Strict: digits, at most one dot, no sign. Reject anything else.
+  if (!/^\d+(\.\d+)?$/.test(str)) return null;
+  try {
+    const v = toStroops(str);
+    return v > 0n ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * F1-payment-handler (2026-04-15): safe error-message extraction.
+ * The outer fulfillment catch handler used to read `err.message` with
+ * no defence — a non-Error thrown value (null, undefined, string, or
+ * an Error with a getter-thrown `.message`) would crash the catch
+ * block itself, skipping the "mark failed + schedule refund" cleanup
+ * and leaving the order wedged in 'ordering' status until the
+ * reconciler picked it up minutes later. Same helper pattern as
+ * lib/retry.js::safeErrorMessage.
+ * @param {unknown} err
+ */
+function safeErrorMessage(err) {
+  if (err === null) return 'null';
+  if (err === undefined) return 'undefined';
+  if (typeof err === 'string') return err;
+  try {
+    if (err instanceof Error && typeof err.message === 'string') return err.message;
+    return String(err);
+  } catch {
+    return '<unstringifiable error>';
+  }
 }
 
 /** @param {bigint} stroops */
@@ -87,7 +140,7 @@ function recordUnmatchedPayment(row) {
       orderId: row.orderId,
       reason: row.reason,
     });
-    bizEvent('payment.unmatched', {
+    logger.event('payment.unmatched', {
       txid: row.txid,
       reason: row.reason,
       order_id: row.orderId,
@@ -154,10 +207,44 @@ async function handlePayment({
   // Overpayment is accepted (agents paying slightly more out of rounding
   // caution is normal) and the excess is recorded for refund bookkeeping.
   // Underpayment and wrong-asset events are routed to unmatched_payments.
+  //
+  // F2-payment-handler (2026-04-15): validate order.amount_usdc before
+  // the comparison. Pre-fix, toStroops('') returned 0n, and any
+  // positive on-chain payment compared as "overpayment of 0" → the
+  // order transitioned to 'ordering' and we spent treasury fulfilling
+  // a $0-quoted order. A corrupted / migration-broken / manually-edited
+  // row with an empty or non-numeric amount_usdc became a treasury
+  // drain vector. Fail closed: any row whose amount_usdc doesn't
+  // strictly parse to a positive stroop value routes the incoming
+  // event to unmatched_payments with reason='corrupt_order' and the
+  // order stays in 'pending_payment' for ops to investigate.
   let excessUsdc = null;
   let excessXlm = null;
   if (paymentAsset === 'usdc_soroban') {
     const expected = order.amount_usdc;
+    const expectedStroops = parseStrictPositiveStroops(expected);
+    if (expectedStroops === null) {
+      console.error(
+        `[payment] order ${orderId.slice(0, 8)} has corrupt amount_usdc=${JSON.stringify(
+          expected,
+        )} — refusing to claim`,
+      );
+      logger.event('payment.corrupt_order_amount', {
+        order_id: orderId,
+        column: 'amount_usdc',
+        raw_value: String(expected),
+      });
+      recordUnmatchedPayment({
+        txid,
+        senderAddress,
+        paymentAsset,
+        amountUsdc,
+        amountXlm,
+        orderId,
+        reason: 'corrupt_order',
+      });
+      return;
+    }
     const cmp = compareDecimal(amountUsdc, expected);
     if (cmp < 0) {
       recordUnmatchedPayment({
@@ -174,6 +261,16 @@ async function handlePayment({
     if (cmp > 0) {
       const excess = toStroops(amountUsdc) - toStroops(expected);
       excessUsdc = stroopsToDecimal(excess);
+      // F3-payment-handler: symmetric overpayment signal. XLM already
+      // emitted payment.xlm_overpaid — USDC was silent despite the
+      // identical "buggy SDK over-paying" failure mode.
+      logger.event('payment.usdc_overpaid', {
+        order_id: orderId,
+        expected_usdc: expected,
+        paid_usdc: amountUsdc,
+        excess_usdc: excessUsdc,
+        txid,
+      });
     }
   } else if (paymentAsset === 'xlm_soroban') {
     const expected = order.expected_xlm_amount;
@@ -264,7 +361,7 @@ async function handlePayment({
   // invariant is that we don't under-collect, not that we perfectly refund
   // every over-collected stroop.
   if (excessXlm) {
-    bizEvent('payment.xlm_overpaid', {
+    logger.event('payment.xlm_overpaid', {
       order_id: orderId,
       excess_xlm: excessXlm,
       txid,
@@ -323,7 +420,7 @@ async function handlePayment({
                updated_at = ?
            WHERE id = ?`,
         ).run(publicMessage('ctx_payment_ambiguous'), txHash, new Date().toISOString(), orderId);
-        bizEvent('ctx.payment_ambiguous', {
+        logger.event('ctx.payment_ambiguous', {
           order_id: orderId,
           stellar_status: status,
           tx_hash: txHash,
@@ -354,19 +451,30 @@ async function handlePayment({
       orderId,
     );
   } catch (err) {
-    // Log the raw error server-side for ops debugging — full stack
-    // trace, internal vocab, all of it. The publicly-stored version
-    // gets sanitised so agents can't see the moving parts.
-    console.error(`[payment] order ${orderId.slice(0, 8)} fulfillment error: ${err.message}`);
+    // F1-payment-handler: safely extract a message regardless of what
+    // was thrown. Pre-fix, `err.message` on a non-Error (null, string,
+    // Error with thrown-getter message, etc.) would crash the catch
+    // handler itself — leaving the order wedged in 'ordering' with no
+    // refund scheduled until the reconciler picked it up minutes later.
+    const rawMessage = safeErrorMessage(err);
+    console.error(`[payment] order ${orderId.slice(0, 8)} fulfillment error: ${rawMessage}`);
+    // publicMessage is already defensive (audit F2-sanitize wraps its
+    // own coercion in try/catch) but we pass the safe string anyway so
+    // the two modules don't depend on each other's internals.
     db.prepare(`UPDATE orders SET status = 'failed', error = ?, updated_at = ? WHERE id = ?`).run(
-      publicMessage(err.message),
+      publicMessage(rawMessage),
       new Date().toISOString(),
       orderId,
     );
     scheduleRefund(orderId).catch((e) =>
-      console.error(`[payment] refund error for ${orderId.slice(0, 8)}: ${e.message}`),
+      console.error(`[payment] refund error for ${orderId.slice(0, 8)}: ${safeErrorMessage(e)}`),
     );
   }
 }
 
-module.exports = { handlePayment };
+module.exports = {
+  handlePayment,
+  // Test-only exports for the 2026-04-15 audit hardening.
+  _parseStrictPositiveStroops: parseStrictPositiveStroops,
+  _safeErrorMessage: safeErrorMessage,
+};
