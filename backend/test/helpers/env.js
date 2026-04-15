@@ -8,12 +8,19 @@ process.env.DB_PATH = `:memory:`;
 process.env.NODE_ENV = 'test';
 process.env.PORT = '0'; // random port
 
-// Stellar — fake but structurally valid keys
+// Stellar — fake but shape-valid strkeys. Each must be a 56-char
+// base32 strkey starting with the type prefix (G / S / C). The env
+// schema's F1-env hardening (adversarial audit 2026-04-16) enforces
+// the full shape, so the historical 55-char XLM fake and the 58-char
+// contract fake containing '0' (not in the base32 alphabet) no longer
+// pass boot validation. These are NOT valid checksums — just shape-
+// valid — and nothing in the test suite decodes them via the Stellar
+// SDK at load time (every sender call site mocks xlm-sender via
+// patchCache).
 process.env.STELLAR_NETWORK = 'testnet';
-process.env.STELLAR_XLM_SECRET = 'SCZANGBA5RLKPMDUHXOL2BO76RDCGCR7ZA7OMO6TUZBIRGQCQX2LZME';
+process.env.STELLAR_XLM_SECRET = 'S' + 'A'.repeat(55);
 process.env.STELLAR_USDC_ISSUER = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
-// Soroban receiver contract (fake but valid C... prefix)
-process.env.RECEIVER_CONTRACT_ID = 'CCWTEST000000000000000000000000000000000000000000000000003';
+process.env.RECEIVER_CONTRACT_ID = 'C' + 'A'.repeat(55);
 
 // VCC fulfillment service
 process.env.VCC_API_BASE = 'https://vcc.ctx.com';

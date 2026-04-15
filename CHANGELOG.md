@@ -158,6 +158,31 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a typeof guard to `decryptToken` so a non-string
   `system_state.value` can't wedge the token path with an opaque
   TypeError. Audit F1/F2/F3-vcc-client.
+- **Environment schema hardening** — five fixes in src/env.js, the
+  boot-time validator. (1) **Stellar strkey shape** —
+  `STELLAR_USDC_ISSUER`, `STELLAR_XLM_SECRET`, and `RECEIVER_CONTRACT_ID`
+  were validated only by the first character. A typo like
+  `STELLAR_XLM_SECRET=S` or `RECEIVER_CONTRACT_ID=Cwrong` passed boot
+  and crashed at first use with a cryptic Stellar SDK decode error.
+  Now enforced as exactly 56 base32 characters with the correct type
+  prefix. (2) **`INTERNAL_EMAILS` per-entry validation** — a
+  comma-separated string was stored opaquely; a typo silently excluded
+  the intended operator from `/internal/*` routes with no boot-time
+  signal. Each entry is now trimmed, lowercased, and validated at
+  boot. (3) **`CORS_ORIGINS` per-entry validation** — same class of
+  bug; each entry is now parsed as an http(s) URL at boot. (4) **URL
+  scheme constraint** — `CARDS402_BASE_URL`, `VCC_API_BASE`, and
+  `SOROBAN_RPC_URL` previously accepted any scheme (`ftp://`, `file://`,
+  `javascript:`, `chrome-extension://`) because zod's `.url()` is
+  protocol-agnostic. Now constrained to http/https. (5) **RFC 6761
+  reserved TLDs** — the "production lookalike" guard (`NODE_ENV !=
+production` + HTTPS + non-local = fail) treated `.test` and
+  `.localhost` as non-local despite RFC 6761 reserving them for
+  testing. Added them to the local-host list so a legitimate
+  `.test`/`.localhost` deploy isn't mis-flagged as production.
+  Also fixed two pre-existing test-harness fakes that the new strkey
+  regex caught (55-char XLM secret off-by-one, contract ID containing
+  `0` outside the base32 alphabet). Audit F1/F2/F3/F4/F5-env.
 - **Fulfillment refund correctness + webhook breaker race** — two
   fixes in src/fulfillment.js. (1) **Refund now includes
   `excess_usdc`** — the USDC refund path previously sent
