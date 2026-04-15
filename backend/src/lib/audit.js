@@ -12,6 +12,26 @@
 const db = require('../db');
 const { normalizeRole } = require('./permissions');
 
+// Cap on the serialised `details` JSON blob. 16KB is generous — even
+// the api-key PATCH audit (which captures a full before/after diff of
+// every policy field) typically fits in <2KB. Bigger values are
+// either a caller bug (dumping a response body into details) or a
+// future vector for hostile input bloating the audit_log table.
+// Over-cap writes are truncated with a marker rather than rejected so
+// the audit trail still captures the event, just with less detail.
+// Adversarial audit F2-audit.
+const MAX_DETAILS_BYTES = 16 * 1024;
+
+// Cap on listAudit offset. The base query is indexed on
+// (dashboard_id, created_at DESC) so typical pagination is cheap, but
+// SQLite still walks the index to count through OFFSET rows before
+// returning — an authenticated dashboard user can turn
+// GET /dashboard/audit-log?offset=99999999 into arbitrary server
+// work. 10,000 is far beyond any UI use case (dashboard pages
+// typically show 100/page → 100 pages deep before hitting the cap)
+// and bounds the blast radius. Adversarial audit F3-audit.
+const MAX_LIST_OFFSET = 10_000;
+
 /**
  * @typedef {Object} AuditEvent
  * @property {string} dashboardId
@@ -50,8 +70,60 @@ const insertStmt = db.prepare(`
   )
 `);
 
+/**
+ * Serialise the caller's details object and truncate if over the
+ * MAX_DETAILS_BYTES cap. Over-cap writes become a string with a
+ * visible marker ({_truncated: true, _original_bytes: N, preview: "..."}
+ * encoded as JSON) so forensic reviewers know something was elided
+ * and the event itself still lands in the audit trail. Returns null
+ * for null/undefined input.
+ * @param {Record<string, unknown> | undefined} details
+ */
+function serialiseDetails(details) {
+  if (!details) return null;
+  let encoded;
+  try {
+    encoded = JSON.stringify(details);
+  } catch (err) {
+    // Circular reference or other JSON serialisation failure. Preserve
+    // the event but surface the failure mode in the stored blob.
+    return JSON.stringify({
+      _serialise_failed: true,
+      error: /** @type {Error} */ (err).message,
+    });
+  }
+  if (encoded.length <= MAX_DETAILS_BYTES) return encoded;
+  // Cap hit. Keep a short preview of the original so ops can still
+  // pattern-match on it in queries, and mark the truncation so it
+  // doesn't masquerade as a complete record.
+  return JSON.stringify({
+    _truncated: true,
+    _original_bytes: encoded.length,
+    preview: encoded.slice(0, 512),
+  });
+}
+
 /** @param {AuditEvent} event */
 function recordAudit(event) {
+  // F1-audit: fail loud on a missing required field instead of letting
+  // the NOT NULL constraint quietly throw and the try/catch below
+  // swallow the loss. dashboardId and action are schema-required;
+  // losing an audit row because a caller forgot one of them is the
+  // worst kind of silent failure — the whole point of audit logging
+  // is that the row always exists. Console.error (not throw) so a
+  // missing-field bug in one path doesn't take down the primary
+  // dashboard action that triggered the audit, but it's a loud signal
+  // that goes through ops monitoring.
+  if (!event || !event.dashboardId || !event.action) {
+    console.error(
+      `[audit] DROPPED event with missing required field(s). ` +
+        `action=${event?.action ?? '<missing>'} ` +
+        `dashboardId=${event?.dashboardId ?? '<missing>'} ` +
+        `resourceType=${event?.resourceType ?? '<none>'}`,
+    );
+    return;
+  }
+
   try {
     const role = normalizeRole(event.actor?.role);
     insertStmt.run({
@@ -62,7 +134,7 @@ function recordAudit(event) {
       action: event.action,
       resource_type: event.resourceType ?? null,
       resource_id: event.resourceId ?? null,
-      details: event.details ? JSON.stringify(event.details) : null,
+      details: serialiseDetails(event.details),
       ip: event.ip ?? null,
       user_agent: event.userAgent ?? null,
     });
@@ -105,8 +177,17 @@ function recordAuditFromReq(req, action, opts = {}) {
  * @param {{ limit?: number; offset?: number; action?: string; actor?: string }} [opts]
  */
 function listAudit(dashboardId, opts = {}) {
-  const limit = Math.min(Math.max(1, opts.limit ?? 100), 500);
-  const offset = Math.max(0, opts.offset ?? 0);
+  // F3/F4-audit: normalise NaN and non-finite inputs to the defaults
+  // rather than passing them through to SQLite (which rejects
+  // `LIMIT NaN` with a 500). Callers pass parseInt() results from
+  // query strings, and parseInt('abc') is NaN.
+  const rawLimit = Number.isFinite(opts.limit) ? /** @type {number} */ (opts.limit) : 100;
+  const rawOffset = Number.isFinite(opts.offset) ? /** @type {number} */ (opts.offset) : 0;
+  const limit = Math.min(Math.max(1, rawLimit), 500);
+  // F3: cap offset so an authenticated caller can't turn
+  // GET /dashboard/audit-log?offset=99999999 into an index walk over
+  // 99M rows. 10k is beyond any realistic UI depth.
+  const offset = Math.min(Math.max(0, rawOffset), MAX_LIST_OFFSET);
   const conditions = ['dashboard_id = @dashboard_id'];
   /** @type {Record<string, unknown>} */
   const params = { dashboard_id: dashboardId, limit, offset };
