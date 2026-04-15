@@ -85,9 +85,51 @@ function normalizeEmail(email) {
   return email.trim().toLowerCase();
 }
 
+// Adversarial audit F2-auth (2026-04-15): coerce client IP to a
+// single string. `req.headers['x-forwarded-for']` is typed
+// `string | string[] | undefined` in Express — when a proxy sets
+// the header twice via `add`, Node returns it as an array. Passing
+// an array directly into recordAudit (which expects a string column)
+// violated the type contract and produced two pre-existing
+// `TS2322: string | string[] is not assignable to string` errors
+// flagged in every earlier typecheck. Central helper so the fix is
+// applied consistently across every call site.
+function clientIp(req) {
+  if (req.ip) return String(req.ip);
+  const xff = req.headers?.['x-forwarded-for'];
+  if (!xff) return null;
+  if (Array.isArray(xff)) return xff.length > 0 ? String(xff[0]) : null;
+  // A single X-Forwarded-For string can itself be a comma-separated
+  // proxy chain like "client, proxy1, proxy2". The left-most entry
+  // is the original client address.
+  const first = String(xff).split(',')[0]?.trim();
+  return first || null;
+}
+
+function clientUserAgent(req) {
+  const ua = req.headers?.['user-agent'];
+  if (!ua) return null;
+  if (Array.isArray(ua)) return ua.length > 0 ? String(ua[0]) : null;
+  return String(ua);
+}
+
 // ── POST /auth/login ─────────────────────────────────────────────────────────
 
 router.post('/login', loginLimiter, async (req, res) => {
+  // Adversarial audit F1-auth (2026-04-15): reject requests whose
+  // body isn't a plain JSON object upfront. Without this guard a
+  // request with no Content-Type, an array body, or a null body
+  // crashed the destructure `const { email } = req.body` with
+  // `Cannot destructure property 'email' of 'undefined'` — Express
+  // returned 500 instead of a clear 400. Same shape guard as the
+  // one added to POST /v1/orders in an earlier cycle.
+  if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+    return res.status(400).json({
+      error: 'invalid_request',
+      message: 'Request body must be a JSON object (set Content-Type: application/json).',
+    });
+  }
+
   const { email } = req.body;
   if (!email || typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
     return res
@@ -165,15 +207,26 @@ router.post('/login', loginLimiter, async (req, res) => {
 // ── POST /auth/verify ────────────────────────────────────────────────────────
 
 router.post('/verify', verifyLimiter, (req, res) => {
+  // F1-auth: same shape guard as /auth/login. Additionally check
+  // that email and code are strings — the previous code only checked
+  // truthiness, so an array email like `["a@b.com"]` would reach
+  // `normalizeEmail(email).trim()`, which doesn't exist on arrays
+  // and crashes with 500.
+  if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+    return res.status(400).json({
+      error: 'invalid_request',
+      message: 'Request body must be a JSON object (set Content-Type: application/json).',
+    });
+  }
   const { email, code } = req.body;
-  if (!email || !code) {
+  if (!email || !code || typeof email !== 'string' || typeof code !== 'string') {
     return res
       .status(400)
-      .json({ error: 'missing_fields', message: 'email and code are required.' });
+      .json({ error: 'missing_fields', message: 'email and code are required strings.' });
   }
 
   const addr = normalizeEmail(email);
-  const codeHash = hashToken(String(code).trim());
+  const codeHash = hashToken(code.trim());
 
   // Atomic: mark code used in one statement so concurrent verify requests
   // with the same code cannot both succeed (race-free single-use enforcement).
@@ -232,36 +285,52 @@ router.post('/verify', verifyLimiter, (req, res) => {
     return res.status(401).json({ error: 'invalid_code', message: 'Invalid or expired code.' });
   }
 
-  // Find or create user
-  let user = /** @type {any} */ (db.prepare(`SELECT * FROM users WHERE email = ?`).get(addr));
-  if (!user) {
-    const isFirst =
-      /** @type {any} */ (db.prepare(`SELECT COUNT(*) AS n FROM users`).get()).n === 0;
-    const id = uuidv4();
-    db.prepare(
-      `
-      INSERT INTO users (id, email, role) VALUES (?, ?, ?)
-    `,
-    ).run(id, addr, isFirst ? 'owner' : 'user');
-    user = /** @type {any} */ (db.prepare(`SELECT * FROM users WHERE id = ?`).get(id));
-  }
+  // Adversarial audit F3-auth (2026-04-15): wrap the find-or-create
+  // user/dashboard block in a db.transaction so the SELECT COUNT →
+  // INSERT user atomicity is explicit and does not depend on the
+  // surrounding handler being synchronous. On a fresh instance the
+  // `isFirst` check and the INSERT together decide whether the new
+  // user gets `role = 'owner'`. Today the handler is fully sync so
+  // Node's event loop serialises concurrent /auth/verify calls and
+  // the race can't happen — but any future refactor that adds an
+  // `await` between the count and the INSERT (e.g. a password hash,
+  // a webhook call, a policy check) would re-open a
+  // "two owners on fresh install" window with no type-system or
+  // test-signal warning. The transaction makes the invariant
+  // explicit and robust to that change. better-sqlite3 transactions
+  // are fully sync so this also enforces that future async code
+  // cannot accidentally leak into this block.
+  const userBootstrap = db.transaction((nowIso) => {
+    let u = /** @type {any} */ (db.prepare(`SELECT * FROM users WHERE email = ?`).get(addr));
+    if (!u) {
+      const isFirst =
+        /** @type {any} */ (db.prepare(`SELECT COUNT(*) AS n FROM users`).get()).n === 0;
+      const id = uuidv4();
+      db.prepare(`INSERT INTO users (id, email, role) VALUES (?, ?, ?)`).run(
+        id,
+        addr,
+        isFirst ? 'owner' : 'user',
+      );
+      u = /** @type {any} */ (db.prepare(`SELECT * FROM users WHERE id = ?`).get(id));
+    }
+    db.prepare(`UPDATE users SET last_login_at = ? WHERE id = ?`).run(nowIso, u.id);
 
-  db.prepare(`UPDATE users SET last_login_at = ? WHERE id = ?`).run(now, user.id);
-
-  // Find or create dashboard for this user
-  let dashboard = /** @type {any} */ (
-    db.prepare(`SELECT id, name FROM dashboards WHERE user_id = ?`).get(user.id)
-  );
-  if (!dashboard) {
-    const dashId = uuidv4();
-    const name = addr.split('@')[0];
-    db.prepare(`INSERT INTO dashboards (id, user_id, name) VALUES (?, ?, ?)`).run(
-      dashId,
-      user.id,
-      name,
+    let d = /** @type {any} */ (
+      db.prepare(`SELECT id, name FROM dashboards WHERE user_id = ?`).get(u.id)
     );
-    dashboard = { id: dashId, name };
-  }
+    if (!d) {
+      const dashId = uuidv4();
+      const name = addr.split('@')[0];
+      db.prepare(`INSERT INTO dashboards (id, user_id, name) VALUES (?, ?, ?)`).run(
+        dashId,
+        u.id,
+        name,
+      );
+      d = { id: dashId, name };
+    }
+    return { user: u, dashboard: d };
+  });
+  const { user, dashboard } = userBootstrap(now);
 
   // Create session
   const rawToken = crypto.randomBytes(32).toString('hex');
@@ -294,8 +363,8 @@ router.post('/verify', verifyLimiter, (req, res) => {
       role: user.role,
       is_platform_owner: isPlatformOwner(user.email),
     },
-    ip: req.ip || req.headers?.['x-forwarded-for'] || null,
-    userAgent: req.headers?.['user-agent'] || null,
+    ip: clientIp(req),
+    userAgent: clientUserAgent(req),
   });
 
   res.json({
@@ -341,8 +410,8 @@ router.post('/logout', (req, res) => {
         action: 'auth.session_deleted',
         resourceType: 'session',
         resourceId: row.user_id,
-        ip: req.ip || req.headers?.['x-forwarded-for'] || null,
-        userAgent: req.headers?.['user-agent'] || null,
+        ip: clientIp(req),
+        userAgent: clientUserAgent(req),
       });
     }
   }

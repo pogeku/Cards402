@@ -102,3 +102,117 @@ describe('POST /auth/verify — brute-force protection (audit F3)', () => {
     assert.ok(res.body.token);
   });
 });
+
+// ── F1-auth (2026-04-15): body shape + field typing ─────────────────────
+//
+// Before the guards, requests with a missing or malformed body crashed
+// the destructure with 500. Same class of bug as F3-orders in an
+// earlier cycle. These tests pin the 400 invalid_request contract.
+
+describe('POST /auth/login — F1 body shape guard', () => {
+  beforeEach(() => resetDb());
+
+  it('returns 400 invalid_request when body is an array', async () => {
+    const res = await request.post('/auth/login').send([{ email: 'a@b.com' }]);
+    assert.equal(res.status, 400);
+    assert.equal(res.body.error, 'invalid_request');
+  });
+
+  it('returns 400 invalid_email when email field is missing', async () => {
+    // Legacy guard — empty object passes body-shape check but fails
+    // the email-typeof check. Regression guard for the refactor order.
+    const res = await request.post('/auth/login').send({});
+    assert.equal(res.status, 400);
+    assert.equal(res.body.error, 'invalid_email');
+  });
+
+  it('returns 400 invalid_email when email is an array', async () => {
+    const res = await request.post('/auth/login').send({ email: ['a@b.com'] });
+    assert.equal(res.status, 400);
+    assert.equal(res.body.error, 'invalid_email');
+  });
+});
+
+describe('POST /auth/verify — F1 body shape guard', () => {
+  beforeEach(() => resetDb());
+
+  it('returns 400 invalid_request when body is an array', async () => {
+    const res = await request.post('/auth/verify').send([{ email: 'a@b.com', code: '123456' }]);
+    assert.equal(res.status, 400);
+    assert.equal(res.body.error, 'invalid_request');
+  });
+
+  it('returns 400 missing_fields when email is an array (strict typeof)', async () => {
+    // Before F1 the existing check was `if (!email || !code)` with no
+    // typeof. An array email is truthy so it slipped through, then
+    // normalizeEmail(email).trim() crashed because arrays don't have
+    // .trim() → 500.
+    const res = await request.post('/auth/verify').send({ email: ['a@b.com'], code: '123456' });
+    assert.equal(res.status, 400);
+    assert.equal(res.body.error, 'missing_fields');
+  });
+
+  it('returns 400 missing_fields when code is a number (strict typeof)', async () => {
+    const res = await request.post('/auth/verify').send({ email: 'a@b.com', code: 123456 });
+    assert.equal(res.status, 400);
+    assert.equal(res.body.error, 'missing_fields');
+  });
+});
+
+// ── F3-auth (2026-04-15): owner-bootstrap atomicity ────────────────────
+//
+// The user find/create block now lives inside a db.transaction. This
+// test can't drive two concurrent requests (node:test + supertest +
+// better-sqlite3 are all sync), but it can pin the happy-path
+// invariant: a fresh verify creates exactly one user with role='owner'
+// and the transaction leaves the DB in a consistent state.
+
+describe('POST /auth/verify — F3 bootstrap owner creation', () => {
+  beforeEach(() => resetDb());
+
+  it('first successful verify creates exactly one user with role=owner', async () => {
+    const email = 'first-owner@example.com';
+    seedCode(email, '111111');
+    const res = await request.post('/auth/verify').send({ email, code: '111111' });
+    assert.equal(res.status, 200);
+
+    const users = db.prepare(`SELECT id, email, role FROM users`).all();
+    assert.equal(users.length, 1);
+    assert.equal(users[0].email, email);
+    assert.equal(users[0].role, 'owner');
+  });
+
+  it('second successful verify creates role=user (owner already exists)', async () => {
+    seedCode('first@example.com', '111111');
+    await request.post('/auth/verify').send({ email: 'first@example.com', code: '111111' });
+    seedCode('second@example.com', '222222');
+    const res = await request
+      .post('/auth/verify')
+      .send({ email: 'second@example.com', code: '222222' });
+    assert.equal(res.status, 200);
+
+    const users = db.prepare(`SELECT email, role FROM users ORDER BY created_at`).all();
+    assert.equal(users.length, 2);
+    assert.equal(users[0].role, 'owner');
+    assert.equal(users[1].role, 'user');
+  });
+
+  it('repeated verify for an existing owner preserves role and creates no duplicate', async () => {
+    // First verify — creates the owner.
+    seedCode('repeat@example.com', '111111');
+    await request.post('/auth/verify').send({ email: 'repeat@example.com', code: '111111' });
+    // Second verify — same email with a fresh code. The transaction
+    // must take the "user already exists" branch and not touch role.
+    seedCode('repeat@example.com', '222222');
+    const res = await request
+      .post('/auth/verify')
+      .send({ email: 'repeat@example.com', code: '222222' });
+    assert.equal(res.status, 200);
+
+    const users = db
+      .prepare(`SELECT email, role FROM users WHERE email = ?`)
+      .all('repeat@example.com');
+    assert.equal(users.length, 1);
+    assert.equal(users[0].role, 'owner');
+  });
+});
