@@ -417,8 +417,18 @@ app.get('/status', statusLimiter, (req, res) => {
 
   // Stellar watcher freshness. `stellar_start_ledger` advances as the
   // watcher persists its cursor; `stellar_start_ledger_at` captures the
-  // wall clock of that update. If the age exceeds ~60s we consider the
-  // watcher stalled. Both rows are upserted together in saveStartLedger.
+  // wall clock of that update. Both rows are upserted together in
+  // saveStartLedger.
+  //
+  // Staleness threshold: the watcher polls every POLL_MS=1500ms and
+  // backs off to 4× on errors (~6s max between cursor advances under
+  // error conditions). 120s is 20× the error-backoff window — any
+  // gap longer than that almost certainly means the watcher has
+  // silently died. Adversarial audit F1-status: before this the `ok`
+  // flag did not incorporate watcher staleness, so a crashed watcher
+  // would keep reporting ok:true to every ops alerting system that
+  // scraped /status.
+  const STELLAR_WATCHER_MAX_AGE_SECONDS = 120;
   const lastLedger = sysStateInt('stellar_start_ledger');
   const lastLedgerAtRow = /** @type {any} */ (
     db.prepare(`SELECT value FROM system_state WHERE key = 'stellar_start_ledger_at'`).get()
@@ -427,6 +437,14 @@ app.get('/status', statusLimiter, (req, res) => {
   const lastLedgerAgeSeconds = lastLedgerAt
     ? Math.round((Date.now() - new Date(lastLedgerAt).getTime()) / 1000)
     : null;
+  // Treat null age as "unknown" rather than "stalled" so fresh
+  // installs and tests (where the watcher isn't started) don't
+  // flip ok to false. Production deployments that have been
+  // running for any length of time will have a non-null value —
+  // if the watcher dies after its first cursor save, the age
+  // grows past the threshold and ok flips as intended.
+  const stellarWatcherStalled =
+    lastLedgerAgeSeconds !== null && lastLedgerAgeSeconds > STELLAR_WATCHER_MAX_AGE_SECONDS;
 
   // Silent-failure visibility counters (audit topic: observability).
   //
@@ -461,7 +479,8 @@ app.get('/status', statusLimiter, (req, res) => {
       !frozen &&
       consecutiveFailures < 3 &&
       stellarDeadLetter24h === 0 &&
-      webhooksFailedPermanent24h < 5,
+      webhooksFailedPermanent24h < 5 &&
+      !stellarWatcherStalled,
     frozen,
     consecutive_failures: consecutiveFailures,
     orders: {
@@ -481,6 +500,8 @@ app.get('/status', statusLimiter, (req, res) => {
       last_ledger: lastLedger || null,
       last_ledger_at: lastLedgerAt,
       age_seconds: lastLedgerAgeSeconds,
+      stalled: stellarWatcherStalled,
+      max_age_seconds: STELLAR_WATCHER_MAX_AGE_SECONDS,
       dead_letter_24h: stellarDeadLetter24h,
     },
     webhooks: {
