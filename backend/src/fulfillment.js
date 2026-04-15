@@ -105,7 +105,20 @@ function recordCircuitSuccess(origin) {
   }
 }
 
-async function fireWebhook(url, payload, webhookSecret, _log) {
+/**
+ * @param {string} url
+ * @param {unknown} payload
+ * @param {string|null} webhookSecret
+ * @param {unknown} _log — legacy parameter, ignored
+ * @param {{ dashboardId?: string | null, apiKeyId?: string | null }} [context]
+ *   Optional explicit logging context. Callers that don't have an
+ *   order_id in their payload (e.g., POST /dashboard/webhook-deliveries/test
+ *   uses a synthetic order_id that won't resolve against the orders
+ *   table) pass dashboardId explicitly so recordWebhookDelivery
+ *   doesn't silently drop the log entry via its "unattributed
+ *   deliveries don't get logged" branch. Adversarial audit F1-webhook-log.
+ */
+async function fireWebhook(url, payload, webhookSecret, _log, context = {}) {
   const origin = getOrigin(url);
   if (origin && circuitIsOpen(origin)) {
     throw new Error(`webhook circuit open for ${origin}`);
@@ -202,6 +215,8 @@ async function fireWebhook(url, payload, webhookSecret, _log) {
       latencyMs: Date.now() - startedAt,
       error: deliveryError ?? undefined,
       signature: signatureHeader ?? undefined,
+      dashboardId: context.dashboardId ?? undefined,
+      apiKeyId: context.apiKeyId ?? undefined,
     });
   }
 }

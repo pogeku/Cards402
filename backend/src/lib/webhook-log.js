@@ -13,6 +13,23 @@
 /** @type {any} */
 const db = require('../db');
 
+// Defense-in-depth size caps on caller-supplied strings. Callers are
+// expected to pre-truncate (fireWebhook already caps response body at
+// 2000 chars), but enforcing the cap at the write boundary means any
+// future caller that forgets doesn't flood the webhook_deliveries
+// table. Same pattern as the audit.js truncation from the earlier
+// audit cycle. Adversarial audit F2-webhook-log.
+const MAX_URL_CHARS = 2048;
+const MAX_RESPONSE_BODY_CHARS = 4096;
+const MAX_ERROR_CHARS = 1024;
+const MAX_SIGNATURE_CHARS = 256;
+
+function clip(value, max) {
+  if (value === null || value === undefined) return null;
+  const s = typeof value === 'string' ? value : String(value);
+  return s.length > max ? s.slice(0, max) : s;
+}
+
 const lookupByOrder = db.prepare(`
   SELECT o.api_key_id AS api_key_id, k.dashboard_id AS dashboard_id
   FROM orders o
@@ -71,14 +88,14 @@ function recordWebhookDelivery(input) {
     insertStmt.run({
       dashboard_id: dashboardId,
       api_key_id: apiKeyId ?? null,
-      url: input.url,
+      url: clip(input.url, MAX_URL_CHARS),
       method: input.method ?? 'POST',
       request_body: safeStringify(input.requestBody),
       response_status: input.responseStatus ?? null,
-      response_body: input.responseBody ?? null,
+      response_body: clip(input.responseBody, MAX_RESPONSE_BODY_CHARS),
       latency_ms: input.latencyMs ?? null,
-      error: input.error ?? null,
-      signature: input.signature ?? null,
+      error: clip(input.error, MAX_ERROR_CHARS),
+      signature: clip(input.signature, MAX_SIGNATURE_CHARS),
     });
   } catch (err) {
     console.error(

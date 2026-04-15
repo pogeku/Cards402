@@ -1090,7 +1090,16 @@ router.post('/webhook-deliveries/test', requirePermission('webhook:test'), async
   };
 
   try {
-    await fireWebhookRaw(url, testPayload, webhook_secret || null, null);
+    // F1-webhook-log: pass explicit dashboardId so the delivery
+    // actually lands in webhook_deliveries. The synthetic order_id
+    // in testPayload doesn't resolve against the orders table, so
+    // without this context the log insert would fall through
+    // recordWebhookDelivery's "unattributed" branch and silently
+    // drop — operators clicking "test webhook" and then opening
+    // the log would see nothing even though we returned ok:true.
+    await fireWebhookRaw(url, testPayload, webhook_secret || null, null, {
+      dashboardId: req.dashboard.id,
+    });
     recordAuditFromReq(req, 'webhook.test', {
       resourceType: 'webhook',
       details: { url },
