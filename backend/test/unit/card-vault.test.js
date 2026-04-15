@@ -281,3 +281,186 @@ describe('card-vault — F1 sealing roundtrip', () => {
     }
   });
 });
+
+// ── F1/F2/F3 card-vault hardening (2026-04-15) ─────────────────────────
+//
+// Defensive guards on sealCard / sealField:
+//
+//   F1: sealCard(null) previously crashed with
+//       TypeError: Cannot read properties of null. Every caller
+//       currently gates with `if (card)` upstream but a future
+//       refactor that drops the guard would turn into a 500 on every
+//       delivery. Explicit null/undefined/non-object rejection with
+//       a greppable card-vault error instead.
+//
+//   F2: sealField now caps fields at 64 bytes (MAX_FIELD_BYTES).
+//       Real PANs are 13-19 digits (19 bytes max), CVVs 3-4,
+//       expiries 5-7 chars. 64 bytes is ~3x the largest legitimate
+//       value. Bounds the DB-bloat / memory-pressure blast radius
+//       of a buggy upstream sending a huge string.
+//
+//   F3: sealField now rejects whitespace-only strings (' ', '\t\t',
+//       etc.) with the same fail-loud story as the existing empty-
+//       string rejection. A VCC parser glitch producing whitespace-
+//       only fields would previously seal and deliver garbage — the
+//       order flips to `delivered` with no refund path.
+
+describe('card-vault — F1 sealCard input guard', () => {
+  // Reset caches so each test gets fresh modules with the current env.
+  const reload = () => {
+    delete require.cache[require.resolve('../../src/lib/secret-box')];
+    delete require.cache[require.resolve('../../src/lib/card-vault')];
+    return require('../../src/lib/card-vault');
+  };
+
+  it('rejects null input with a greppable card-vault error', () => {
+    const { sealCard } = reload();
+    assert.throws(() => sealCard(null), /card-vault: sealCard called with null/);
+  });
+
+  it('rejects undefined input', () => {
+    const { sealCard } = reload();
+    assert.throws(() => sealCard(undefined), /card-vault: sealCard called with null/);
+  });
+
+  it('rejects a non-object input (string)', () => {
+    const { sealCard } = reload();
+    assert.throws(
+      () => sealCard(/** @type {any} */ ('not-an-object')),
+      /card-vault: sealCard expected a plain object, got string/,
+    );
+  });
+
+  it('rejects an array input', () => {
+    const { sealCard } = reload();
+    assert.throws(
+      () =>
+        sealCard(
+          /** @type {any} */ ([{ number: '4111', cvv: '123', expiry: '12/27', brand: 'Visa' }]),
+        ),
+      /card-vault: sealCard expected a plain object, got array/,
+    );
+  });
+});
+
+describe('card-vault — F2 field length cap', () => {
+  const reload = () => {
+    delete require.cache[require.resolve('../../src/lib/secret-box')];
+    delete require.cache[require.resolve('../../src/lib/card-vault')];
+    return require('../../src/lib/card-vault');
+  };
+
+  it('rejects a card_number over 64 bytes', () => {
+    const { sealCard } = reload();
+    assert.throws(
+      () =>
+        sealCard({
+          number: '4'.repeat(100),
+          cvv: '123',
+          expiry: '12/27',
+          brand: 'Visa',
+        }),
+      /card-vault: cannot seal number: value is 100 bytes, max 64/,
+    );
+  });
+
+  it('rejects a huge cvv', () => {
+    const { sealCard } = reload();
+    assert.throws(
+      () =>
+        sealCard({
+          number: '4111111111111111',
+          cvv: 'X'.repeat(1000),
+          expiry: '12/27',
+          brand: 'Visa',
+        }),
+      /card-vault: cannot seal cvv.*max 64/,
+    );
+  });
+
+  it('accepts real-world card values', () => {
+    const { sealCard } = reload();
+    // 19-digit PAN is the longest real ISO/IEC 7812 format.
+    const sealed = sealCard({
+      number: '4111111111111111234',
+      cvv: '1234',
+      expiry: '12/2027',
+      brand: 'Visa',
+    });
+    assert.equal(sealed.number, '4111111111111111234');
+    assert.equal(sealed.cvv, '1234');
+  });
+
+  it('rejects exactly 65 bytes (off-by-one boundary)', () => {
+    const { sealCard } = reload();
+    assert.throws(
+      () =>
+        sealCard({
+          number: 'x'.repeat(65),
+          cvv: '123',
+          expiry: '12/27',
+          brand: 'Visa',
+        }),
+      /value is 65 bytes, max 64/,
+    );
+  });
+
+  it('accepts exactly 64 bytes (off-by-one boundary)', () => {
+    const { sealCard } = reload();
+    const sealed = sealCard({
+      number: 'x'.repeat(64),
+      cvv: '123',
+      expiry: '12/27',
+      brand: 'Visa',
+    });
+    assert.equal(sealed.number, 'x'.repeat(64));
+  });
+});
+
+describe('card-vault — F3 whitespace-only rejection', () => {
+  const reload = () => {
+    delete require.cache[require.resolve('../../src/lib/secret-box')];
+    delete require.cache[require.resolve('../../src/lib/card-vault')];
+    return require('../../src/lib/card-vault');
+  };
+
+  it('rejects a space-only number', () => {
+    const { sealCard } = reload();
+    assert.throws(
+      () => sealCard({ number: '   ', cvv: '123', expiry: '12/27', brand: 'Visa' }),
+      /card-vault: cannot seal number: whitespace-only value/,
+    );
+  });
+
+  it('rejects a tab-only cvv', () => {
+    const { sealCard } = reload();
+    assert.throws(
+      () => sealCard({ number: '4111', cvv: '\t\t', expiry: '12/27', brand: 'Visa' }),
+      /card-vault: cannot seal cvv: whitespace-only value/,
+    );
+  });
+
+  it('rejects mixed whitespace in expiry', () => {
+    const { sealCard } = reload();
+    assert.throws(
+      () => sealCard({ number: '4111', cvv: '123', expiry: ' \t\n ', brand: 'Visa' }),
+      /card-vault: cannot seal expiry: whitespace-only value/,
+    );
+  });
+
+  it('accepts values with internal whitespace (paranoid but allowed)', () => {
+    // "12 / 27" — unusual but non-empty after trim. The function
+    // only rejects values that are ENTIRELY whitespace. Real card
+    // fields shouldn't have internal whitespace but rejecting it
+    // is a judgement call; current behaviour is to permit and let
+    // downstream validation handle it.
+    const { sealCard } = reload();
+    const sealed = sealCard({
+      number: '4111111111111111',
+      cvv: '123',
+      expiry: '12 / 27',
+      brand: 'Visa',
+    });
+    assert.equal(sealed.expiry, '12 / 27');
+  });
+});

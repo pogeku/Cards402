@@ -34,6 +34,22 @@ const { seal, open, hasKey } = require('./secret-box');
  * @param {{number?: string|null, cvv?: string|null, expiry?: string|null, brand?: string|null}} card
  */
 function sealCard(card) {
+  // Adversarial audit F1-card-vault-2 (2026-04-15): explicit input
+  // guard. Previously sealCard(null) and sealCard(undefined) crashed
+  // with `TypeError: Cannot read properties of null (reading 'number')`
+  // — every caller currently gates with `if (card)` upstream so the
+  // crash is latent, but a future refactor that drops the guard
+  // would turn into a 500 on every delivery. Throw a specific,
+  // greppable error instead of relying on the JS engine's TypeError
+  // to surface the bug at review time.
+  if (card === null || card === undefined) {
+    throw new Error('card-vault: sealCard called with null/undefined — caller must guard');
+  }
+  if (typeof card !== 'object' || Array.isArray(card)) {
+    throw new Error(
+      `card-vault: sealCard expected a plain object, got ${Array.isArray(card) ? 'array' : typeof card}`,
+    );
+  }
   return {
     number: sealField('number', card.number),
     cvv: sealField('cvv', card.cvv),
@@ -42,9 +58,21 @@ function sealCard(card) {
   };
 }
 
+// Adversarial audit F2-card-vault (2026-04-15): per-field maximum
+// byte length. Real card fields have a very predictable ceiling —
+// PANs are 13-19 digits (19 bytes max), CVVs are 3-4 digits,
+// expiries are 5-7 chars (MM/YY or MM/YYYY). The old sealField
+// accepted any non-empty string, so a buggy upstream sending a
+// 10KB card_number would seal and store 10KB of encrypted garbage.
+// 64 bytes is ~3x the largest legitimate value and bounds the
+// DB-bloat / memory-pressure blast radius of an upstream parser
+// regression.
+const MAX_FIELD_BYTES = 64;
+
 /**
  * Validate and seal a single card field. `null`/`undefined` → `null`
- * (partial-card ok). Anything else must be a non-empty string.
+ * (partial-card ok). Anything else must be a non-empty, non-whitespace
+ * string under MAX_FIELD_BYTES bytes.
  * @param {string} fieldName
  * @param {unknown} value
  */
@@ -56,6 +84,25 @@ function sealField(fieldName, value) {
   if (value.length === 0) {
     throw new Error(
       `card-vault: cannot seal ${fieldName}: empty string (pass null for an absent field)`,
+    );
+  }
+  // F3-card-vault (2026-04-15): reject whitespace-only strings with
+  // the same fail-loud story as the existing empty-string rejection.
+  // An upstream parser glitch yielding `{number: '   '}` previously
+  // passed the length check, sealed the whitespace, and delivered a
+  // "valid" card with garbage the agent can't use — and once the
+  // order flips to `delivered` there's no refund path. Reject here
+  // so the delivery never lands.
+  if (value.trim().length === 0) {
+    throw new Error(
+      `card-vault: cannot seal ${fieldName}: whitespace-only value (pass null for an absent field)`,
+    );
+  }
+  // F2-card-vault (2026-04-15): byte-length cap.
+  const byteLen = Buffer.byteLength(value, 'utf8');
+  if (byteLen > MAX_FIELD_BYTES) {
+    throw new Error(
+      `card-vault: cannot seal ${fieldName}: value is ${byteLen} bytes, max ${MAX_FIELD_BYTES}`,
     );
   }
   return seal(value);
