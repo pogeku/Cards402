@@ -227,9 +227,21 @@ app.post('/v1/agent/claim', claimLimiter, (req, res) => {
   // BEGIN IMMEDIATE, so the second caller blocks on the write lock
   // until the first commits. After commit the second sees used_at set
   // and UPDATE returns changes=0.
+  //
+  // F1-claim adversarial audit (2026-04-15): decrypt HAS to happen
+  // INSIDE the transaction. Previously the flow was:
+  //   mark used + wipe payload  (commits)
+  //   secretBox.open(payload)   (can throw)
+  // If open() threw — missing CARDS402_SECRET_BOX_KEY, corrupt blob,
+  // wrong key after rotation, whatever — the claim was already
+  // committed as used. The agent's next retry hit 401 invalid_claim
+  // and the claim was permanently burned by a transient server
+  // misconfiguration. Moving the decrypt inside the transaction
+  // means a throw rolls the whole txn back and the claim stays
+  // valid. better-sqlite3 transactions are fully sync so the
+  // synchronous crypto call slots in cleanly.
   const now = new Date().toISOString();
-  const ip =
-    /** @type {any} */ (req).ip || /** @type {any} */ (req).connection?.remoteAddress || null;
+  const ip = /** @type {any} */ (req).ip || /** @type {any} */ (req).socket?.remoteAddress || null;
 
   const redeemTx = db.transaction((codeHashArg) => {
     const selectStmt = db.prepare(
@@ -238,6 +250,21 @@ app.post('/v1/agent/claim', claimLimiter, (req, res) => {
     );
     const rowArg = /** @type {any} */ (selectStmt.get(codeHashArg));
     if (!rowArg) return null;
+    // Decrypt BEFORE marking used. Any throw here aborts the txn via
+    // better-sqlite3's sync rollback semantics so the claim remains
+    // valid for retry. Returning a structured error type lets the
+    // outer catch map it to a sanitised 500 without exposing internal
+    // crypto details to the client.
+    let payloadJson;
+    try {
+      payloadJson = JSON.parse(secretBox.open(rowArg.sealed_payload));
+    } catch (decryptErr) {
+      const wrapped = /** @type {Error & { claimDecryptFailed?: boolean }} */ (
+        new Error(`claim_decrypt_failed: ${/** @type {Error} */ (decryptErr).message}`)
+      );
+      wrapped.claimDecryptFailed = true;
+      throw wrapped;
+    }
     const upd = db
       .prepare(
         `UPDATE agent_claims
@@ -246,11 +273,38 @@ app.post('/v1/agent/claim', claimLimiter, (req, res) => {
       )
       .run({ code: codeHashArg, now, ip });
     if (upd.changes === 0) return null; // lost the race to another concurrent call
-    return rowArg;
+    return { row: rowArg, payload: payloadJson };
   });
 
-  const row = redeemTx(codeHash);
-  if (!row) {
+  /** @type {{ row: any, payload: any } | null} */
+  let redeemResult;
+  try {
+    redeemResult = redeemTx(codeHash);
+  } catch (err) {
+    // F1-claim: decrypt failure rolled the txn back. The claim is
+    // still valid. Log server-side with detail, return a generic
+    // 500 to the client. F2-claim adversarial audit: do NOT echo
+    // the env var name ("CARDS402_SECRET_BOX_KEY") back to an
+    // unauthenticated caller — that's an info leak.
+    if (/** @type {any} */ (err)?.claimDecryptFailed) {
+      console.error(
+        `[claim] decrypt failed (txn rolled back, claim still valid): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      bizEvent('agent.claim_decrypt_failed', {
+        code_hash_prefix: codeHash.slice(0, 12),
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return res.status(500).json({
+        error: 'claim_decrypt_failed',
+        message: 'Failed to decrypt claim payload. Contact support if this persists.',
+      });
+    }
+    // Any other unexpected throw inside the txn — rethrow so Express
+    // emits a 500 via its default error handler. Shouldn't happen in
+    // practice; the only throw path inside the txn is the decrypt.
+    throw err;
+  }
+  if (!redeemResult) {
     // invalid, expired, or already used — same generic 401 for all
     // three buckets so probing can't distinguish them.
     return res.status(401).json({
@@ -258,19 +312,8 @@ app.post('/v1/agent/claim', claimLimiter, (req, res) => {
       message: 'Claim code is invalid, expired, or already used.',
     });
   }
-
-  let payload;
-  try {
-    payload = JSON.parse(secretBox.open(row.sealed_payload));
-  } catch (err) {
-    return res.status(500).json({
-      error: 'claim_decrypt_failed',
-      message:
-        err instanceof Error && err.message.includes('CARDS402_SECRET_BOX_KEY')
-          ? 'Server misconfigured: CARDS402_SECRET_BOX_KEY not set.'
-          : 'Failed to decrypt claim payload.',
-    });
-  }
+  const row = redeemResult.row;
+  const payload = redeemResult.payload;
 
   const key = /** @type {any} */ (
     db.prepare(`SELECT id, label, dashboard_id FROM api_keys WHERE id = ?`).get(row.api_key_id)
@@ -283,6 +326,11 @@ app.post('/v1/agent/claim', claimLimiter, (req, res) => {
   // operators reviewing audit history. Scoped to the api_key's owning
   // dashboard via the join above.
   if (key?.dashboard_id) {
+    // F3-claim: coerce user-agent to a single string (same class of
+    // `string | string[]` type bug I fixed in api/auth.js — Express
+    // may hand an array through for duplicated headers).
+    const uaHeader = req.headers?.['user-agent'];
+    const userAgent = Array.isArray(uaHeader) ? uaHeader[0] || null : uaHeader || null;
     recordAudit({
       dashboardId: key.dashboard_id,
       actor: { id: null, email: 'agent-claim', role: 'system' },
@@ -291,7 +339,7 @@ app.post('/v1/agent/claim', claimLimiter, (req, res) => {
       resourceId: row.api_key_id,
       details: { label: key.label ?? null },
       ip,
-      userAgent: req.headers?.['user-agent'] || null,
+      userAgent,
     });
   }
 
