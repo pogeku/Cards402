@@ -44,6 +44,8 @@ Usage:
   cards402 purchase --amount <USDC>  Buy a card using the wallet from onboard
   cards402 wallet address            Print this agent's Stellar address
   cards402 wallet balance            Print XLM + USDC balances from Horizon
+  cards402 wallet trustline          Open the USDC trustline (required before
+                                     the wallet can receive USDC)
   cards402 mcp                       Start the MCP server over stdio (default)
   cards402 version                   Print the SDK version
   cards402 --help                    Show this message

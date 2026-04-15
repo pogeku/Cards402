@@ -4,7 +4,7 @@
 // funding has landed.
 
 import { loadCards402Config } from '../config';
-import { getOWSPublicKey, getOWSBalance } from '../ows';
+import { getOWSPublicKey, getOWSBalance, addUsdcTrustlineOWS } from '../ows';
 
 function usage(): void {
   process.stderr
@@ -13,7 +13,18 @@ function usage(): void {
 Subcommands:
   address              Print the Stellar address for this agent's wallet
   balance              Print the wallet's XLM and USDC balances from Horizon
+  trustline            Open a USDC trustline on this wallet's Stellar account.
+                       Required before the wallet can receive USDC from the
+                       operator. Costs ~0.0000100 XLM in network fees and
+                       raises the account's min reserve by 0.5 XLM.
   -h, --help           Show this message
+
+Standard onboarding flow:
+  1. cards402 onboard --claim <code>
+  2. Operator sends at least 2.5 XLM to the wallet's Stellar address
+  3. cards402 wallet trustline    (opens the USDC trustline)
+  4. Operator sends USDC
+  5. cards402 purchase --amount <USD>
 
 Both subcommands read ~/.cards402/config.json for the wallet name and
 vault path so you don't need to pass anything after 'cards402 onboard'.
@@ -102,6 +113,65 @@ export async function walletCommand(argv: string[]): Promise<number> {
         } catch {
           /* fall through to error */
         }
+      }
+      process.stderr.write(`error: ${msg}\n`);
+      return 1;
+    }
+  }
+
+  if (sub === 'trustline') {
+    // `cards402 wallet trustline` — opens a USDC trustline on the
+    // agent's Stellar account. The operator's typical onboarding flow
+    // is: fund with XLM → agent runs this → operator sends USDC →
+    // agent runs `purchase`. Without the trustline, any USDC payment
+    // sent to the agent address bounces — USDC is an issued asset on
+    // Stellar and every holder account must authorise the issuer
+    // before it can hold the balance.
+    //
+    // The trustline operation costs one base fee (~0.00001 XLM) and
+    // bumps the account's minimum reserve by 0.5 XLM, so the wallet
+    // needs ~2 XLM already landed for this to succeed. We let the
+    // underlying op surface the real Stellar error on insufficient
+    // balance rather than pre-checking — the error message is more
+    // useful than a synthetic one.
+    try {
+      const publicKey = getOWSPublicKey(walletName, vaultPath);
+      process.stdout.write(`→ Opening USDC trustline for ${publicKey}…\n`);
+      const txHash = await addUsdcTrustlineOWS({ walletName, vaultPath });
+      if (txHash === null) {
+        process.stdout.write(`✓ USDC trustline already exists on this wallet — nothing to do.\n`);
+        return 0;
+      }
+      process.stdout.write(`✓ USDC trustline opened (txid: ${txHash})\n`);
+      process.stdout.write(
+        `\nThe wallet can now receive USDC from your operator. Run 'cards402 wallet balance'\n` +
+          `to confirm the USDC line appears (shown as '0.0000000' when open and empty).\n`,
+      );
+      return 0;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Detect the most common "why did this fail" cases and turn
+      // them into actionable messages instead of the bare Horizon
+      // response body.
+      if (/not found/i.test(msg) || /404/.test(msg)) {
+        process.stderr.write(
+          `error: wallet is not activated on mainnet yet. Ask your operator to send\n` +
+            `at least 2.5 XLM to the address printed by 'cards402 wallet address',\n` +
+            `then re-run 'cards402 wallet trustline'.\n`,
+        );
+        return 1;
+      }
+      if (/already exists/i.test(msg) || /op_already_exists/.test(msg)) {
+        process.stdout.write(`✓ USDC trustline already exists on this wallet — nothing to do.\n`);
+        return 0;
+      }
+      if (/insufficient/i.test(msg) || /op_low_reserve/.test(msg)) {
+        process.stderr.write(
+          `error: insufficient XLM to open the trustline. A trustline subentry\n` +
+            `requires +0.5 XLM of account reserve on top of the 1 XLM base. Ask\n` +
+            `your operator to top up the wallet with at least 2.5 XLM total.\n`,
+        );
+        return 1;
       }
       process.stderr.write(`error: ${msg}\n`);
       return 1;

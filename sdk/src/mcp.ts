@@ -161,7 +161,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               passphrase: OWS_WALLET_PASSPHRASE,
               vaultPath: OWS_VAULT_PATH,
             });
-            lines.push(`USDC trustline: added (txid: ${txHash})`);
+            if (txHash === null) {
+              lines.push(`USDC trustline: already exists`);
+            } else {
+              lines.push(`USDC trustline: added (txid: ${txHash})`);
+            }
             accountStatus = 'ready_no_usdc';
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);

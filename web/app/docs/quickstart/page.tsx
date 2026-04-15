@@ -68,7 +68,7 @@ const howToJsonLd = {
       '@type': 'HowToStep',
       position: 3,
       name: 'Fund a wallet',
-      text: 'Create a Stellar wallet via createOWSWallet() and fund it with at least 2 XLM. The SDK auto-adds a USDC trustline on first USDC purchase.',
+      text: 'Create a Stellar wallet via createOWSWallet() and fund it with at least 2.5 XLM (1 XLM base reserve + 0.5 XLM USDC trustline reserve + fees). Open the USDC trustline via `cards402 wallet trustline` before the operator sends USDC — USDC is an issued asset on Stellar and payments to a wallet without a trustline bounce back to the sender.',
       url: 'https://cards402.com/docs/quickstart#fund-a-wallet',
     },
     {
@@ -168,24 +168,41 @@ const STEPS = [
     body: (
       <>
         <p>
-          Your agent pays the receiver contract directly, so it needs a Stellar wallet with at least
-          2 XLM for the native account reserve (plus a second XLM of slack if you plan to settle in
-          USDC — the extra XLM covers the one-time USDC trustline entry). The SDK creates the wallet
-          for you, stored encrypted in an OWS vault:
+          Your agent pays the receiver contract directly, so it needs a Stellar wallet with at least{' '}
+          <strong>2.5 XLM</strong>: 1 XLM for the native account reserve, 0.5 XLM for the USDC
+          trustline subentry, and ~1 XLM of headroom for fees and any future ops. The SDK creates
+          the wallet for you, stored encrypted in an OWS vault:
         </p>
         <CodeBlock label="TypeScript">{`import { createOWSWallet, getOWSBalance } from 'cards402';
 
 // Creates or loads a vault entry for 'my-agent'. Idempotent.
 const { walletId, publicKey } = createOWSWallet('my-agent');
-console.log('Send at least 2 XLM to', publicKey);
+console.log('Send at least 2.5 XLM to', publicKey);
 
 // Check the balance whenever you need to.
 const { xlm, usdc } = await getOWSBalance('my-agent');`}</CodeBlock>
         <p>
-          You don&apos;t need to set up a USDC trustline manually. If you call{' '}
-          <Code>purchaseCardOWS</Code> with <Code>paymentAsset: &apos;usdc&apos;</Code> and the
-          wallet doesn&apos;t have a trustline yet, the SDK adds it automatically as long as the
-          wallet has at least 2 XLM for fees + reserve. XLM-only agents can skip this entirely.
+          <strong>Open a USDC trustline before the operator sends USDC.</strong> USDC on Stellar is
+          an issued asset (issuer: <Code>GA5Z…KZVN</Code>, Circle&apos;s mainnet account), and every
+          holder account must authorise the issuer via a <Code>changeTrust</Code> operation before
+          it can receive or hold any balance. Without a trustline, a USDC payment to your wallet{' '}
+          <strong>bounces back to the sender</strong> — the operator&apos;s funding attempt appears
+          to disappear and everyone wastes a round trip.
+        </p>
+        <p>Run this once, after XLM has landed:</p>
+        <CodeBlock label="CLI">{`npx -y cards402@latest wallet trustline`}</CodeBlock>
+        <p>Or from TypeScript:</p>
+        <CodeBlock label="TypeScript">{`import { addUsdcTrustlineOWS } from 'cards402';
+
+const txHash = await addUsdcTrustlineOWS({
+  walletName: 'my-agent',
+});
+console.log('trustline opened:', txHash);`}</CodeBlock>
+        <p>
+          The operation costs ~0.00001 XLM in fees and bumps the account&apos;s minimum reserve by
+          0.5 XLM. After it lands, <Code>wallet balance</Code> reports <Code>usdc: 0.0000000</Code>{' '}
+          (line open, zero balance) rather than <Code>usdc: 0</Code> (no line). XLM-only agents can
+          skip this entirely — XLM is native and needs no trustline.
         </p>
         <p>
           Cards402 never sees or touches the secret key — it lives in an encrypted OWS vault on the

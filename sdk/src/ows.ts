@@ -266,8 +266,16 @@ export interface TrustlineOpts {
   networkPassphrase?: string;
 }
 
-/** Add a USDC trustline to the OWS wallet's Stellar account. */
-export async function addUsdcTrustlineOWS(opts: TrustlineOpts): Promise<string> {
+/**
+ * Add a USDC trustline to the OWS wallet's Stellar account.
+ *
+ * Idempotent: if the trustline already exists, returns `null` without
+ * submitting a tx (Stellar accepts redundant `changeTrust` ops and
+ * silently no-ops them, but charges the base fee each time — so
+ * pre-checking saves ~0.00001 XLM per accidental re-run). Returns the
+ * new tx hash when a trustline is actually opened.
+ */
+export async function addUsdcTrustlineOWS(opts: TrustlineOpts): Promise<string | null> {
   const { walletName, passphrase, vaultPath, networkPassphrase = Networks.PUBLIC } = opts;
   const publicKey = getOWSPublicKey(walletName, vaultPath);
   const horizonUrl =
@@ -275,6 +283,17 @@ export async function addUsdcTrustlineOWS(opts: TrustlineOpts): Promise<string> 
 
   const server = new Horizon.Server(horizonUrl);
   const account = await withTimeout(server.loadAccount(publicKey));
+  // Pre-check: already have a USDC trustline to the cards402-recognised
+  // issuer? Return null without spending a fee.
+  const balances = (account as unknown as { balances: Array<Record<string, unknown>> }).balances;
+  const hasTrustline = balances.some(
+    (b) =>
+      b.asset_type === 'credit_alphanum4' &&
+      b.asset_code === 'USDC' &&
+      b.asset_issuer === USDC_ISSUER,
+  );
+  if (hasTrustline) return null;
+
   const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase })
     .addOperation(Operation.changeTrust({ asset: new Asset('USDC', USDC_ISSUER) }))
     .setTimeout(300)

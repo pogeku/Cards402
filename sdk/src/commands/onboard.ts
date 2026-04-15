@@ -358,6 +358,15 @@ export async function onboardCommand(argv: string[]): Promise<number> {
     // straight to the purchase command.
     process.stdout.write('The wallet is funded and ready to buy cards.\n');
     process.stdout.write('\n');
+    if (usdcNum === 0) {
+      // Funded with XLM but no USDC yet. If the agent intends to be
+      // paid in USDC by the operator, they need a trustline first.
+      // Call this out explicitly — without it, any USDC payment sent
+      // to the address bounces.
+      process.stdout.write('  To receive USDC from the operator, open the USDC trustline first:\n');
+      process.stdout.write('    npx -y cards402@latest wallet trustline\n');
+      process.stdout.write('\n');
+    }
     process.stdout.write('  Try a test purchase:\n');
     process.stdout.write('    npx -y cards402@latest purchase --amount 0.01\n');
     if (usdcNum > 0) {
@@ -368,13 +377,23 @@ export async function onboardCommand(argv: string[]): Promise<number> {
   } else {
     process.stdout.write('Next step: fund the wallet.\n');
     process.stdout.write('\n');
-    process.stdout.write('  Send to the Stellar address above:\n');
-    process.stdout.write('    • At least 2 XLM to activate the account and cover reserves.\n');
-    process.stdout.write('    • For XLM-paid purchases: enough XLM to cover the card face\n');
-    process.stdout.write('      value at the current XLM/USD rate, plus a safety margin.\n');
-    process.stdout.write('    • For USDC-paid purchases: 2 XLM + the USDC face value.\n');
+    process.stdout.write('  Step 1 — send XLM to the Stellar address above:\n');
+    process.stdout.write('    • At least 2.5 XLM — 1 XLM base reserve + 0.5 XLM trustline\n');
+    process.stdout.write('      subentry + ~1 XLM headroom for fees and future ops.\n');
     process.stdout.write('\n');
-    process.stdout.write('  Once funded, run:\n');
+    process.stdout.write('  Step 2 — open the USDC trustline before any USDC payment:\n');
+    process.stdout.write('    npx -y cards402@latest wallet trustline\n');
+    process.stdout.write('\n');
+    process.stdout.write('    USDC is an ISSUED asset on Stellar — the holder account must\n');
+    process.stdout.write('    authorize the issuer before it can hold any balance. A USDC\n');
+    process.stdout.write('    payment sent to a wallet with no trustline BOUNCES back to\n');
+    process.stdout.write('    the sender. Run this command exactly once, before the\n');
+    process.stdout.write('    operator sends USDC. (Skip this step if you only plan to pay\n');
+    process.stdout.write('    in XLM — XLM is native and needs no trustline.)\n');
+    process.stdout.write('\n');
+    process.stdout.write('  Step 3 — ask the operator to send USDC (or more XLM).\n');
+    process.stdout.write('\n');
+    process.stdout.write('  Step 4 — buy a card:\n');
     process.stdout.write('    npx -y cards402@latest purchase --amount <USD>\n');
   }
   process.stdout.write('\n');

@@ -46,21 +46,52 @@ This does four things in one call:
 Run it **once**. Do not save the claim code in conversation history — once
 exchanged, it's invalid and your API key is what matters.
 
-Your agent still needs to fund the wallet. Send **at least 2 XLM** to the
-public key the command printed — that covers the Stellar account reserve
-and lets the wallet pay fees. Check the balance any time with:
+Your agent still needs to fund the wallet. The exact sequence matters:
+
+**Step 1 — fund with XLM.** Ask the operator to send **at least 2.5 XLM**
+to the public key the command printed. The breakdown:
+
+- 1 XLM — Stellar base account reserve (required to activate the account)
+- 0.5 XLM — reserve for the USDC trustline subentry (added in step 2)
+- ~1 XLM — headroom for Stellar fees + any future operations
+
+Check the balance any time with:
 
 ```bash
 npx -y cards402@latest wallet balance
 ```
 
-For USDC payments the wallet needs a USDC trustline. You don't have to do
-anything special for this: `purchaseCardOWS` detects a missing trustline
-on the first USDC purchase and adds it automatically (as long as the
-wallet has at least 2 XLM — 1 for the account reserve, 1 for the
-trustline entry). The MCP `setup_wallet` tool does the same thing if you
-want to pre-add the trustline before the first purchase. XLM-only agents
-can skip this entirely.
+**Step 2 — open the USDC trustline.** This is the step that trips up
+most new agents, so read it carefully.
+
+USDC on Stellar is an **issued asset** (issuer:
+`GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN`, Circle's mainnet
+account). Every holder account must open a **trustline** authorising the
+issuer before it can receive or hold any USDC. **Without a trustline, a
+USDC payment sent to your wallet bounces back to the sender** — the
+operator's funding attempt appears to disappear and you waste a round
+trip.
+
+The trustline must be opened **by your wallet**, not by the operator.
+Run this once, after XLM has landed:
+
+```bash
+npx -y cards402@latest wallet trustline
+```
+
+Behind the scenes that signs and submits a `changeTrust` operation
+against the Stellar network, costing ~0.00001 XLM in fees and bumping
+your account's minimum reserve by 0.5 XLM. After it lands, `wallet
+balance` will show `usdc: 0.0000000` (line open, zero balance) rather
+than `usdc: 0` (no line).
+
+If you only intend to pay cards402 in XLM you can skip this step — XLM
+is the native asset on Stellar and needs no trustline. But the operator
+may want to fund you in USDC either way, so opening the trustline
+proactively after XLM lands is the safe default.
+
+**Step 3 — ask the operator to send USDC** (or more XLM if paying in
+XLM). Once the balance updates, `cards402 purchase` works.
 
 After onboarding, any subsequent Cards402 command uses the cached key
 automatically. There is no need to pass credentials on subsequent calls.
