@@ -74,6 +74,37 @@ const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000')
   .map((s) => s.trim())
   .filter(Boolean);
 
+// F4-cors: validate each allowlisted origin at boot. A typo like
+// "https//cards402.com" (missing colon) otherwise silently fails
+// closed — the string never matches a real browser origin and ops
+// spends time debugging from the browser console instead of seeing
+// a loud startup error. Node's URL throws on bad input; we re-check
+// that the normalised .origin equals the configured value so
+// ambiguous forms (trailing slash, path, query) get rejected too.
+// The origin header per RFC 6454 never includes a trailing slash or
+// path, so "https://cards402.com/" would never match anyway —
+// rejecting at boot instead of at request time makes the mistake
+// obvious.
+for (const entry of allowedOrigins) {
+  try {
+    const parsed = new URL(entry);
+    if (parsed.origin !== entry) {
+      console.error(
+        `[cors] CORS_ORIGINS entry ${JSON.stringify(entry)} is not a bare origin ` +
+          `(browsers never send trailing slashes or paths in Origin headers). ` +
+          `Expected: ${JSON.stringify(parsed.origin)}`,
+      );
+      process.exit(1);
+    }
+  } catch {
+    console.error(
+      `[cors] CORS_ORIGINS entry ${JSON.stringify(entry)} is not a valid URL. ` +
+        `Generate one like "https://cards402.com" (no path, no trailing slash).`,
+    );
+    process.exit(1);
+  }
+}
+
 app.use(
   cors({
     origin: (origin, cb) => {
@@ -81,8 +112,28 @@ app.use(
       if (allowedOrigins.includes(origin)) return cb(null, true);
       cb(new Error('CORS: origin not allowed'));
     },
-    methods: ['GET', 'POST', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'X-Api-Key', 'Authorization', 'Idempotency-Key'],
+    // F1-cors: DELETE was missing. Not currently broken because the
+    // dashboard proxies through /api/admin-proxy (server-side =
+    // CORS-exempt), but any future direct-to-backend client would
+    // have every DELETE operation blocked by preflight.
+    methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+    // F2-cors: X-Request-ID is read by app.js for log correlation.
+    // A cross-origin client that sets it for traceability previously
+    // had its preflight rejected because it wasn't in the allowlist.
+    allowedHeaders: [
+      'Content-Type',
+      'X-Api-Key',
+      'Authorization',
+      'Idempotency-Key',
+      'X-Request-ID',
+    ],
+    // F3-cors: expose X-Request-ID so cross-origin clients can read
+    // it from responses. Browsers only expose the CORS safelist
+    // (Cache-Control, Content-Language, Content-Type, Expires,
+    // Last-Modified, Pragma) by default — without this, an SDK
+    // couldn't read the server-assigned request id it needs to
+    // correlate a failed call with server logs.
+    exposedHeaders: ['X-Request-ID'],
     maxAge: 3600,
   }),
 );
