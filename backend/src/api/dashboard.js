@@ -701,6 +701,52 @@ router.post(
     if (new Date(approval.expires_at) <= new Date())
       return res.status(410).json({ error: 'approval_expired' });
 
+    // Adversarial audit F2-approval: re-check the spend limit at approve
+    // time. Between the original POST /v1/orders that created this
+    // approval_request and the owner's click here, the key's
+    // spend_limit_usdc may have been tightened OR total_spent_usdc may
+    // have advanced (via other orders on the same key completing). The
+    // creation-time check already counts awaiting_approval rows in the
+    // in-flight total (orders.js F1 fix), but that check ran against
+    // the limit as it existed at creation time — the owner tightening
+    // the limit after creation would otherwise silently bypass when
+    // approval lands. Re-run the same math here and bail with 403 if
+    // the post-approval world would exceed the current limit.
+    const freshKey = /** @type {any} */ (
+      db
+        .prepare(`SELECT spend_limit_usdc, total_spent_usdc FROM api_keys WHERE id = ?`)
+        .get(approval.api_key_id)
+    );
+    if (freshKey?.spend_limit_usdc) {
+      const settled = parseFloat(freshKey.total_spent_usdc || '0');
+      const inFlightRow = /** @type {any} */ (
+        db
+          .prepare(
+            `SELECT COALESCE(SUM(CAST(amount_usdc AS REAL)), 0) AS total
+             FROM orders
+             WHERE api_key_id = ?
+               AND id != ?
+               AND status IN ('pending_payment','ordering','refund_pending','awaiting_approval')`,
+          )
+          .get(approval.api_key_id, approval.order_id)
+      );
+      const inFlight = inFlightRow ? parseFloat(inFlightRow.total) : 0;
+      const limit = parseFloat(freshKey.spend_limit_usdc);
+      const thisOrder = parseFloat(approval.amount_usdc);
+      if (settled + inFlight + thisOrder > limit) {
+        return res.status(403).json({
+          error: 'spend_limit_exceeded_at_approval',
+          message:
+            `Approving this order would exceed the key's current spend limit ` +
+            `($${limit.toFixed(2)}). The limit may have been tightened since the ` +
+            `request was created, or other orders on the same key have since ` +
+            `consumed budget. Reject this approval request.`,
+          limit: freshKey.spend_limit_usdc,
+          spent: freshKey.total_spent_usdc,
+        });
+      }
+    }
+
     // Build the Soroban receiver-contract payment instructions for the agent.
     // VCC is not contacted until the Soroban watcher sees the agent's payment —
     // so there's no vccJobId yet; that's assigned later in index.js handlePayment.

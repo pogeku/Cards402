@@ -389,6 +389,19 @@ router.post('/', orderCreateLimiter, async (req, res) => {
     // Spend-limit check. SELECT + INSERT are now both inside the
     // same txn, so concurrent writers see each other's in-flight
     // totals.
+    //
+    // Adversarial audit F1-approval: 'awaiting_approval' MUST be in
+    // the in-flight status list. Without it, an agent past their
+    // approval threshold can submit N orders whose combined amount
+    // exceeds spend_limit — each order's spend check sees zero
+    // in-flight (because every prior submission is sitting in
+    // awaiting_approval) and passes. When the owner sequentially
+    // approves, the spend limit is quietly breached. The daily_limit
+    // query in policy.js already counts awaiting_approval via its
+    // `status NOT IN ('expired','rejected')` filter; the two
+    // enforcement paths were just inconsistent. Rejected awaiting-
+    // approval rows flip to 'rejected' and correctly drop out of the
+    // sum.
     if (req.apiKey.spend_limit_usdc) {
       const settled = parseFloat(req.apiKey.total_spent_usdc || '0');
       const inFlightRow = /** @type {any} */ (
@@ -396,7 +409,8 @@ router.post('/', orderCreateLimiter, async (req, res) => {
           .prepare(
             `SELECT COALESCE(SUM(CAST(amount_usdc AS REAL)), 0) AS total
              FROM orders
-             WHERE api_key_id = ? AND status IN ('pending_payment','ordering','refund_pending')`,
+             WHERE api_key_id = ?
+               AND status IN ('pending_payment','ordering','refund_pending','awaiting_approval')`,
           )
           .get(req.apiKey.id)
       );
