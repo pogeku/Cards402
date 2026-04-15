@@ -271,3 +271,162 @@ describe('logger — F3 closed-stream write safety', () => {
     }
   });
 });
+
+// ── F4-logger (2026-04-15): bizEvent snapshot contract ────────────────
+//
+// event() forwards caller-supplied `fields` to the in-process event
+// bus for SSE fan-out. The last event-bus audit cycle added
+// Object.freeze on the TOP-level event but that freeze is shallow —
+// the inner `fields` object was still shared by reference across
+// every subscriber AND with the caller. Two mutation windows:
+//
+//   1. Caller aliasing — the caller mutates their own `fields` object
+//      after event() returns (object-reuse pattern), and subscribers
+//      that haven't yet run see the mutation.
+//   2. Subscriber pollution — subscriber A mutates `evt.fields.x`,
+//      subscriber B later in the same synchronous emit cycle sees
+//      the mutation.
+//
+// The fix clones with structuredClone + deepFreezes the result before
+// passing to bus.emit. Subscribers see a genuinely read-only snapshot
+// that's decoupled from caller-side mutation and from sibling
+// pollution. These tests pin both invariants.
+
+describe('logger — F4 bizEvent snapshot contract', () => {
+  const BUS_PATH = require.resolve('../../src/lib/event-bus');
+
+  function freshLoggerBusPair() {
+    // Reset BOTH so the logger grabs a fresh event-bus handle.
+    // Logger lazy-requires event-bus at call time, so we clear both.
+    delete require.cache[LOGGER_PATH];
+    delete require.cache[BUS_PATH];
+    const logger = require('../../src/lib/logger');
+    const bus = require('../../src/lib/event-bus');
+    return { logger, bus };
+  }
+
+  it('caller mutation AFTER event() does not affect subscribers', () => {
+    const { logger, bus } = freshLoggerBusPair();
+    const captured = [];
+    bus.subscribe((evt) => {
+      if (evt.type === 'biz') captured.push(evt.fields);
+    });
+
+    const callerFields = {
+      name: 'order.fulfilled',
+      fields: { order_id: 'abc', amount: '10.00' },
+    };
+    logger.event('order.fulfilled', callerFields.fields);
+
+    // Caller mutates their own object AFTER the event() call.
+    // Pre-fix, the subscriber's `fields` reference pointed at the
+    // SAME object so this mutation leaked into the captured snapshot.
+    callerFields.fields.order_id = 'HACKED';
+    callerFields.fields.amount = '9999.99';
+
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0].order_id, 'abc', 'caller mutation must not leak into subscriber');
+    assert.equal(captured[0].amount, '10.00');
+  });
+
+  it('subscriber mutation does not pollute sibling subscribers', () => {
+    const { logger, bus } = freshLoggerBusPair();
+
+    const mutatorSeen = [];
+    const observerSeen = [];
+
+    bus.subscribe((evt) => {
+      if (evt.type !== 'biz') return;
+      mutatorSeen.push({ before: evt.fields.status });
+      try {
+        /** @type {any} */ (evt.fields).status = 'hacked';
+      } catch (_) {
+        /* deepFreeze makes this throw in strict mode — either
+           outcome is acceptable as long as observerSeen stays clean */
+      }
+    });
+    bus.subscribe((evt) => {
+      if (evt.type !== 'biz') return;
+      observerSeen.push({ status: evt.fields.status });
+    });
+
+    logger.event('order.state', { order_id: 'x', status: 'pending' });
+
+    assert.equal(mutatorSeen.length, 1);
+    assert.equal(mutatorSeen[0].before, 'pending');
+    // Critical property: observer sees the ORIGINAL value, not the
+    // mutator's overwrite.
+    assert.equal(observerSeen[0].status, 'pending');
+  });
+
+  it('deep-nested subscriber mutation is also blocked', () => {
+    const { logger, bus } = freshLoggerBusPair();
+
+    const observerSeen = [];
+    bus.subscribe((evt) => {
+      if (evt.type !== 'biz') return;
+      try {
+        /** @type {any} */ (evt.fields.meta).inner = 'hacked';
+        /** @type {any} */ (evt.fields.meta.tags)[0] = 'hacked';
+      } catch (_) {
+        /* deepFreeze throws — acceptable */
+      }
+    });
+    bus.subscribe((evt) => {
+      if (evt.type !== 'biz') return;
+      observerSeen.push({
+        inner: evt.fields.meta.inner,
+        firstTag: evt.fields.meta.tags[0],
+      });
+    });
+
+    logger.event('order.state', {
+      order_id: 'x',
+      meta: { inner: 'original', tags: ['alpha', 'beta'] },
+    });
+
+    assert.equal(observerSeen.length, 1);
+    assert.equal(observerSeen[0].inner, 'original', 'nested object must be frozen');
+    assert.equal(observerSeen[0].firstTag, 'alpha', 'nested array must be frozen');
+  });
+
+  it('happy path: bizEvent with simple fields reaches subscribers with full data', () => {
+    // Regression guard: the clone + freeze must preserve ALL the
+    // caller's data, not just the top-level keys.
+    const { logger, bus } = freshLoggerBusPair();
+    const captured = [];
+    bus.subscribe((evt) => {
+      if (evt.type === 'biz') captured.push(evt);
+    });
+
+    logger.event('payment.received', {
+      asset: 'usdc',
+      amount: '10.50',
+      order_id: 'order-123',
+      txid: 'hash-abc',
+      nested: { deep: { value: 42 } },
+    });
+
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0].type, 'biz');
+    assert.equal(captured[0].name, 'payment.received');
+    assert.equal(captured[0].fields.asset, 'usdc');
+    assert.equal(captured[0].fields.amount, '10.50');
+    assert.equal(captured[0].fields.nested.deep.value, 42);
+  });
+
+  it('uncloneable fields (function values) drop bus emit but do not throw', () => {
+    // structuredClone throws DataCloneError on functions. The outer
+    // try/catch in event() must swallow the throw so the caller is
+    // unaffected. stdout still receives the serialized line (via the
+    // non-test branch) — we can't easily assert that from test mode,
+    // but we can assert the call itself doesn't throw.
+    const { logger } = freshLoggerBusPair();
+    assert.doesNotThrow(() => {
+      logger.event('order.fulfilled', {
+        order_id: 'x',
+        handler: () => 'this-is-a-function',
+      });
+    });
+  });
+});

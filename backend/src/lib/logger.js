@@ -59,6 +59,35 @@ function safeWrite(stream, line) {
   }
 }
 
+// Adversarial audit F4-logger (2026-04-15): recursive deep-freeze.
+// event() forwards caller-supplied `fields` to the in-process event
+// bus. Last cycle's event-bus fix Object.freezes the TOP-level event
+// payload but that freeze is shallow — the inner `fields` object is
+// still the caller's reference and can be mutated by:
+//
+//   1. The caller, AFTER event() returns (object-reuse patterns).
+//   2. A subscriber, AFTER reading its own copy of the event but
+//      BEFORE sibling subscribers run — Node's EventEmitter is
+//      synchronous and passes the same reference to every listener
+//      in turn.
+//
+// Either mutation corrupts the "emit is a snapshot" contract. Deep-
+// freeze is cycle-safe via the Object.isFrozen short-circuit (already-
+// frozen nodes aren't re-recursed, which also breaks reference cycles
+// — the first freeze of a root marks it, and the recursion skips on
+// the second visit). Works on plain objects, arrays, and any non-
+// primitive that supports Object.freeze. Primitives (strings, numbers,
+// BigInts, booleans, null, undefined) are returned unchanged.
+function deepFreeze(value) {
+  if (value === null || typeof value !== 'object') return value;
+  if (Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  for (const key of Object.keys(value)) {
+    deepFreeze(value[key]);
+  }
+  return value;
+}
+
 /**
  * Emit a structured log line.
  * @param {'info'|'warn'|'error'} level
@@ -114,11 +143,31 @@ function event(name, fields = {}) {
 
   // Lazy-require so the logger module stays a leaf (avoids a circular
   // require path between logger → event-bus → anything that logs).
+  //
+  // F4-logger (2026-04-15): clone-then-deep-freeze the caller's fields
+  // before handing them to the bus. Two invariants:
+  //
+  //   1. Caller retains mutability — they pass their own object, we
+  //      clone it, so a post-event() mutation to the original does
+  //      NOT affect any subscriber.
+  //   2. Subscribers see a read-only snapshot — deep-freeze prevents
+  //      one subscriber from polluting what a sibling subscriber
+  //      receives via `evt.fields.anything = '...'`.
+  //
+  // structuredClone throws on functions, DOM nodes, and a few other
+  // non-cloneable shapes; the outer try/catch catches those and drops
+  // the bus emit silently, matching the existing "event bus not loaded"
+  // fallthrough behaviour. stdout still gets the serialised line so
+  // observability isn't lost when the clone itself fails.
   try {
     const { emit: busEmit } = require('./event-bus');
-    busEmit('biz', { name, fields });
+    const frozenFields = deepFreeze(structuredClone(fields));
+    busEmit('biz', { name, fields: frozenFields });
   } catch {
-    /* event bus not loaded yet (very early boot) — drop silently */
+    /* event bus not loaded yet (very early boot) OR structuredClone
+       threw on an uncloneable field shape — drop silently. stdout
+       line above already landed so the event is still observable in
+       the aggregator. */
   }
 }
 
