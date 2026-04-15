@@ -171,6 +171,153 @@ describe('xlm-price — upstream shape check (F4)', () => {
   });
 });
 
+// ── F5-xlm-price (2026-04-15): in-flight promise memoization ─────────
+//
+// When the 30s cache expires and N concurrent callers hit
+// getXlmUsdPrice() in the same event loop tick, the pre-fix code
+// issued N HTTP requests to CTX. Post-fix, the first caller kicks
+// off a fetch and stashes it as _inFlight; subsequent callers
+// await the same promise rather than issuing their own requests.
+
+describe('xlm-price — F5 in-flight promise memoization', () => {
+  beforeEach(() => {
+    fetchImpl = null;
+    fetchCount = 0;
+  });
+
+  afterEach(() => {
+    fetchImpl = null;
+  });
+
+  it('5 concurrent callers on a fresh cache only trigger ONE fetch', async () => {
+    const { getXlmUsdPrice, _resetCache } = freshModule();
+    _resetCache();
+    // Slow fetch so we can fire multiple callers before the first
+    // one has a chance to resolve. setImmediate delay is enough —
+    // the event loop tick boundary between concurrent awaits lets
+    // us observe the in-flight sharing.
+    mockFetch(
+      () =>
+        new Promise((resolve) => setImmediate(() => resolve(jsonResponse(ctxAverage('0.1234'))))),
+    );
+
+    const results = await Promise.all([
+      getXlmUsdPrice(),
+      getXlmUsdPrice(),
+      getXlmUsdPrice(),
+      getXlmUsdPrice(),
+      getXlmUsdPrice(),
+    ]);
+
+    // All five callers got the same price.
+    for (const r of results) assert.equal(r, 0.1234);
+    // Only ONE underlying HTTP request was issued.
+    assert.equal(
+      fetchCount,
+      1,
+      `expected 1 fetch, got ${fetchCount} — in-flight memoization is not active`,
+    );
+  });
+
+  it('concurrent fetch rejection is shared across all waiters', async () => {
+    const { getXlmUsdPrice, _resetCache } = freshModule();
+    _resetCache();
+    mockFetch(
+      () => new Promise((_resolve, reject) => setImmediate(() => reject(new Error('CTX is down')))),
+    );
+
+    const results = await Promise.allSettled([
+      getXlmUsdPrice(),
+      getXlmUsdPrice(),
+      getXlmUsdPrice(),
+    ]);
+
+    // All three callers see a rejection.
+    for (const r of results) {
+      assert.equal(r.status, 'rejected');
+      assert.match(r.reason.message, /CTX is down/);
+    }
+    // Only one underlying fetch was made.
+    assert.equal(fetchCount, 1);
+  });
+
+  it('next call after rejection starts a fresh fetch (no stuck rejection)', async () => {
+    // Critical regression guard: the finally clause must clear
+    // _inFlight even on rejection, so a transient CTX outage that
+    // resolves 5 seconds later doesn't leave the oracle permanently
+    // wedged on the old rejection.
+    const { getXlmUsdPrice, _resetCache } = freshModule();
+    _resetCache();
+
+    let attempt = 0;
+    mockFetch(() => {
+      attempt += 1;
+      if (attempt === 1) return Promise.reject(new Error('transient'));
+      return jsonResponse(ctxAverage('0.1550'));
+    });
+
+    await assert.rejects(() => getXlmUsdPrice(), /transient/);
+
+    // Second call after the rejection must NOT see the cached
+    // rejection — it must issue a fresh fetch and return the
+    // recovered price.
+    const price = await getXlmUsdPrice();
+    assert.equal(price, 0.155);
+    assert.equal(fetchCount, 2);
+  });
+
+  it('next call after success uses the cache (no superfluous fetch)', async () => {
+    // Regression guard: the in-flight clear in finally must not
+    // break the normal cache-hit path. After a successful fetch,
+    // the cache is populated and the next call returns from cache.
+    const { getXlmUsdPrice, _resetCache } = freshModule();
+    _resetCache();
+
+    mockFetch(() => jsonResponse(ctxAverage('0.1234')));
+    await getXlmUsdPrice();
+    await getXlmUsdPrice();
+    await getXlmUsdPrice();
+    assert.equal(fetchCount, 1, 'subsequent calls should be served from the cache');
+  });
+
+  it('concurrent burst on an out-of-bounds price shares the rejection', async () => {
+    // Two paths collide here: the out-of-bounds rejection path (F2)
+    // AND the in-flight memoization (F5). Fire concurrent callers
+    // against a bogus-price mock and assert:
+    //   (a) only ONE fetch is made (F5)
+    //   (b) all waiters see the sanity-bound rejection (F2)
+    //   (c) the cache is NOT poisoned (F2)
+    //   (d) the next call after rejection starts fresh
+    const { getXlmUsdPrice, _resetCache } = freshModule();
+    _resetCache();
+
+    let callCount = 0;
+    mockFetch(() => {
+      callCount += 1;
+      // First fetch returns bogus; second is sane.
+      return new Promise((resolve) =>
+        setImmediate(() => resolve(jsonResponse(ctxAverage(callCount === 1 ? '99999' : '0.1234')))),
+      );
+    });
+
+    const results = await Promise.allSettled([
+      getXlmUsdPrice(),
+      getXlmUsdPrice(),
+      getXlmUsdPrice(),
+    ]);
+    for (const r of results) {
+      assert.equal(r.status, 'rejected');
+      assert.match(r.reason.message, /outside sanity bounds/);
+    }
+    assert.equal(fetchCount, 1, 'concurrent callers share the single fetch');
+
+    // Recovery: next call fetches fresh and sees the sane price.
+    const good = await getXlmUsdPrice();
+    assert.equal(good, 0.1234);
+    assert.equal(fetchCount, 2);
+  });
+});
+
 // Restore real fetch on process exit so we don't leak the stub into
 // other test files loaded by the same Node runner.
 process.on('exit', () => {

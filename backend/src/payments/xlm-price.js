@@ -41,12 +41,35 @@ const CACHE_TTL_MS = 30_000;
 
 let _cache = /** @type {{ price: number, fetchedAt: number } | null} */ (null);
 
+// Adversarial audit F5-xlm-price (2026-04-15): in-flight promise
+// memoization to prevent a fetch stampede. When the 30s cache
+// expires and N concurrent POST /v1/orders calls all hit
+// getXlmUsdPrice() in the same event loop tick, without this guard
+// all N enter the fetch branch, all N issue HTTP requests to CTX,
+// and all N overwrite _cache at the end. Cards402 scale rarely
+// hits CTX rate limits today, but:
+//
+//   - Each cache-miss burst consumes N quota units instead of 1.
+//   - A POST /v1/orders DoS amplifies into a CTX-side DoS at N×
+//     the request rate.
+//   - Test mocks that count fetch invocations see non-deterministic
+//     N depending on concurrency, making assertions flaky.
+//
+// The fix: track the outstanding fetch as a module-level promise.
+// The first caller starts it; subsequent callers find a non-null
+// `_inFlight` and await the same promise. The finally clears
+// `_inFlight` after the fetch settles (success or failure), so
+// the next batch starts fresh. Error path: all waiters share the
+// same rejection, next caller after the rejection re-fetches.
+let _inFlight = /** @type {Promise<number> | null} */ (null);
+
 /**
  * Reset the cache. Exposed for tests so each case starts with a fresh
  * state — not meant for production callers.
  */
 function _resetCache() {
   _cache = null;
+  _inFlight = null;
 }
 
 /**
@@ -63,31 +86,53 @@ async function getXlmUsdPrice() {
     return _cache.price;
   }
 
-  const res = await fetch(RATES_URL, { signal: AbortSignal.timeout(10000) });
-  if (!res.ok) throw new Error(`CTX rates API error: HTTP ${res.status}`);
-
-  const rates = await res.json();
-  if (!Array.isArray(rates)) {
-    throw new Error(`CTX rates API returned non-array response (got ${typeof rates})`);
-  }
-  const avg = rates.find((r) => r && r.source === 'ctx-average');
-  if (!avg) throw new Error('ctx-average entry missing from CTX rates response');
-
-  const price = parseFloat(avg.price);
-  if (!Number.isFinite(price) || price <= 0) {
-    throw new Error(`Invalid XLM price from CTX: ${avg.price}`);
-  }
-  if (price < MIN_SANE_PRICE || price > MAX_SANE_PRICE) {
-    // Don't cache a garbage value — force the next caller to re-fetch.
-    bizEvent('xlm_price.out_of_bounds', { price, min: MIN_SANE_PRICE, max: MAX_SANE_PRICE });
-    throw new Error(
-      `XLM price ${price} is outside sanity bounds [${MIN_SANE_PRICE}, ${MAX_SANE_PRICE}] — ` +
-        `refusing to quote. This usually means the CTX rates API returned bad data.`,
-    );
+  // F5: if another caller already started a fetch, wait for its
+  // result instead of starting a duplicate.
+  if (_inFlight) {
+    return _inFlight;
   }
 
-  _cache = { price, fetchedAt: Date.now() };
-  return price;
+  // Start a fresh fetch, stash as in-flight so concurrent cache-
+  // miss callers share it. The IIFE wraps the original fetch +
+  // validate + cache logic and guarantees `_inFlight = null` via
+  // finally, regardless of whether the fetch succeeds, times out,
+  // returns a bad shape, or returns an out-of-bounds price.
+  _inFlight = (async () => {
+    try {
+      const res = await fetch(RATES_URL, { signal: AbortSignal.timeout(10000) });
+      if (!res.ok) throw new Error(`CTX rates API error: HTTP ${res.status}`);
+
+      const rates = await res.json();
+      if (!Array.isArray(rates)) {
+        throw new Error(`CTX rates API returned non-array response (got ${typeof rates})`);
+      }
+      const avg = rates.find((r) => r && r.source === 'ctx-average');
+      if (!avg) throw new Error('ctx-average entry missing from CTX rates response');
+
+      const price = parseFloat(avg.price);
+      if (!Number.isFinite(price) || price <= 0) {
+        throw new Error(`Invalid XLM price from CTX: ${avg.price}`);
+      }
+      if (price < MIN_SANE_PRICE || price > MAX_SANE_PRICE) {
+        // Don't cache a garbage value — force the next caller to re-fetch.
+        bizEvent('xlm_price.out_of_bounds', { price, min: MIN_SANE_PRICE, max: MAX_SANE_PRICE });
+        throw new Error(
+          `XLM price ${price} is outside sanity bounds [${MIN_SANE_PRICE}, ${MAX_SANE_PRICE}] — ` +
+            `refusing to quote. This usually means the CTX rates API returned bad data.`,
+        );
+      }
+
+      _cache = { price, fetchedAt: Date.now() };
+      return price;
+    } finally {
+      // Always clear the in-flight ref so the next batch can start
+      // fresh. Cleared even on rejection — subsequent callers will
+      // re-fetch rather than repeatedly seeing the stale rejection.
+      _inFlight = null;
+    }
+  })();
+
+  return _inFlight;
 }
 
 /**
