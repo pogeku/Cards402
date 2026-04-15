@@ -27,6 +27,7 @@ import {
   BASE_FEE,
   StrKey,
   xdr,
+  type Transaction,
 } from '@stellar/stellar-sdk';
 
 import type { CardDetails, PaymentInstructions } from './client';
@@ -370,7 +371,49 @@ export interface PayViaContractOwsOpts {
  * Soroban `pay_usdc` or `pay_xlm` invocation, signs the transaction hash via
  * OWS, and submits it to the Soroban RPC. Returns the transaction hash.
  */
-export async function payViaContractOWS(opts: PayViaContractOwsOpts): Promise<string> {
+/**
+ * Injectable dependency bundle for payViaContractOWS. Production
+ * callers omit this entirely — the defaults point at the real
+ * build / submit / sign / pubkey helpers. Tests inject stubs to
+ * exercise the retry state machine without touching real Soroban
+ * or a real wallet vault.
+ */
+export interface PayViaContractOwsDeps {
+  buildContractPaymentTx?: typeof buildContractPaymentTx;
+  submitSorobanTx?: typeof submitSorobanTx;
+  owsSignTx?: (
+    tx: Transaction,
+    walletName: string,
+    publicKey: string,
+    passphrase?: string,
+    vaultPath?: string,
+  ) => void;
+  getOWSPublicKey?: (walletName: string, vaultPath?: string) => string;
+}
+
+/**
+ * Max total submit attempts made by payViaContractOWS before giving up
+ * and surfacing the last error to the caller. Retries are ONLY triggered
+ * by the `dropped: true` marker on the submit error — any other error
+ * (on-chain failure, validation, network, timeout without dropped
+ * signal) propagates immediately. 3 attempts is a comfortable upper
+ * bound: flaky mainnet RPC usually recovers within one retry, and
+ * retrying forever past a real incident just burns wallet fees.
+ */
+const PAY_VIA_CONTRACT_MAX_ATTEMPTS = 3;
+
+/**
+ * Milliseconds to wait between retry attempts. Lets any in-flight
+ * original tx have one more ledger-close window to materialize before
+ * we build the retry. Stellar ledger close is ~5s, so 6s covers
+ * "one more ledger" plus a small buffer.
+ */
+const PAY_VIA_CONTRACT_RETRY_DELAY_MS = 6_000;
+
+export async function payViaContractOWS(
+  opts: PayViaContractOwsOpts,
+  deps: PayViaContractOwsDeps = {},
+): Promise<string> {
   const {
     walletName,
     payment,
@@ -381,25 +424,85 @@ export async function payViaContractOWS(opts: PayViaContractOwsOpts): Promise<st
     sorobanRpcUrl,
   } = opts;
 
+  // Resolve injectable deps — each defaults to the module-level
+  // real implementation, so production callers never notice the
+  // parameter exists. Tests inject stubs to exercise the retry
+  // state machine without touching real Soroban / OWS vault.
+  const buildTx = deps.buildContractPaymentTx ?? buildContractPaymentTx;
+  const submitTx = deps.submitSorobanTx ?? submitSorobanTx;
+  const signTx = deps.owsSignTx ?? owsSignTx;
+  const pubKeyOf = deps.getOWSPublicKey ?? getOWSPublicKey;
+
   if (!StrKey.isValidContract(payment.contract_id)) {
     throw new Error(`Invalid contract_id in order response: ${payment.contract_id}`);
   }
 
-  const publicKey = getOWSPublicKey(walletName, vaultPath);
+  const publicKey = pubKeyOf(walletName, vaultPath);
   const { fn, amountDecimal } = selectContractCall(payment, paymentAsset);
+  const amountStroops = decimalToStroops(amountDecimal);
 
-  const { tx, server } = await buildContractPaymentTx({
-    contractId: payment.contract_id,
-    fn,
-    fromPublicKey: publicKey,
-    amountStroops: decimalToStroops(amountDecimal),
-    orderId: payment.order_id,
-    networkPassphrase,
-    rpcUrl: sorobanRpcUrl,
-  });
+  // Retry loop. First attempt uses the current on-chain sequence; any
+  // retry reuses the sequence from the previous attempt via the
+  // preservedSequence plumbing in buildContractPaymentTx. This gives
+  // us mutual exclusion with the prior (possibly still in-mempool)
+  // tx — at most one can land regardless of which the network picks.
+  //
+  // Retries only trigger on the `dropped: true` marker from
+  // submitSorobanTx, which is only set when Horizon explicitly reports
+  // 404 after the 120s client-side inclusion deadline. Any other error
+  // — on-chain failure, validation, submit-level error, txHash-
+  // attached-but-not-dropped — propagates out unchanged so
+  // purchaseCardOWS's caller-side handling stays correct.
+  let preservedSequence: string | undefined;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < PAY_VIA_CONTRACT_MAX_ATTEMPTS; attempt++) {
+    const { tx, server } = await buildTx({
+      contractId: payment.contract_id,
+      fn,
+      fromPublicKey: publicKey,
+      amountStroops,
+      orderId: payment.order_id,
+      networkPassphrase,
+      rpcUrl: sorobanRpcUrl,
+      preservedSequence,
+    });
+    // Capture the sequence this tx uses BEFORE signing / submitting.
+    // On retry we'll feed this back in as preservedSequence so the
+    // next build lands on the same number.
+    const thisSeq = tx.sequence;
 
-  owsSignTx(tx, walletName, publicKey, passphrase, vaultPath);
-  return submitSorobanTx(tx, server);
+    signTx(tx, walletName, publicKey, passphrase, vaultPath);
+
+    try {
+      return await submitTx(tx, server);
+    } catch (err) {
+      lastErr = err;
+      const dropped = (err as Error & { dropped?: boolean })?.dropped === true;
+      // Not dropped → propagate. This covers on-chain failures
+      // (sequence already consumed, retry would fail tx_bad_seq),
+      // validation errors (same error on retry), and the
+      // "txHash-attached-but-Horizon-unreachable" case (where we
+      // DON'T know whether the tx is still pending — a retry with
+      // the same sequence might race, a retry with a fresh sequence
+      // might double-pay).
+      if (!dropped) throw err;
+      // Dropped pre-apply. Reuse this sequence for the next build
+      // so the retry is mutually exclusive with the prior tx.
+      preservedSequence = thisSeq;
+      // No more attempts budgeted → surface the last error.
+      if (attempt >= PAY_VIA_CONTRACT_MAX_ATTEMPTS - 1) throw err;
+      // Small delay before retry so any in-flight original gets one
+      // more ledger-close window to materialize. If it lands during
+      // the wait, our retry's matching sequence will be consumed and
+      // the retry submit will fail with tx_bad_seq — which is
+      // exactly the safety property we wanted.
+      await new Promise((r) => setTimeout(r, PAY_VIA_CONTRACT_RETRY_DELAY_MS));
+    }
+  }
+  // Unreachable — the loop either returns on success or throws on
+  // failure inside the catch. Fall-through exists only to satisfy the
+  // TS return-type checker.
+  throw lastErr ?? new Error('payViaContractOWS: retry loop exited without result');
 }
 
 // Back-compat aliases for the old exported names.
@@ -606,19 +709,38 @@ export async function purchaseCardOWS(
     } catch (err) {
       // submitSorobanTx attaches `txHash` to its error when the envelope
       // has been accepted onto the network but we gave up waiting for
-      // finalization. In that case the cards402 backend watcher can
-      // still credit the order — fall through to waitForCard instead of
-      // failing the purchase.
-      const txHash = (err as Error & { txHash?: string })?.txHash;
-      if (!txHash) {
+      // finalization. The DISPOSITION of that hash matters:
+      //
+      //   - dropped: true    → payViaContractOWS exhausted its retry
+      //                        budget on a provably-dropped tx. There
+      //                        is no in-mempool tx to wait for, and
+      //                        waitForCard would hang the full timeout.
+      //                        Surface as ResumableError('unpaid') so
+      //                        the CLI can save the saved state and
+      //                        the next --resume run can try again.
+      //
+      //   - dropped: false / — envelope may still land (e.g. Horizon
+      //     absent          unreachable, couldn't confirm either way).
+      //                        Fall through to waitForCard so the
+      //                        backend watcher has a chance to credit
+      //                        the order if the tx finalizes.
+      //
+      //   - no txHash        → submit never reached a known hash (pre-
+      //                        simulation failure, trustline add error,
+      //                        etc.). Resumable as 'unpaid'.
+      const errWithHash = err as Error & { txHash?: string; dropped?: boolean };
+      const hasHash = typeof errWithHash.txHash === 'string';
+      const dropped = errWithHash.dropped === true;
+      if (!hasHash || dropped) {
         throw new ResumableError(
           orderId,
           err instanceof Error ? err.message : String(err),
           'unpaid',
-          undefined,
+          errWithHash.txHash,
           err,
         );
       }
+      // hasHash && !dropped — envelope may still land. Fall through.
     }
   }
 

@@ -4,6 +4,7 @@
 // payment event that the cards402 backend watcher indexes.
 
 import {
+  Account,
   Address,
   Contract,
   Networks,
@@ -50,6 +51,26 @@ export interface BuildContractTxOpts {
   orderId: string;
   networkPassphrase: string;
   rpcUrl?: string;
+  /**
+   * Force the built tx to use this exact sequence number instead of
+   * whatever Soroban RPC reports as the account's current sequence.
+   *
+   * Used by payViaContractOWS's retry loop to guarantee mutual
+   * exclusion with a prior failed submit. If the original tx ends
+   * up landing (e.g. it was accepted by the network despite the
+   * client-side 120s deadline expiring), the retry — which shares
+   * the same sequence — will fail with `tx_bad_seq` rather than
+   * landing as a second payment. That gives us a free double-pay
+   * safety property: at most one of the two attempts can ever
+   * credit the order.
+   *
+   * Pass the sequence number that should appear in the built tx
+   * (i.e. the post-bump value captured from a prior Transaction's
+   * `.sequence` field). The builder internally converts that into
+   * a pre-bump Account so the TransactionBuilder's
+   * incrementSequenceNumber() call lands on exactly this value.
+   */
+  preservedSequence?: string;
 }
 
 /**
@@ -61,7 +82,13 @@ export async function buildContractPaymentTx(
   opts: BuildContractTxOpts,
 ): Promise<{ tx: Transaction; server: rpc.Server }> {
   const server = new rpc.Server(opts.rpcUrl ?? getSorobanRpcUrl(opts.networkPassphrase));
-  const account = await server.getAccount(opts.fromPublicKey);
+  // When preservedSequence is set, build the Account manually from
+  // the pre-bump value (N-1) so TransactionBuilder's implicit
+  // incrementSequenceNumber() call lands exactly on the requested N.
+  // Otherwise, load the current on-chain state.
+  const account = opts.preservedSequence
+    ? new Account(opts.fromPublicKey, (BigInt(opts.preservedSequence) - 1n).toString())
+    : await server.getAccount(opts.fromPublicKey);
 
   const contract = new Contract(opts.contractId);
   const orderIdBytes = Buffer.from(opts.orderId, 'utf-8');
@@ -245,10 +272,21 @@ export async function submitSorobanTx(tx: Transaction, server: rpc.Server): Prom
       // made it into a ledger on Horizon. This is the "network rejected
       // at apply time" case — e.g., source account sequence drifted,
       // host function errored before any effects landed. It is NOT
-      // going to "eventually land" — throw without txHash.
-      throw new Error(
+      // going to "eventually land".
+      //
+      // Attach both txHash and a structured `dropped: true` marker.
+      // payViaContractOWS's retry loop uses the marker to decide whether
+      // to resubmit with the same sequence (guaranteeing mutual
+      // exclusion). Without the marker, the retry layer can't
+      // distinguish this case from "on-chain failure" (where retrying
+      // would be incorrect because the sequence was consumed by the
+      // failed tx).
+      const droppedErr = new Error(
         `Soroban transaction ${send.hash} was accepted by the RPC but never applied on the ledger within ${POLL_DEADLINE_MS / 1000}s — the network rejected it pre-apply. Retry the purchase.`,
-      );
+      ) as Error & { txHash: string; dropped: true };
+      droppedErr.txHash = send.hash;
+      droppedErr.dropped = true;
+      throw droppedErr;
     }
   } catch (horizonErr) {
     // Re-raise our own terminal Horizon throws; swallow network errors.

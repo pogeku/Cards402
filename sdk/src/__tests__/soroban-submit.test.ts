@@ -150,7 +150,18 @@ describe('submitSorobanTx — NOT_FOUND timeout then Horizon', () => {
     expect(res.error!.txHash).toBeUndefined();
   });
 
-  it('throws WITHOUT txHash when Horizon 404s (tx never landed)', async () => {
+  it('throws WITH txHash AND dropped=true when Horizon 404s (provably dropped)', async () => {
+    // Contract changed in the retry-loop work: the 404 case now
+    // carries BOTH the tx hash AND a structured `dropped: true`
+    // marker so payViaContractOWS's retry loop can distinguish
+    // "safe to resubmit with same sequence" from "on-chain failure"
+    // (same sequence would fail tx_bad_seq) and from "pending"
+    // (same sequence might race). Without the marker, the retry
+    // layer couldn't reliably decide whether to rebuild.
+    //
+    // purchaseCardOWS still treats dropped=true as 'unpaid' (does
+    // NOT fall through to waitForCard) so the user doesn't hang on
+    // a card that will never come — see ows.ts outer catch.
     const server = makeServer([{ status: 'NOT_FOUND' }]);
     global.fetch = vi.fn().mockResolvedValue({
       ok: false,
@@ -162,7 +173,8 @@ describe('submitSorobanTx — NOT_FOUND timeout then Horizon', () => {
     );
     expect(res.error).toBeDefined();
     expect(res.error!.message).toContain('never applied on the ledger');
-    expect(res.error!.txHash).toBeUndefined();
+    expect(res.error!.txHash).toBe('HASH_ABC');
+    expect((res.error as Error & { dropped?: boolean }).dropped).toBe(true);
   });
 
   it('throws WITH txHash when Horizon is unreachable (network error)', async () => {
