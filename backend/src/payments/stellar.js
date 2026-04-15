@@ -26,6 +26,20 @@ const rpcServer = new rpc.Server(SOROBAN_RPC_URL);
 //  events are filtered by symbol in handlePaymentEvent instead)
 
 // ── Cursor persistence ────────────────────────────────────────────────────────
+//
+// We persist two things:
+//
+//   stellar_start_ledger — fallback anchor used only when there is no
+//     stellar_cursor (cold start, or after a self-heal cursor reset).
+//     Historical name; retained for migration compatibility.
+//
+//   stellar_cursor — authoritative pagination token returned by Soroban
+//     RPC's getEvents. Always present once the watcher has made at least
+//     one successful poll. This is the *correct* way to advance: it
+//     points at an exact (ledger, tx, op, event) tuple so we never drop
+//     events in the last ledger of a batch (F1 audit — previously we
+//     advanced via `lastLedger + 1`, which truncates any events beyond
+//     the RPC's server-side limit in that ledger).
 
 function loadStartLedger() {
   const v = /** @type {any} */ (
@@ -59,12 +73,32 @@ function saveStartLedger(ledger) {
   ).run(new Date().toISOString());
   // Audit A-12: nudge the WAL to the main db file so a hard-crash doesn't
   // lose the cursor. PASSIVE is non-blocking and cheap; we're only
-  // advancing the cursor a few times per second. The global txid dedupe
-  // in index.js still covers any events replayed on crash recovery, so
-  // the checkpoint is belt-and-braces.
+  // advancing the cursor a few times per second.
   try {
     db.prepare(`PRAGMA wal_checkpoint(PASSIVE)`).run();
   } catch (_) {}
+}
+
+function loadEventCursor() {
+  const v = /** @type {any} */ (
+    db.prepare(`SELECT value FROM system_state WHERE key = 'stellar_cursor'`).get()
+  )?.value;
+  if (!v || typeof v !== 'string' || v.length === 0 || v.length > 128) return null;
+  // Soroban pagination tokens are opaque strings. Defence in depth: reject
+  // anything with non-printable bytes or length outside the expected range
+  // so a corrupted row can't smuggle junk back into the RPC request.
+  if (/[^\x20-\x7e]/.test(v)) return null;
+  return v;
+}
+
+function saveEventCursor(cursor) {
+  db.prepare(`INSERT OR REPLACE INTO system_state (key, value) VALUES ('stellar_cursor', ?)`).run(
+    String(cursor),
+  );
+}
+
+function clearEventCursor() {
+  db.prepare(`DELETE FROM system_state WHERE key = 'stellar_cursor'`).run();
 }
 
 // ── Watcher ───────────────────────────────────────────────────────────────────
@@ -88,65 +122,74 @@ function startWatcher(onPayment, log = console.log) {
   };
 }
 
+// Pagination limit for getEvents. The SDK passes this as `pagination.limit`
+// on the wire; the batch size is also bounded by the RPC server's own cap
+// (typically 10k). Keep this high enough that a burst of real payments
+// drains in one poll, low enough to keep JSON-RPC payloads reasonable.
+const EVENT_BATCH_LIMIT = 200;
+
 async function poll(onPayment, log) {
   try {
-    let sl = loadStartLedger();
-    if (!sl) {
-      const latest = await rpcServer.getLatestLedger();
-      sl = Math.max(1, latest.sequence - 100);
-      saveStartLedger(sl);
+    // Prefer the cursor (authoritative pagination token) over the legacy
+    // ledger anchor. Cursor mode is mutually exclusive with startLedger —
+    // Soroban RPC rejects requests that mix them, so the request shape
+    // below is a discriminated union, not a merge.
+    const cursor = loadEventCursor();
+    let sl = null;
+    if (!cursor) {
+      sl = loadStartLedger();
+      if (!sl) {
+        const latest = await rpcServer.getLatestLedger();
+        sl = Math.max(1, latest.sequence - 100);
+        saveStartLedger(sl);
+      }
     }
 
-    const result = await rpcServer.getEvents(
-      /** @type {any} */ ({
-        startLedger: sl,
-        filters: [
-          {
-            type: 'contract',
-            contractIds: [RECEIVER_CONTRACT_ID],
-            // No topic filter — mainnet RPC topic XDR matching is unreliable;
-            // events are filtered by symbol in handlePaymentEvent instead.
-          },
-        ],
-        pagination: { limit: 200 },
-      }),
-    );
+    /** @type {any} */
+    const request = {
+      filters: [
+        {
+          type: 'contract',
+          contractIds: [RECEIVER_CONTRACT_ID],
+          // No topic filter — mainnet RPC topic XDR matching is unreliable;
+          // events are filtered by symbol in handlePaymentEvent instead.
+        },
+      ],
+      limit: EVENT_BATCH_LIMIT,
+    };
+    if (cursor) {
+      request.cursor = cursor;
+    } else {
+      request.startLedger = sl;
+    }
+
+    const result = await rpcServer.getEvents(request);
     const events = result.events ?? [];
 
     for (const event of events) {
       await handlePaymentEvent(event, onPayment, log);
     }
 
-    if (events.length > 0) {
-      // Advance past the last processed event's ledger. All events in a batch
-      // share the same or increasing ledger numbers. Re-processing the same tx
-      // is safe — index.js has a global txid duplicate guard.
-      //
-      // F3 batch-saturation warning. If a single ledger has more events
-      // on our contract than the batch limit (200), we currently advance
-      // past that ledger and lose events 201+ in it because the getEvents
-      // call here doesn't use the response cursor for intra-ledger
-      // pagination. At cards402 scale this should never happen (a
-      // handful of payments per ledger at most), so we emit a loud
-      // bizEvent + log so the operator can correlate it with any
-      // missing-payment investigation. Proper cursor-based pagination
-      // is tracked as a follow-up — this at least surfaces the edge
-      // case instead of silently dropping events.
-      if (events.length >= 200) {
-        const firstLedger = events[0].ledger;
-        const lastLedger = events[events.length - 1].ledger;
-        if (firstLedger === lastLedger) {
-          log(
-            `[stellar] WARN batch saturated at 200 events in single ledger ${lastLedger} — events 201+ in that ledger may be lost`,
-          );
-          bizEvent('stellar.batch_saturated_single_ledger', {
-            ledger: lastLedger,
-            batch_size: events.length,
-          });
-        }
+    // Advance the pagination cursor authoritatively. Soroban RPC always
+    // returns a cursor — even when `events` is empty — that points at the
+    // highest-sequenced event position seen up to `latestLedger`. Using
+    // it as the next request's cursor means we never drop events at a
+    // ledger boundary (F1 audit): the server-side pagination token is
+    // the single source of truth for "what comes next", not a client-
+    // computed `lastLedger + 1`, which truncated any further events in
+    // that ledger when the batch was server-capped.
+    if (typeof result.cursor === 'string' && result.cursor.length > 0) {
+      saveEventCursor(result.cursor);
+      if (events.length > 0) {
+        // Keep stellar_start_ledger in sync for ops visibility — it is
+        // the value surfaced by /status as "last processed ledger" and
+        // is also the fallback if the cursor ever gets cleared.
+        saveStartLedger(events[events.length - 1].ledger + 1);
       }
-      saveStartLedger(events[events.length - 1].ledger + 1);
-    } else if (result.latestLedger) {
+    } else if (result.latestLedger && events.length === 0) {
+      // Defensive fallback for an RPC that somehow returns no cursor:
+      // advance the legacy anchor so we don't re-scan the same range
+      // forever. Should not happen in practice with modern Soroban RPC.
       saveStartLedger(result.latestLedger);
     }
 
@@ -157,7 +200,10 @@ async function poll(onPayment, log) {
     // backed off 4× to avoid hammering a broken endpoint.
     if (shutdownRequested) return;
     const POLL_MS = parseInt(process.env.WATCHER_POLL_INTERVAL_MS || '1500', 10);
-    setTimeout(() => poll(onPayment, log), events.length === 200 ? 0 : POLL_MS);
+    // If the batch came back saturated, the next poll has more to read
+    // immediately — skip the sleep.
+    const nextDelay = events.length >= EVENT_BATCH_LIMIT ? 0 : POLL_MS;
+    setTimeout(() => poll(onPayment, log), nextDelay);
   } catch (err) {
     const POLL_MS = parseInt(process.env.WATCHER_POLL_INTERVAL_MS || '1500', 10);
 
@@ -182,21 +228,35 @@ async function poll(onPayment, log) {
     // This matches the bug pattern bit shawn@rozo.ai: two stranded
     // $30 USDC orders with zero on-chain footprint from our side,
     // because our watcher was stuck in this exact error loop.
+    // Self-heal for both ledger-range-based errors ("startLedger must be
+    // within the ledger range: X - Y") and cursor-based errors (which
+    // appear when a persisted cursor points at a tuple whose ledger is
+    // older than the RPC's retention window, e.g. "cursor is not within
+    // the ledger range"). We parse any "<lower> - <upper>" pair from the
+    // error message and anchor to upper - 100 to resume.
     const msg = err?.message || '';
-    const outOfRangeMatch = msg.match(/startLedger must be within the ledger range: (\d+) - (\d+)/);
-    if (outOfRangeMatch) {
-      const upper = parseInt(outOfRangeMatch[2], 10);
+    const rangeMatch = msg.match(/ledger range[^0-9]*(\d+)\s*-\s*(\d+)/i);
+    if (rangeMatch) {
+      const upper = parseInt(rangeMatch[2], 10);
       if (Number.isFinite(upper) && upper > 0) {
         // Resume at upper - 100 so we get a bit of buffer but don't
         // try to re-scan the whole retention window in one batch.
         const resumeAt = Math.max(1, upper - 100);
-        const oldCursor = loadStartLedger();
+        const oldLedger = loadStartLedger();
+        const oldCursor = loadEventCursor();
+        // Clear the cursor so the next poll bootstraps via startLedger —
+        // the old cursor is outside retention and any further cursor-mode
+        // request would produce the same error.
+        clearEventCursor();
         saveStartLedger(resumeAt);
-        log(`[stellar] cursor ${oldCursor} fell outside RPC retention; resetting to ${resumeAt}`);
+        log(
+          `[stellar] cursor out of range (ledger=${oldLedger} token=${oldCursor ? 'set' : 'unset'}); resetting to ledger ${resumeAt}`,
+        );
         bizEvent('stellar.cursor_reset_out_of_range', {
-          old_cursor: oldCursor,
+          old_cursor: oldLedger,
+          old_token: oldCursor ? 'set' : 'unset',
           new_cursor: resumeAt,
-          rpc_lower: parseInt(outOfRangeMatch[1], 10),
+          rpc_lower: parseInt(rangeMatch[1], 10),
           rpc_upper: upper,
         });
         // Retry quickly — the reset cursor is valid, no need to wait
@@ -242,6 +302,51 @@ function serialiseEventForDeadLetter(event) {
   } catch (e) {
     return `serialisation_failed: ${e.message}`;
   }
+}
+
+// ── Dispatch retry tracking (F2 audit: poison-pill starvation) ────────────
+//
+// Without bounded retries, a single event whose `onPayment` dispatch
+// consistently throws (DB constraint bug, code path that throws on a
+// specific shape) blocks the entire watcher forever: each outer poll
+// retries the same batch, re-dispatches the earlier successful events,
+// fails again on the poison event, and never advances the cursor.
+//
+// We count dispatch failures per event.id (a stable Soroban RPC-assigned
+// identifier) in an in-memory Map. After MAX_DISPATCH_RETRIES consecutive
+// failures we:
+//   1. Route the event to stellar_dead_letter so ops can replay it later.
+//   2. Emit a bizEvent alert so the on-call surface lights up.
+//   3. Return from handlePaymentEvent without rethrowing, letting the
+//      outer loop advance the cursor past the poison event.
+//
+// In-memory is acceptable: a process restart resets the counter, which
+// gives each new process a fresh chance for the bug to have been fixed
+// before we dead-letter. A bounded cap prevents unbounded growth from
+// transient errors.
+const MAX_DISPATCH_RETRIES = 5;
+const DISPATCH_RETRY_CAP = 1024;
+const dispatchRetries = /** @type {Map<string, number>} */ (new Map());
+
+function bumpDispatchRetry(eventId) {
+  const next = (dispatchRetries.get(eventId) ?? 0) + 1;
+  dispatchRetries.set(eventId, next);
+  // Crude LRU bound: on overflow, drop the oldest insertion-order entry.
+  // Map preserves insertion order so the first key is the oldest.
+  if (dispatchRetries.size > DISPATCH_RETRY_CAP) {
+    const firstKey = dispatchRetries.keys().next().value;
+    if (firstKey !== undefined) dispatchRetries.delete(firstKey);
+  }
+  return next;
+}
+
+function clearDispatchRetry(eventId) {
+  dispatchRetries.delete(eventId);
+}
+
+// Exposed for tests — lets a test reset the retry map between cases.
+function _resetDispatchRetries() {
+  dispatchRetries.clear();
 }
 
 async function handlePaymentEvent(event, onPayment, log) {
@@ -321,6 +426,9 @@ async function handlePaymentEvent(event, onPayment, log) {
 
   const { eventSymbol, orderId, senderAddress, amountDecimal } = parsed;
 
+  /** @type {{txid:string, paymentAsset:string, amountUsdc:string|null, amountXlm:string|null, senderAddress:string, orderId:string} | null} */
+  let dispatchPayload = null;
+
   if (eventSymbol === 'pay_usdc') {
     log(
       `[stellar] pay_usdc: $${amountDecimal} USDC, order=${orderId}, from=${senderAddress}, tx=${event.txHash}`,
@@ -331,14 +439,14 @@ async function handlePaymentEvent(event, onPayment, log) {
       order_id: orderId,
       txid: event.txHash,
     });
-    await onPayment({
+    dispatchPayload = {
       txid: event.txHash,
       paymentAsset: 'usdc_soroban',
       amountUsdc: amountDecimal,
       amountXlm: null,
       senderAddress,
       orderId,
-    });
+    };
   } else if (eventSymbol === 'pay_xlm') {
     log(
       `[stellar] pay_xlm: ${amountDecimal} XLM, order=${orderId}, from=${senderAddress}, tx=${event.txHash}`,
@@ -349,14 +457,14 @@ async function handlePaymentEvent(event, onPayment, log) {
       order_id: orderId,
       txid: event.txHash,
     });
-    await onPayment({
+    dispatchPayload = {
       txid: event.txHash,
       paymentAsset: 'xlm_soroban',
       amountUsdc: null,
       amountXlm: amountDecimal,
       senderAddress,
       orderId,
-    });
+    };
   } else {
     log(`[stellar] unknown event symbol: ${eventSymbol} tx=${event.txHash}`);
     bizEvent('stellar.unknown_event_symbol', {
@@ -364,7 +472,64 @@ async function handlePaymentEvent(event, onPayment, log) {
       tx_hash: event.txHash,
       symbol: String(eventSymbol),
     });
+    return;
+  }
+
+  // F2 audit: bounded-retry dispatch. If onPayment rejects, count the
+  // failure. Below MAX_DISPATCH_RETRIES we rethrow so the outer poll
+  // loop's catch handler backs off and retries the batch (unchanged
+  // legacy behaviour for transient DB/lock errors). At-or-above
+  // MAX_DISPATCH_RETRIES we dead-letter the event and swallow the
+  // error so the cursor can advance — the alternative is blocking
+  // every subsequent payment forever on one poison event.
+  const eventId = String(event.id ?? `${event.txHash}:${event.ledger}`);
+  try {
+    await onPayment(dispatchPayload);
+    clearDispatchRetry(eventId);
+  } catch (dispatchErr) {
+    const attempts = bumpDispatchRetry(eventId);
+    if (attempts < MAX_DISPATCH_RETRIES) {
+      log(
+        `[stellar] dispatch failed for ${event.txHash} attempt=${attempts}/${MAX_DISPATCH_RETRIES}: ${dispatchErr.message}`,
+      );
+      bizEvent('stellar.dispatch_retry', {
+        ledger: event.ledger,
+        tx_hash: event.txHash,
+        event_id: eventId,
+        attempt: attempts,
+        error: dispatchErr.message,
+      });
+      throw dispatchErr;
+    }
+    // Poison-pill breakout. Log loudly, dead-letter, alert, drop the
+    // retry counter entry (freeing the map slot) and return normally so
+    // the for-loop in poll() moves on to the next event.
+    log(
+      `[stellar] dispatch POISON after ${attempts} attempts for ${event.txHash}: ${dispatchErr.message} — dead-lettering`,
+    );
+    bizEvent('stellar.dispatch_poison_dead_lettered', {
+      ledger: event.ledger,
+      tx_hash: event.txHash,
+      event_id: eventId,
+      attempts,
+      error: dispatchErr.message,
+      order_id: orderId,
+    });
+    try {
+      db.prepare(
+        `INSERT OR IGNORE INTO stellar_dead_letter (tx_hash, ledger, raw_event, error)
+         VALUES (?, ?, ?, ?)`,
+      ).run(
+        event.txHash,
+        event.ledger,
+        serialiseEventForDeadLetter(event),
+        `dispatch_poison: ${dispatchErr.message}`,
+      );
+    } catch (dbErr) {
+      log(`[stellar] dead-letter insert failed for ${event.txHash}: ${dbErr.message}`);
+    }
+    clearDispatchRetry(eventId);
   }
 }
 
-module.exports = { startWatcher, handlePaymentEvent };
+module.exports = { startWatcher, handlePaymentEvent, _resetDispatchRetries };
