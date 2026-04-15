@@ -204,13 +204,15 @@ async function sendLoginCode(email, code) {
     </table>
     <p style="margin:24px 0 0 0;color:${COLOR.faint};font-size:13px;line-height:1.55;">This code expires in 15 minutes. If you didn't request it, you can safely ignore this email — nobody is waiting on the other end.</p>
   `;
-  // Subject is deliberately code-less. Email subjects appear in
-  // provider logs, compliance archives, and the email client sidebar
-  // long after the code has been used and invalidated — keeping the
-  // code in the body only shrinks the accidental-exposure surface.
-  // The HTML preheader still carries the code so it's the first thing
-  // the recipient sees on a mobile client without the subject leaking
-  // the value upstream.
+  // Subject AND preheader are deliberately code-less. Both surfaces
+  // appear in upstream-visible places — provider logs, compliance
+  // archives, spam-classification pipelines, and the email client
+  // sidebar — long after the code has been used and invalidated.
+  // Keeping the code in the HTML/text body ONLY shrinks the
+  // accidental-exposure surface. A previous version of this file
+  // claimed the preheader carried the code; the actual behaviour
+  // was already code-free and that's the security-correct choice.
+  // Adversarial audit F2-email.
   const subject = 'Your Cards402 login code';
   await getTransporter().sendMail({
     from: from(),
@@ -317,9 +319,11 @@ async function sendSpendAlertEmail(ownerEmail, { keyLabel, pct, spentUsdc, limit
 
 // Generic alert dispatcher used by lib/alerts.js. Subject + body are
 // pre-rendered by the alert evaluator so the template stays simple.
+//
+// Note: getTransporter() always returns a transporter — the previous
+// `if (!transporter) return;` guard was dead code (F3-email).
 async function sendAlertEmail({ to, subject, body }) {
   const transporter = getTransporter();
-  if (!transporter) return;
   const htmlBody = `
     ${eyebrow('Alert')}
     ${headline(escapeHtml(subject))}

@@ -38,8 +38,25 @@ router.use(requireAuth, requireDashboard);
 // through to DB parameters expecting a nullable TEXT column.
 function shortString(value, max) {
   if (typeof value !== 'string') return null;
-  if (value.length === 0) return null;
-  return value.slice(0, max);
+  // Strip control characters (NUL, BEL, \r\n, ANSI escapes, DEL)
+  // before length check and truncation. Free-form operator text
+  // downstream lands in email subjects / text bodies (lib/email.js
+  // sendApprovalEmail / sendSpendAlertEmail), audit_log displays,
+  // webhook_deliveries displays, and the dashboard UI — none of
+  // which want control bytes. In particular, an api-key label or
+  // approval note with embedded CRLF could otherwise be used to
+  // visually garble downstream displays and is a defence-in-depth
+  // layer against SMTP header injection if any future caller
+  // interpolates the label into an unencoded header. Tab (\x09) is
+  // preserved because it can legitimately appear in multi-line notes.
+  // Adversarial audit F1-email.
+  // Range covers every ASCII control char EXCEPT tab (\x09) which is
+  // preserved: \x00-\x08 + \x0a-\x1f + \x7f. Without \x0a and \x0d in
+  // the range, LF and CR would pass through — which is exactly the
+  // header-injection vector this strip is meant to close.
+  const cleaned = value.replace(/[\x00-\x08\x0a-\x1f\x7f]/g, '').trim();
+  if (cleaned.length === 0) return null;
+  return cleaned.slice(0, max);
 }
 
 // ── Live SSE feed ─────────────────────────────────────────────────────────────
@@ -1155,4 +1172,8 @@ router.get('/platform-wallet', requirePlatformOwner, (req, res) => {
   }
 });
 
+// Attach internal helpers to the router so unit tests can exercise
+// them in isolation. Express routers are functions, so attaching
+// named properties is a standard, app.use-compatible pattern.
+router.shortString = shortString;
 module.exports = router;
