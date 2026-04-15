@@ -28,6 +28,7 @@ export {
   getOWSPublicKey,
   getOWSBalance,
   addUsdcTrustlineOWS,
+  checkSorobanTxLanded,
   payViaContractOWS,
   purchaseCardOWS,
   onboardAgent,

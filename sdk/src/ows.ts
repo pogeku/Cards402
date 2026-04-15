@@ -257,6 +257,55 @@ function owsSignTx<T extends SignableTx>(
   return tx;
 }
 
+// ── Soroban tx landed-check ──────────────────────────────────────────────────
+
+/**
+ * Check whether a Soroban tx hash has materialized on the Stellar
+ * ledger. Returns:
+ *   - 'landed'  — Horizon returned a successful tx record
+ *   - 'dropped' — Horizon 404s and the caller has already exhausted
+ *                 the inclusion window client-side, so the tx is
+ *                 almost certainly gone
+ *   - 'pending' — Horizon is down or the tx is still in the
+ *                 mempool; caller should wait rather than resubmit
+ *
+ * Used by purchaseCardOWS's resume branch to decide whether a
+ * dropped-pre-apply Soroban tx should be re-submitted or whether we
+ * should wait for a still-in-flight one to finalize.
+ */
+export async function checkSorobanTxLanded(
+  txHash: string,
+  opts: { networkPassphrase?: string } = {},
+): Promise<'landed' | 'dropped' | 'pending'> {
+  const horizonUrl =
+    opts.networkPassphrase === Networks.TESTNET
+      ? 'https://horizon-testnet.stellar.org'
+      : HORIZON_URL;
+  try {
+    const res = await fetch(`${horizonUrl}/transactions/${txHash}`, {
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (res.ok) {
+      const body = (await res.json()) as { successful?: boolean };
+      return body.successful === false ? 'dropped' : 'landed';
+    }
+    if (res.status === 404) {
+      // Horizon doesn't know about this tx. The caller reached us
+      // only after an in-process submit already timed out past the
+      // 120s Soroban inclusion window, so a 404 now is as good a
+      // signal as we'll get that the tx was dropped pre-apply.
+      return 'dropped';
+    }
+    // Horizon returned an unexpected status — don't make a
+    // resubmit decision based on a flaky response.
+    return 'pending';
+  } catch {
+    // Network error hitting Horizon. Treat as pending — we'd
+    // rather wait than risk a double-pay on an unreliable signal.
+    return 'pending';
+  }
+}
+
 // ── Trustline ─────────────────────────────────────────────────────────────────
 
 export interface TrustlineOpts {
@@ -372,11 +421,36 @@ export interface PurchaseCardOwsOpts {
   baseUrl?: string;
   networkPassphrase?: string;
   /**
-   * Resume an existing order instead of creating a new one. Accepts either
-   * a bare order id string (wait for the backend to finish an in-flight
-   * payment) or an object with a fresh PaymentInstructions (resubmit).
+   * Resume an existing order instead of creating a new one. Three shapes:
+   *
+   *   - bare string              — wait for the backend to finish an
+   *                                in-flight payment. Conservative
+   *                                default when we have no context.
+   *
+   *   - { orderId, payment }     — caller has rebuilt the payment
+   *                                instructions (e.g. from a cached
+   *                                order response) and wants to
+   *                                resubmit.
+   *
+   *   - { orderId, txHash,       — caller has the txHash from a prior
+   *       phase }                  ResumableError. purchaseCardOWS
+   *                                checks whether that tx landed on
+   *                                the ledger and, if not, re-fetches
+   *                                the order's payment instructions
+   *                                from the backend and resubmits.
+   *                                This is the shape saved to
+   *                                ~/.cards402/last-order so the CLI
+   *                                --resume flow recovers cleanly
+   *                                from a dropped Soroban submit.
    */
-  resume?: string | { orderId: string; payment?: PaymentInstructions };
+  resume?:
+    | string
+    | {
+        orderId: string;
+        payment?: PaymentInstructions;
+        txHash?: string;
+        phase?: 'unpaid' | 'paid';
+      };
   /** Tune the card-ready poll. Default: { timeoutMs: 300_000, intervalMs: 3_000 }. */
   waitForCardOpts?: { timeoutMs?: number; intervalMs?: number };
 }
@@ -404,11 +478,15 @@ export async function purchaseCardOWS(
   let skipPayment = false;
 
   if (opts.resume) {
+    let priorTxHash: string | undefined;
+    let priorPhase: 'unpaid' | 'paid' | undefined;
     if (typeof opts.resume === 'string') {
       orderId = opts.resume;
     } else {
       orderId = opts.resume.orderId;
       payment = opts.resume.payment;
+      priorTxHash = opts.resume.txHash;
+      priorPhase = opts.resume.phase;
     }
     // Check where the order is — if the payment already landed (or is
     // landing), we can skip straight to waitForCard.
@@ -424,13 +502,43 @@ export async function purchaseCardOWS(
     ) {
       throw new OrderFailedError(orderId, status.error ?? status.phase, status.refund);
     }
-    // awaiting_payment — a previous submit may still be in flight. If the
-    //   caller didn't hand us a fresh PaymentInstructions, just wait; the
-    //   backend will pick the tx up when it finalizes, or the order will
-    //   expire cleanly. Resubmitting without the original payment object
-    //   risks double-paying if the original lands after all.
-    // processing / awaiting_approval — backend is working, just wait.
-    if (status.phase !== 'awaiting_payment' || !payment) {
+    if (status.phase !== 'awaiting_payment') {
+      // processing / awaiting_approval — backend is working, just wait.
+      skipPayment = true;
+    } else if (payment) {
+      // Caller handed in a fresh payment object — resubmit.
+      // skipPayment stays false; fall through.
+    } else if (priorTxHash && priorPhase === 'unpaid') {
+      // F1-resume fix: we have a captured tx hash from a prior
+      // ResumableError where the client never saw the tx land. Check
+      // Horizon ONE MORE TIME to see if it's materialized since the
+      // error fired — Soroban RPCs occasionally report NOT_FOUND
+      // briefly past the 120s inclusion window before the tx shows
+      // up. If Horizon still doesn't know about it, call it dropped
+      // and rebuild the payment from the order's persisted
+      // instructions (the backend returns `payment` on the order
+      // response for pending_payment orders) so we can resubmit
+      // instead of defaulting to a 5-minute waitForCard hang.
+      const landed = await checkSorobanTxLanded(priorTxHash);
+      if (landed === 'landed') {
+        // Tx is on the ledger — backend will see the Soroban event
+        // any second. Wait.
+        skipPayment = true;
+      } else if (landed === 'dropped' && status.payment) {
+        // Dropped pre-apply. Rebuild payment from the backend's
+        // view of the order (which includes the original Soroban
+        // contract invocation parameters) and re-submit.
+        payment = status.payment;
+        // skipPayment stays false — fall through to the submit path.
+      } else {
+        // Still pending, or we couldn't tell. Be conservative and
+        // wait — resubmitting a tx that's actually still in the
+        // mempool would double-pay if both eventually land.
+        skipPayment = true;
+      }
+    } else {
+      // No prior tx context (either bare-string resume, or the
+      // saved state had no txHash). Conservative wait.
       skipPayment = true;
     }
   } else {

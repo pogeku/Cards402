@@ -102,6 +102,16 @@ export interface OrderStatus {
   error?: string;
   note?: string;
   refund?: { stellar_txid: string };
+  /**
+   * Present when status === 'pending_payment'. Carries the Soroban
+   * contract invocation the agent needs to submit. The backend
+   * stores this verbatim in orders.vcc_payment_json and re-emits it
+   * on GET /orders/:id so a resumed purchaseCardOWS can rebuild a
+   * fresh payment tx without having to recompute the payment
+   * instructions from scratch. Used by the F1-resume fix for dropped
+   * Soroban txs.
+   */
+  payment?: PaymentInstructions;
   created_at: string;
   updated_at: string;
 }

@@ -104,13 +104,94 @@ function lastOrderFile(): string {
   return path.join(dir, 'last-order');
 }
 
-function saveLastOrder(orderId: string): void {
+/**
+ * Serialised form of the last-attempted purchase that errored out with
+ * a ResumableError. Captured context lets `--resume` make an informed
+ * decision instead of defaulting to "wait 5 minutes for the SSE stream
+ * to say anything".
+ *
+ * - `orderId`: the cards402 order id (always present)
+ * - `txHash`:  Soroban tx hash if the client-side submit got far enough
+ *              to capture one. Absent if the error fired before submit
+ *              (e.g. trustline add failed).
+ * - `phase`:   'unpaid' if the payment submit didn't reach confirmed-
+ *              on-ledger, 'paid' if the client saw it land but the
+ *              post-payment wait/step failed. Mirrors the field on
+ *              ResumableError.
+ * - `savedAt`: ISO-8601 of the save. Used by the resume path to decide
+ *              how aggressively to retry — if the save is older than
+ *              the Soroban inclusion window, a still-missing tx is
+ *              almost certainly dropped.
+ */
+export interface LastOrderState {
+  orderId: string;
+  txHash?: string;
+  phase?: 'unpaid' | 'paid';
+  savedAt?: string;
+}
+
+function saveLastOrder(state: LastOrderState): void {
   try {
     const p = lastOrderFile();
     fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(p, orderId + '\n', { mode: 0o600 });
+    // Atomic write via tmp + rename, same pattern as config.ts. An
+    // interrupted save would otherwise leave a truncated JSON that
+    // loadLastOrder would silently skip — losing the resume context
+    // for the very error that triggered the save.
+    const body = JSON.stringify({ savedAt: new Date().toISOString(), ...state }, null, 2);
+    const tmp = `${p}.tmp-${process.pid}`;
+    try {
+      fs.writeFileSync(tmp, body, { mode: 0o600 });
+      fs.renameSync(tmp, p);
+    } catch {
+      try {
+        fs.unlinkSync(tmp);
+      } catch {
+        /* temp not created */
+      }
+      throw new Error('save failed');
+    }
+    // Belt-and-braces mode enforcement — some filesystems drop the
+    // mode on rename.
+    try {
+      fs.chmodSync(p, 0o600);
+    } catch {
+      /* non-fatal */
+    }
   } catch {
-    /* non-fatal */
+    /* non-fatal — resume context is best-effort */
+  }
+}
+
+/**
+ * Read the last-order file. Supports both the current JSON shape and
+ * the legacy line-based format (`<orderId>\n`) that older versions
+ * wrote — so a user who ran an older CLI and then upgraded mid-purchase
+ * doesn't lose their resume context. Returns null if the file is
+ * missing, unreadable, or has no parseable orderId.
+ */
+export function loadLastOrder(): LastOrderState | null {
+  try {
+    const raw = fs.readFileSync(lastOrderFile(), 'utf8');
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    if (trimmed.startsWith('{')) {
+      // JSON form
+      const parsed = JSON.parse(trimmed) as Partial<LastOrderState>;
+      if (!parsed.orderId || typeof parsed.orderId !== 'string') return null;
+      return {
+        orderId: parsed.orderId,
+        txHash: typeof parsed.txHash === 'string' ? parsed.txHash : undefined,
+        phase: parsed.phase === 'paid' || parsed.phase === 'unpaid' ? parsed.phase : undefined,
+        savedAt: typeof parsed.savedAt === 'string' ? parsed.savedAt : undefined,
+      };
+    }
+    // Legacy bare-line form — first line is the order id.
+    const orderId = trimmed.split('\n')[0]?.trim();
+    if (!orderId) return null;
+    return { orderId };
+  } catch {
+    return null;
   }
 }
 
@@ -280,8 +361,37 @@ Your operator can mint a claim code from https://cards402.com/dashboard.
     }
   }
 
+  // Enrich the resume pass-through with saved txHash / phase context
+  // from the last-order file. If the user's --resume orderId matches
+  // the saved state, the SDK can make an informed decision about
+  // whether to wait (tx still pending), skip-to-waitForCard (tx
+  // landed), or re-submit (tx dropped). Without this enrichment,
+  // --resume defaulted to "wait the full timeout" even when the
+  // original tx was provably dropped pre-apply.
+  let resumeArg:
+    | string
+    | { orderId: string; txHash?: string; phase?: 'unpaid' | 'paid' }
+    | undefined;
   if (args.resume) {
-    process.stdout.write(`→ Resuming order ${args.resume}…\n`);
+    const saved = loadLastOrder();
+    if (saved && saved.orderId === args.resume) {
+      resumeArg = {
+        orderId: saved.orderId,
+        txHash: saved.txHash,
+        phase: saved.phase,
+      };
+      process.stdout.write(
+        `→ Resuming order ${args.resume}` +
+          (saved.txHash ? ` (prior tx: ${saved.txHash.slice(0, 8)}…)` : '') +
+          `…\n`,
+      );
+    } else {
+      // User passed a --resume id that doesn't match last-order, or
+      // there is no last-order. Fall back to the bare-string form —
+      // conservative "wait for backend" behavior.
+      resumeArg = args.resume;
+      process.stdout.write(`→ Resuming order ${args.resume}…\n`);
+    }
   } else {
     process.stdout.write(`→ Purchasing $${args.amount} card via ${paymentAsset.toUpperCase()}…\n`);
   }
@@ -296,7 +406,7 @@ Your operator can mint a claim code from https://cards402.com/dashboard.
       paymentAsset,
       passphrase,
       vaultPath,
-      ...(args.resume ? { resume: args.resume } : {}),
+      ...(resumeArg ? { resume: resumeArg } : {}),
     });
     clearLastOrder();
     printCard(card);
@@ -308,7 +418,13 @@ Your operator can mint a claim code from https://cards402.com/dashboard.
       return 1;
     }
     if (err instanceof ResumableError) {
-      saveLastOrder(err.orderId);
+      // Preserve the full context — txHash + phase — so the next
+      // --resume run can decide whether the prior submit landed.
+      saveLastOrder({
+        orderId: err.orderId,
+        txHash: err.txHash,
+        phase: err.phase,
+      });
       process.stderr.write(`\nerror: ${err.message}\n`);
       process.stderr.write(
         `\nYour payment may still be processing on-chain. The cards402 backend will\n` +
