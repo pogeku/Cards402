@@ -327,3 +327,146 @@ describe('checkPolicy — corrupt numeric policy columns', () => {
     assert.equal(result.rule, 'policy_corrupt_single_tx');
   });
 });
+
+// ── F1-policy (2026-04-15): malformed policy_allowed_hours ──────────────
+//
+// The previous parser used `.split(':').map(Number)` with only a
+// typeof-string check on start/end. Inputs like "12:MM" / "24:00" /
+// "12:70" / "-1:00" all passed the guard and silently produced NaN or
+// out-of-range minute values. The overnight-window branch could then
+// silently ALLOW transactions during a window that doesn't actually
+// exist. Each test here forces one such failure mode and asserts
+// that the decision is `blocked` with the policy_corrupt_hours rule
+// — matching the fail-closed contract the section header claims.
+
+describe('checkPolicy — F1 malformed policy_allowed_hours', () => {
+  before(() => resetDb());
+
+  function setHours(keyId, hours) {
+    db.prepare(`UPDATE api_keys SET policy_allowed_hours = ? WHERE id = ?`).run(
+      JSON.stringify(hours),
+      keyId,
+    );
+  }
+
+  it('fails closed on non-numeric minute ("12:MM")', async () => {
+    const { id } = await createTestKey({ label: 'hours-nan-min' });
+    setHours(id, { start: '12:MM', end: '18:00' });
+    const result = checkPolicy(id, '10.00');
+    assert.equal(result.decision, 'blocked');
+    assert.equal(result.rule, 'policy_corrupt_hours');
+  });
+
+  it('fails closed on hour > 23 ("24:00")', async () => {
+    const { id } = await createTestKey({ label: 'hours-hour24' });
+    setHours(id, { start: '24:00', end: '18:00' });
+    const result = checkPolicy(id, '10.00');
+    assert.equal(result.decision, 'blocked');
+    assert.equal(result.rule, 'policy_corrupt_hours');
+  });
+
+  it('fails closed on minute > 59 ("12:70")', async () => {
+    const { id } = await createTestKey({ label: 'hours-min70' });
+    setHours(id, { start: '12:70', end: '18:00' });
+    const result = checkPolicy(id, '10.00');
+    assert.equal(result.decision, 'blocked');
+    assert.equal(result.rule, 'policy_corrupt_hours');
+  });
+
+  it('fails closed on negative hour ("-1:00")', async () => {
+    const { id } = await createTestKey({ label: 'hours-neg' });
+    setHours(id, { start: '-1:00', end: '18:00' });
+    const result = checkPolicy(id, '10.00');
+    assert.equal(result.decision, 'blocked');
+    assert.equal(result.rule, 'policy_corrupt_hours');
+  });
+
+  it('fails closed on missing minute ("12")', async () => {
+    const { id } = await createTestKey({ label: 'hours-no-min' });
+    setHours(id, { start: '12', end: '18:00' });
+    const result = checkPolicy(id, '10.00');
+    assert.equal(result.decision, 'blocked');
+    assert.equal(result.rule, 'policy_corrupt_hours');
+  });
+
+  it('fails closed on 3-field time ("12:30:45")', async () => {
+    // The previous parser's .split(':') would return 3 elements and
+    // destructuring would silently discard the seconds. Strict HH:MM
+    // regex rejects this.
+    const { id } = await createTestKey({ label: 'hours-3fields' });
+    setHours(id, { start: '12:30:45', end: '18:00' });
+    const result = checkPolicy(id, '10.00');
+    assert.equal(result.decision, 'blocked');
+    assert.equal(result.rule, 'policy_corrupt_hours');
+  });
+
+  it('still approves with a valid HH:MM window (regression guard)', async () => {
+    // Set a 24-hour window so the test is timezone-independent.
+    const { id } = await createTestKey({ label: 'hours-valid' });
+    setHours(id, { start: '00:00', end: '23:59' });
+    const result = checkPolicy(id, '10.00');
+    // May be 'after_hours' only in the last minute of the UTC day, so
+    // just assert we don't get policy_corrupt_hours.
+    assert.notEqual(result.rule, 'policy_corrupt_hours');
+  });
+});
+
+// ── F2-policy (2026-04-15): malformed policy_allowed_days ───────────────
+
+describe('checkPolicy — F2 malformed policy_allowed_days', () => {
+  before(() => resetDb());
+
+  function setDays(keyId, days) {
+    db.prepare(`UPDATE api_keys SET policy_allowed_days = ? WHERE id = ?`).run(
+      JSON.stringify(days),
+      keyId,
+    );
+  }
+
+  it('fails closed on string entries ("Tuesday")', async () => {
+    // Before the fix, Array.isArray passed and .includes with a
+    // numeric `today` never matched a string entry — silently blocking
+    // every day (correct direction) but with a misleading 'blocked_day'
+    // reason instead of flagging the policy as corrupt.
+    const { id } = await createTestKey({ label: 'days-string' });
+    setDays(id, ['Tuesday', 'Friday']);
+    const result = checkPolicy(id, '10.00');
+    assert.equal(result.decision, 'blocked');
+    assert.equal(result.rule, 'policy_corrupt_days');
+  });
+
+  it('fails closed on out-of-range entry (7)', async () => {
+    const { id } = await createTestKey({ label: 'days-7' });
+    setDays(id, [0, 1, 2, 3, 4, 5, 6, 7]);
+    const result = checkPolicy(id, '10.00');
+    assert.equal(result.decision, 'blocked');
+    assert.equal(result.rule, 'policy_corrupt_days');
+  });
+
+  it('fails closed on negative entry (-1)', async () => {
+    const { id } = await createTestKey({ label: 'days-neg' });
+    setDays(id, [-1, 0, 1]);
+    const result = checkPolicy(id, '10.00');
+    assert.equal(result.decision, 'blocked');
+    assert.equal(result.rule, 'policy_corrupt_days');
+  });
+
+  it('fails closed on mixed valid + invalid entries', async () => {
+    // A subtle failure mode: valid days are present so .includes(today)
+    // MIGHT succeed depending on the day — but the operator's intent
+    // is ambiguous when the stored value is partially garbage. Fail
+    // closed so the configuration bug surfaces.
+    const { id } = await createTestKey({ label: 'days-mixed' });
+    setDays(id, [0, 1, 2, 'Friday', 5]);
+    const result = checkPolicy(id, '10.00');
+    assert.equal(result.decision, 'blocked');
+    assert.equal(result.rule, 'policy_corrupt_days');
+  });
+
+  it('still approves with all-valid-integer days (regression guard)', async () => {
+    const { id } = await createTestKey({ label: 'days-valid' });
+    setDays(id, [0, 1, 2, 3, 4, 5, 6]);
+    const result = checkPolicy(id, '10.00');
+    assert.equal(result.decision, 'approved');
+  });
+});

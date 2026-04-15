@@ -105,15 +105,37 @@ function checkPolicy(apiKeyId, amountUsdc, opts = {}) {
   if (key.policy_allowed_hours) {
     try {
       const { start, end } = JSON.parse(key.policy_allowed_hours); // "HH:MM"
-      if (typeof start !== 'string' || typeof end !== 'string') {
-        throw new Error('start/end must be strings');
-      }
+      // F1-policy adversarial audit (2026-04-15): strict HH:MM parsing.
+      // The previous `.split(':').map(Number)` silently produced NaN
+      // for inputs like "12:MM" / "24:00" / "12:70" / "-1:30" — all
+      // passed the typeof-string check, all produced NaN or
+      // out-of-range minute totals, and the subsequent inWindow math
+      // could silently ALLOW transactions during a window that
+      // doesn't exist. NaN < x is false, NaN comparisons short-circuit
+      // the overnight-window branch, and a corrupted start/end was
+      // effectively "no policy at all" — the exact failure mode this
+      // section's comment claims to have eliminated.
+      //
+      // Enforcement: exact HH:MM regex (2 digits : 2 digits), integer
+      // ranges hours ∈ [0,23] and minutes ∈ [0,59]. Any deviation
+      // throws and routes through the existing fail-closed catch.
+      const parseHHMM = (label, value) => {
+        if (typeof value !== 'string' || !/^\d{2}:\d{2}$/.test(value)) {
+          throw new Error(`${label} must be HH:MM (got: ${JSON.stringify(value)})`);
+        }
+        const [h, m] = value.split(':').map((s) => parseInt(s, 10));
+        if (!Number.isInteger(h) || h < 0 || h > 23) {
+          throw new Error(`${label} hour out of range 0-23 (got: ${h})`);
+        }
+        if (!Number.isInteger(m) || m < 0 || m > 59) {
+          throw new Error(`${label} minute out of range 0-59 (got: ${m})`);
+        }
+        return h * 60 + m;
+      };
+      const startMins = parseHHMM('start', start);
+      const endMins = parseHHMM('end', end);
       const now = new Date();
-      const [sh, sm] = start.split(':').map(Number);
-      const [eh, em] = end.split(':').map(Number);
       const nowMins = now.getUTCHours() * 60 + now.getUTCMinutes();
-      const startMins = sh * 60 + sm;
-      const endMins = eh * 60 + em;
       // Handle overnight windows (e.g. 22:00–06:00)
       const inWindow =
         startMins <= endMins
@@ -146,6 +168,19 @@ function checkPolicy(apiKeyId, amountUsdc, opts = {}) {
     try {
       const allowed = JSON.parse(key.policy_allowed_days); // [0…6]
       if (!Array.isArray(allowed)) throw new Error('not an array');
+      // F2-policy adversarial audit (2026-04-15): every entry must be
+      // an integer in [0,6]. Previously the only check was Array.isArray,
+      // so `["Tuesday", "Friday"]` passed the guard but the subsequent
+      // `.includes(today)` with a numeric today would never match any
+      // string entry → silently blocked every day. A shape like
+      // `[0, 1, 2, "Friday", 5]` is worse: legit days present AND a
+      // silently-ignored corrupt entry. Fail closed so operators see
+      // a clear signal instead of a partial policy.
+      for (const entry of allowed) {
+        if (!Number.isInteger(entry) || entry < 0 || entry > 6) {
+          throw new Error(`entry must be an integer in [0,6], got: ${JSON.stringify(entry)}`);
+        }
+      }
       const today = new Date().getUTCDay();
       if (!allowed.includes(today)) {
         return finalise(
