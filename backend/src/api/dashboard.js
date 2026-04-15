@@ -355,7 +355,7 @@ function validateApiKeyFields({
 
 // GET /dashboard/api-keys
 router.get('/api-keys', requirePermission('agent:read'), (req, res) => {
-  const { deriveAgentState } = require('../lib/agent-state');
+  const { deriveAgentState, batchDeliveredCounts } = require('../lib/agent-state');
   const rows = /** @type {any[]} */ (
     db
       .prepare(
@@ -371,7 +371,16 @@ router.get('/api-keys', requirePermission('agent:read'), (req, res) => {
       )
       .all(req.dashboard.id)
   );
-  res.json(rows.map((row) => ({ ...row, agent: deriveAgentState(row) })));
+  // F1-agent-state: batch the delivered-count lookup into a single
+  // GROUP BY instead of firing one SELECT COUNT(*) per row. For a
+  // 100-agent dashboard this collapses 100 sequential queries into 1.
+  const counts = batchDeliveredCounts(rows.map((r) => r.id));
+  res.json(
+    rows.map((row) => ({
+      ...row,
+      agent: deriveAgentState(row, { deliveredCount: counts.get(row.id) ?? 0 }),
+    })),
+  );
 });
 
 // POST /dashboard/api-keys — create a new agent API key
