@@ -77,24 +77,139 @@ const NETWORK_PASSPHRASE = NETWORK === 'mainnet' ? Networks.PUBLIC : Networks.TE
 
 const server = new Horizon.Server(HORIZON_URL);
 
-// Retry a Stellar transaction on sequence number mismatch (concurrent sends).
+// Submit a Stellar transaction with two layers of safety:
+//
+//   1. Retry on tx_bad_seq up to `maxAttempts` times. Concurrent sends that
+//      race on the treasury's sequence number resolve naturally: the losing
+//      submit gets tx_bad_seq, reloads the account, and rebuilds with the
+//      fresh seq. tx_bad_seq is definitive — stellar-core validated the
+//      tx and rejected it, so the envelope is NOT on chain and retrying
+//      with a new sequence is safe.
+//
+//   2. Network-error resolution (audit F1-xlm-sender, 2026-04-15).
+//      `server.submitTransaction` throws for two very different failure
+//      modes: Horizon rejected the tx (structured `result_codes`) OR the
+//      HTTP call itself failed (fetch timeout, ECONNRESET, 5xx wrapped by
+//      the SDK). The two cases look identical to the caller but mean
+//      wildly different things: the rejection path is definitive, while
+//      the network path means the tx MAY have been submitted and landed
+//      before the response was lost.
+//
+//      Before this fix, a higher-level retry (fulfillment.js scheduling a
+//      refund) after a lost-response submit could double-spend if the
+//      original tx eventually landed. We now pre-compute the deterministic
+//      envelope hash, and on a network-error catch we look the hash up on
+//      Horizon:
+//
+//        - Found + successful      → return hash (tx did land, all good)
+//        - Found + applied-failed  → throw with stellarStatus='applied_failed'
+//        - Not found (404)         → throw with stellarStatus='not_landed'
+//                                    (caller is free to retry — tx is dead)
+//        - Lookup itself failed    → throw with stellarStatus='unknown'
+//                                    (caller must hold off retry — we
+//                                    genuinely don't know the state)
+//
+//      The `stellarStatus` marker lets callers differentiate safe-retry
+//      from must-not-retry without parsing error strings.
 async function submitWithRetry(buildTx, keypair, maxAttempts = 3) {
+  let lastErr;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const account = await server.loadAccount(keypair.publicKey());
     const tx = buildTx(account);
     tx.sign(keypair);
+    // Compute the envelope hash BEFORE submission so we can look it up on
+    // Horizon if the submit itself throws a network error. tx.hash() is a
+    // Buffer; Horizon's /transactions/{hash} endpoint takes hex.
+    const hashHex = tx.hash().toString('hex');
+
     try {
       const result = await server.submitTransaction(tx);
       return result.hash;
     } catch (err) {
-      const code = err?.response?.data?.extras?.result_codes?.transaction;
-      if (code === 'tx_bad_seq' && attempt < maxAttempts) {
-        // Sequence was stale — reload account and retry
+      lastErr = err;
+      const resultCodes = err?.response?.data?.extras?.result_codes;
+      const txCode = resultCodes?.transaction;
+
+      // tx_bad_seq: definitive rejection; safe to reload + retry.
+      if (txCode === 'tx_bad_seq' && attempt < maxAttempts) {
         continue;
       }
-      throw err;
+      // Any other structured rejection (op_under_dest_min, tx_insufficient_
+      // balance, etc.) is a definitive failure — propagate unchanged.
+      if (resultCodes) {
+        throw err;
+      }
+      // Network-error path: no structured result_codes. Ask Horizon what
+      // actually happened to the hash we computed before submission.
+      const resolution = await resolveNetworkErrorOutcome(hashHex);
+      if (resolution.landed) {
+        // The tx did make it to a ledger during the lost-response window.
+        return hashHex;
+      }
+      // Re-throw with a clearer message and a machine-readable marker so
+      // the caller can decide whether a retry is safe.
+      throw annotateSubmitError(err, hashHex, resolution);
     }
   }
+  // The for-loop either returns a hash or throws on every iteration. The
+  // only way we land here is a logic bug where all iterations `continue`d
+  // without setting lastErr, which is impossible. Surface it explicitly
+  // so a future refactor can't silently fall through to `undefined`.
+  throw lastErr ?? new Error('submitWithRetry: exhausted attempts without terminal result');
+}
+
+// Ask Horizon whether a tx with this hash made it onto a ledger. Called
+// after a network-error throw from submitTransaction. Returns a three-way
+// verdict: {landed:true} if it's on-chain and successful, {landed:false,
+// reason:'not_landed'} if Horizon returned 404, {landed:false,
+// reason:'applied_failed'} if it's on-chain but tx_failed, or {landed:false,
+// reason:'unknown', lookupError} if Horizon is itself unreachable.
+async function resolveNetworkErrorOutcome(hashHex) {
+  try {
+    const record = /** @type {any} */ (await server.transactions().transaction(hashHex).call());
+    if (record?.successful === true) {
+      return { landed: true };
+    }
+    return {
+      landed: false,
+      reason: 'applied_failed',
+      resultCode: record?.result_codes?.transaction || null,
+    };
+  } catch (lookupErr) {
+    const status =
+      /** @type {any} */ (lookupErr)?.response?.status ??
+      /** @type {any} */ (lookupErr)?.status ??
+      null;
+    if (status === 404 || /not.?found/i.test(/** @type {Error} */ (lookupErr)?.message || '')) {
+      return { landed: false, reason: 'not_landed' };
+    }
+    return {
+      landed: false,
+      reason: 'unknown',
+      lookupError: /** @type {Error} */ (lookupErr)?.message || String(lookupErr),
+    };
+  }
+}
+
+// Wrap a submitTransaction throw with the txHash and a stellarStatus marker
+// so callers can tell whether it's safe to retry without regex-parsing the
+// message string. Mirrors the sdk/src/soroban.ts pattern for the Soroban
+// equivalent (stellarStatus='dropped' there, same concept).
+function annotateSubmitError(originalErr, hashHex, resolution) {
+  const status = resolution.reason; // 'not_landed' | 'applied_failed' | 'unknown'
+  const baseMsg = /** @type {Error} */ (originalErr)?.message || String(originalErr);
+  const msg =
+    status === 'not_landed'
+      ? `submit network error and tx ${hashHex} was not accepted by any ledger — safe to retry. (${baseMsg})`
+      : status === 'applied_failed'
+        ? `tx ${hashHex} applied on-chain but failed (${resolution.resultCode || 'unknown'})`
+        : `submit network error and Horizon lookup also failed for ${hashHex}: ${resolution.lookupError || 'unknown'} (original: ${baseMsg})`;
+  const wrapped = /** @type {Error & { stellarStatus?: string, txHash?: string }} */ (
+    new Error(msg)
+  );
+  wrapped.stellarStatus = status;
+  wrapped.txHash = hashHex;
+  return wrapped;
 }
 
 // Send XLM from the treasury wallet (used for XLM refunds)
@@ -180,6 +295,17 @@ async function probeUsdcToXlmPath(destXlm) {
     if (!records.length) return { ok: false, reason: 'no_path' };
     // Horizon already returns records sorted by source_amount ascending.
     const best = records[0];
+    // F2 audit (2026-04-15): reject records with a missing/malformed
+    // source_amount. Previously we passed the raw value through and the
+    // caller did `Number(undefined) / Number(destXlm)` which produces NaN,
+    // and `NaN < x` is always false — so the early-abort check silently
+    // passed and we'd submit a path_payment against a path we'd never
+    // properly priced. Validating at the probe boundary means the caller
+    // can trust sourceAmount is a usable positive number.
+    const srcAmount = Number(best.source_amount);
+    if (!Number.isFinite(srcAmount) || srcAmount <= 0) {
+      return { ok: false, reason: 'invalid_source_amount' };
+    }
     const pathAssets = (best.path || []).map(hydrateAsset);
     return {
       ok: true,
@@ -253,6 +379,17 @@ async function sendUsdcAsXlm({ destination, destXlm, maxUsdc, memo }) {
   if (probe.ok) {
     const quoteUsdcPerXlm = Number(probe.sourceAmount) / Number(destXlm);
     const xlmAtSendAmount = Number(sendAmount) / quoteUsdcPerXlm;
+    // Belt-and-braces after F2 probe validation: if the math somehow
+    // produces a non-finite value (probe.sourceAmount now guarantees a
+    // finite number, but destXlm comes from the caller and could be
+    // malformed in a future refactor), abort with a clear error rather
+    // than let a silent NaN slip past `<`-comparison.
+    if (!Number.isFinite(quoteUsdcPerXlm) || !Number.isFinite(xlmAtSendAmount)) {
+      throw new Error(
+        `sendUsdcAsXlm: slippage math produced non-finite value ` +
+          `(sourceAmount=${probe.sourceAmount}, destXlm=${destXlm}, sendAmount=${sendAmount})`,
+      );
+    }
     if (xlmAtSendAmount < Number(destMin)) {
       throw new Error(
         `DEX would only deliver ${xlmAtSendAmount.toFixed(7)} XLM for ${sendAmount} USDC, ` +
@@ -475,4 +612,8 @@ module.exports = {
   probeUsdcToXlmPath,
   parseStellarPayUri,
   payCtxOrder,
+  // Exposed for unit tests — production callers should use the send*
+  // helpers above, which set up the treasury keypair and operation shape.
+  submitWithRetry,
+  resolveNetworkErrorOutcome,
 };
