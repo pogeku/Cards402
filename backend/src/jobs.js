@@ -10,7 +10,12 @@ const {
   scheduleRefund,
 } = require('./fulfillment');
 const vccClient = require('./vcc-client');
-const { payCtxOrder } = require('./payments/xlm-sender');
+// Import as a module object so tests can monkey-patch `xlmSender.payCtxOrder`
+// at runtime the same way they already do with `vccClient.getVccJobStatus`.
+// Destructuring captures a reference at module load time, which defeats any
+// post-require patch and makes the reconciler's ambiguous-park branch
+// untestable without a full patchCache refactor.
+const xlmSender = require('./payments/xlm-sender');
 const { recordDecision } = require('./policy');
 
 // Reconciler timings. After RETRY_AFTER_MS we retry a stuck step. After
@@ -39,6 +44,66 @@ const JOBS_INTERVAL_MS = 5 * 60 * 1000; // every 5 minutes
 
 function log(msg) {
   console.log(`[jobs] ${msg}`);
+}
+
+// Sentinel return from callPayCtxOrderWithAmbiguousPark — signals to the
+// caller that the ambiguous-outcome branch ran, the row was parked, and
+// the caller MUST NOT proceed to mark xlm_sent_at (which would unpark
+// the row on the next tick).
+const AMBIGUOUS_PARKED = Symbol('ctx_payment_ambiguous_parked');
+
+// Wrap a payCtxOrder call with the ambiguous-outcome park path. If the
+// send throws with stellarStatus in {unknown, applied_failed} AND a
+// txHash is attached, this helper:
+//
+//   1. Persists the hash to orders.ctx_stellar_txid so ops can verify
+//      on-chain.
+//   2. Marks the order 'failed' with the public 'payment_pending_review'
+//      message (see lib/sanitize-error.js — added in the same commit).
+//   3. Emits a loud bizEvent so alerting pipelines can page.
+//   4. Does NOT call scheduleRefund — an auto-refund would be a double-
+//      spend if the original tx actually landed.
+//   5. Returns AMBIGUOUS_PARKED so the caller can skip its own post-send
+//      DB update (setting xlm_sent_at would unpark the row on the next
+//      reconciler tick).
+//
+// Any other error rethrows unchanged and the caller's existing reconcile
+// catch handles it via the attempt-counter + timeout logic.
+//
+// Mirrors the identical logic in payment-handler.js::handlePayment so
+// both the first-pass and the reconciler retry paths cannot
+// double-spend treasury.
+async function callPayCtxOrderWithAmbiguousPark(paymentUrl, opts, orderId, shortId) {
+  try {
+    return await xlmSender.payCtxOrder(paymentUrl, opts);
+  } catch (err) {
+    const status = /** @type {any} */ (err)?.stellarStatus;
+    const txHash = /** @type {any} */ (err)?.txHash;
+    if ((status === 'unknown' || status === 'applied_failed') && txHash) {
+      const { publicMessage } = require('./lib/sanitize-error');
+      const { event: bizEvent } = require('./lib/logger');
+      db.prepare(
+        `UPDATE orders
+         SET status = 'failed',
+             error = ?,
+             ctx_stellar_txid = ?,
+             updated_at = ?
+         WHERE id = ?`,
+      ).run(publicMessage('ctx_payment_ambiguous'), txHash, new Date().toISOString(), orderId);
+      bizEvent('ctx.payment_ambiguous', {
+        order_id: orderId,
+        stellar_status: status,
+        tx_hash: txHash,
+        via: 'reconcile',
+        error: /** @type {Error} */ (err)?.message,
+      });
+      log(
+        `  ${shortId} → ctx payment AMBIGUOUS [${status}] hash=${txHash} — parked, NO auto-refund`,
+      );
+      return AMBIGUOUS_PARKED;
+    }
+    throw err;
+  }
 }
 
 // Expire pending_payment orders where the payment window has closed (2 hours).
@@ -139,6 +204,12 @@ async function reconcileOrderingFulfillment() {
   }
 
   const cutoff = new Date(Date.now() - STUCK_RETRY_AFTER_MS).toISOString();
+  // Adversarial audit F1-jobs (2026-04-15): exclude rows where a prior
+  // attempt parked an ambiguous CTX payment hash. Those rows are waiting
+  // for operator verification — the outbound tx MAY have landed, and
+  // re-firing payCtxOrder here would double-spend treasury. The parked
+  // rows stay in status='ordering' but never re-enter the retry loop
+  // until ops manually clears ctx_stellar_txid.
   const stuck = /** @type {any[]} */ (
     db
       .prepare(
@@ -146,6 +217,7 @@ async function reconcileOrderingFulfillment() {
     SELECT * FROM orders
     WHERE status = 'ordering'
       AND (vcc_job_id IS NULL OR xlm_sent_at IS NULL OR vcc_notified_at IS NULL)
+      AND ctx_stellar_txid IS NULL
       AND updated_at < ?
   `,
       )
@@ -293,21 +365,29 @@ async function reconcileOrderingFulfillment() {
             );
           } else {
             log(`  ${shortId} → retry payCtxOrder (asset=${retryOpts.paymentAsset})`);
-            await payCtxOrder(paymentUrl, retryOpts);
-            db.prepare(`UPDATE orders SET xlm_sent_at = ?, updated_at = ? WHERE id = ?`).run(
-              new Date().toISOString(),
-              new Date().toISOString(),
+            const txHash = await callPayCtxOrderWithAmbiguousPark(
+              paymentUrl,
+              retryOpts,
               order.id,
+              shortId,
             );
+            if (txHash === AMBIGUOUS_PARKED) continue;
+            db.prepare(
+              `UPDATE orders SET xlm_sent_at = ?, ctx_stellar_txid = ?, updated_at = ? WHERE id = ?`,
+            ).run(new Date().toISOString(), txHash || null, new Date().toISOString(), order.id);
           }
         } else {
           log(`  ${shortId} → retry payCtxOrder (asset=${retryOpts.paymentAsset})`);
-          await payCtxOrder(paymentUrl, retryOpts);
-          db.prepare(`UPDATE orders SET xlm_sent_at = ?, updated_at = ? WHERE id = ?`).run(
-            new Date().toISOString(),
-            new Date().toISOString(),
+          const txHash = await callPayCtxOrderWithAmbiguousPark(
+            paymentUrl,
+            retryOpts,
             order.id,
+            shortId,
           );
+          if (txHash === AMBIGUOUS_PARKED) continue;
+          db.prepare(
+            `UPDATE orders SET xlm_sent_at = ?, ctx_stellar_txid = ?, updated_at = ? WHERE id = ?`,
+          ).run(new Date().toISOString(), txHash || null, new Date().toISOString(), order.id);
         }
       }
 

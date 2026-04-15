@@ -438,6 +438,130 @@ describe('e2e cards402 ↔ vcc: duplicate payment event', () => {
   });
 });
 
+// ── F1-jobs (2026-04-15): ambiguous outbound payment parking ─────────────
+//
+// The critical safety property for the first-pass (payment-handler) code
+// path: when payCtxOrder throws with stellarStatus='unknown' or
+// 'applied_failed' and a txHash, the order must be parked — hash captured
+// to ctx_stellar_txid, status='failed' with a specific
+// payment_pending_review error, NO auto-refund. A refund here could
+// double-spend treasury if the original tx actually landed.
+
+describe('e2e cards402 ↔ vcc: F1 ambiguous CTX payment parking', () => {
+  // Swap payCtxOrder at test time by mutating the cached module object.
+  // This relies on payment-handler using the `xlmSender.payCtxOrder`
+  // pattern (module-object import) rather than destructuring at load.
+  //
+  // CRITICAL: we MUST fetch the xlm-sender module from require.cache
+  // AFTER the `before` hook has run its cache patching, not at
+  // describe-parse time. A describe-scoped `const xlmSenderModule =
+  // require(...)` would run at parse time — before the before hook's
+  // cache replacement — and return a reference to the REAL xlm-sender
+  // module. payment-handler would then hold a reference to the FAKE
+  // xlm-sender from the post-before cache, and test-time mutations
+  // on the real module would have no effect. Getter+cache-lookup inside
+  // the test body guarantees we mutate the same object payment-handler
+  // is reading from.
+  function getXlmSender() {
+    const abs = require.resolve('../../src/payments/xlm-sender');
+    return require.cache[abs].exports;
+  }
+
+  let originalPayCtxOrder;
+  beforeEach(() => {
+    const xs = getXlmSender();
+    if (!originalPayCtxOrder) originalPayCtxOrder = xs.payCtxOrder;
+    xs.payCtxOrder = originalPayCtxOrder;
+  });
+  // Restore when the describe block finishes so downstream test
+  // describes (e.g. payment amount validation) still see the before-
+  // hook's fake-success stub instead of inheriting a throw stub from
+  // our last test.
+  after(() => {
+    if (originalPayCtxOrder) getXlmSender().payCtxOrder = originalPayCtxOrder;
+  });
+
+  function makeAmbiguousError(stellarStatus, hash) {
+    const err = /** @type {any} */ (new Error('submit network error ' + stellarStatus));
+    err.stellarStatus = stellarStatus;
+    err.txHash = hash;
+    return err;
+  }
+
+  it('parks the order when payCtxOrder throws stellarStatus=unknown with a txHash', async () => {
+    const AMBIGUOUS_HASH = 'a'.repeat(64);
+    getXlmSender().payCtxOrder = async () => {
+      throw makeAmbiguousError('unknown', AMBIGUOUS_HASH);
+    };
+    const { key } = await createTestKey({ label: 'e2e-ambiguous-unknown' });
+    const orderId = (await createOrderViaApi(key)).body.order_id;
+
+    await simulateSorobanPayment(orderId);
+
+    const row = db
+      .prepare(
+        `SELECT status, error, ctx_stellar_txid, xlm_sent_at, refund_stellar_txid
+         FROM orders WHERE id = ?`,
+      )
+      .get(orderId);
+
+    assert.equal(row.status, 'failed', 'order must be parked as failed');
+    assert.equal(row.ctx_stellar_txid, AMBIGUOUS_HASH, 'hash must be captured on orders row');
+    assert.equal(row.xlm_sent_at, null, 'xlm_sent_at must stay null — we are not sure');
+    // Critical: NO auto-refund. scheduleRefund is not called on this path,
+    // so refund_stellar_txid must be null too.
+    assert.equal(row.refund_stellar_txid, null, 'must NOT auto-refund on ambiguous outcome');
+    // Public-facing error must reflect "pending review", not "refunded".
+    assert.match(row.error, /ambiguous on-chain|operator/i);
+    assert.doesNotMatch(row.error, /refunded automatically/i);
+  });
+
+  it('parks on stellarStatus=applied_failed (tx landed but failed on chain)', async () => {
+    const FAILED_HASH = 'b'.repeat(64);
+    getXlmSender().payCtxOrder = async () => {
+      throw makeAmbiguousError('applied_failed', FAILED_HASH);
+    };
+    const { key } = await createTestKey({ label: 'e2e-ambiguous-applied-failed' });
+    const orderId = (await createOrderViaApi(key)).body.order_id;
+
+    await simulateSorobanPayment(orderId);
+
+    const row = db
+      .prepare(`SELECT status, ctx_stellar_txid, refund_stellar_txid FROM orders WHERE id = ?`)
+      .get(orderId);
+    assert.equal(row.status, 'failed');
+    assert.equal(row.ctx_stellar_txid, FAILED_HASH);
+    assert.equal(row.refund_stellar_txid, null, 'NO auto-refund on applied_failed');
+  });
+
+  it('non-ambiguous error follows the existing auto-refund path', async () => {
+    // Control case: a plain thrown Error (no stellarStatus markers) is
+    // NOT an ambiguous outcome, so the existing catch-all should fire
+    // and schedule an auto-refund as before. This makes sure the new
+    // parking branch is narrowly scoped to real ambiguous cases.
+    getXlmSender().payCtxOrder = async () => {
+      throw new Error('opaque horizon error with no markers');
+    };
+    const { key } = await createTestKey({ label: 'e2e-ambiguous-legacy' });
+    const orderId = (await createOrderViaApi(key)).body.order_id;
+    // Need a sender_address for scheduleRefund to actually send.
+    db.prepare(`UPDATE orders SET sender_address = 'GTESTSENDER' WHERE id = ?`).run(orderId);
+
+    await simulateSorobanPayment(orderId);
+
+    const row = db
+      .prepare(`SELECT status, ctx_stellar_txid, refund_stellar_txid FROM orders WHERE id = ?`)
+      .get(orderId);
+    // Legacy path: fails + refund (scheduleRefund may flip to refunded
+    // or refund_pending depending on whether the fake sendUsdc resolved).
+    assert.ok(
+      ['failed', 'refund_pending', 'refunded'].includes(row.status),
+      `expected terminal-fail status, got ${row.status}`,
+    );
+    assert.equal(row.ctx_stellar_txid, null, 'no hash for legacy errors without markers');
+  });
+});
+
 // ── F2: per-order callback secret ────────────────────────────────────────────
 
 describe('e2e cards402 ↔ vcc: per-order callback secret (audit F2)', () => {

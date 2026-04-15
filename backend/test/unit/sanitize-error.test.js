@@ -41,6 +41,7 @@ describe('sanitize — output shape', () => {
       'service_unavailable',
       'upstream_timeout',
       'payment_expired',
+      'payment_pending_review',
     ]);
     const cases = [
       '',
@@ -60,6 +61,36 @@ describe('sanitize — output shape', () => {
 });
 
 // ── Recognised error routing ────────────────────────────────────────────────
+
+// ── Ambiguous CTX payment (audit F1-jobs, 2026-04-15) ───────────────────
+
+describe('sanitize — ctx_payment_ambiguous', () => {
+  it('routes ctx_payment_ambiguous to payment_pending_review', () => {
+    const out = sanitize('ctx_payment_ambiguous');
+    assert.equal(out.code, 'payment_pending_review');
+    assert.equal(out.retryable, false);
+    // The whole point of this rule is to NOT lie about auto-refund.
+    assert.doesNotMatch(
+      out.message,
+      /refunded automatically/i,
+      'payment_pending_review must never claim the order was auto-refunded',
+    );
+    assert.match(out.message, /ambiguous on-chain state/i);
+    assert.match(out.message, /operator/i);
+  });
+
+  it('takes precedence over fulfillment_unavailable/frozen rules', () => {
+    // The rule is registered FIRST so a composite message containing both
+    // "ctx_payment_ambiguous" and "VCC" or "frozen" still routes to
+    // payment_pending_review. The rule ordering enforces that agents
+    // never see an incorrect "refunded" claim for this class.
+    const out1 = sanitize('VCC ctx_payment_ambiguous hash=abc');
+    assert.equal(out1.code, 'payment_pending_review');
+
+    const out2 = sanitize('ctx_payment_ambiguous frozen circuit open');
+    assert.equal(out2.code, 'payment_pending_review');
+  });
+});
 
 describe('sanitize — recognised errors', () => {
   it('routes wallet balance errors to insufficient_funds', () => {

@@ -18,9 +18,14 @@
 const { v4: uuidv4 } = require('uuid');
 const db = require('./db');
 const { getInvoice, notifyPaid } = require('./vcc-client');
-const { payCtxOrder } = require('./payments/xlm-sender');
+// Import as module object so tests can monkey-patch xlmSender.payCtxOrder
+// at runtime. Destructuring captures the reference at load time and
+// prevents tests from exercising the ambiguous-outcome branch without
+// a full patchCache refactor. Same pattern applied in jobs.js.
+const xlmSender = require('./payments/xlm-sender');
 const { scheduleRefund } = require('./fulfillment');
 const { event: bizEvent } = require('./lib/logger');
+const { publicMessage } = require('./lib/sanitize-error');
 
 /**
  * Compare two decimal-string amounts without losing precision.
@@ -284,15 +289,63 @@ async function handlePayment({
     //     split — CTX's payment watcher ignores path_payment_* ops.
     // order.amount_usdc is the USDC the agent paid (the order's USD
     // face value); it's the sendAmount ceiling on the strict-send side.
-    await payCtxOrder(paymentUrl, {
-      paymentAsset,
-      maxUsdc: order.amount_usdc,
-    });
-    db.prepare(`UPDATE orders SET xlm_sent_at = ?, updated_at = ? WHERE id = ?`).run(
-      new Date().toISOString(),
-      new Date().toISOString(),
-      orderId,
-    );
+    //
+    // Adversarial audit F1-jobs (2026-04-15): wrap payCtxOrder in an
+    // inner try/catch so we can distinguish ambiguous outcomes
+    // (stellarStatus='unknown' or 'applied_failed') from definitive
+    // failures. xlm-sender now annotates submit throws with stellarStatus
+    // and a pre-computed txHash; if we hit an ambiguous state here —
+    // outbound CTX tx MAY have landed before the response was lost —
+    // auto-scheduling a refund below would spend treasury twice: once
+    // to CTX (maybe), once back to the agent (definitely). Park the
+    // order instead and leave the reconcile path to bail via the
+    // ctx_stellar_txid-IS-NOT-NULL filter in jobs.js.
+    let ctxTxHash = null;
+    try {
+      ctxTxHash = await xlmSender.payCtxOrder(paymentUrl, {
+        paymentAsset,
+        maxUsdc: order.amount_usdc,
+      });
+    } catch (payErr) {
+      const status = /** @type {any} */ (payErr)?.stellarStatus;
+      const txHash = /** @type {any} */ (payErr)?.txHash;
+      if ((status === 'unknown' || status === 'applied_failed') && txHash) {
+        // Persist the hash, mark failed with a specific error, and
+        // DO NOT call scheduleRefund. Operators verify on-chain via
+        // ctx_stellar_txid and either unpark for retry or manually
+        // refund. The order is terminal-failed from the agent's POV
+        // until ops clears the park.
+        db.prepare(
+          `UPDATE orders
+           SET status = 'failed',
+               error = ?,
+               ctx_stellar_txid = ?,
+               updated_at = ?
+           WHERE id = ?`,
+        ).run(publicMessage('ctx_payment_ambiguous'), txHash, new Date().toISOString(), orderId);
+        bizEvent('ctx.payment_ambiguous', {
+          order_id: orderId,
+          stellar_status: status,
+          tx_hash: txHash,
+          amount_usdc: order.amount_usdc,
+          payment_asset: paymentAsset,
+          error: /** @type {Error} */ (payErr)?.message,
+        });
+        console.error(
+          `[payment] order ${orderId.slice(0, 8)} ctx payment AMBIGUOUS ` +
+            `[${status}] hash=${txHash} — parked, NO auto-refund`,
+        );
+        return;
+      }
+      // Non-ambiguous failure: fall through to the outer catch which
+      // marks failed + schedules refund as before.
+      throw payErr;
+    }
+
+    // Successful payCtxOrder — capture the hash for forensics.
+    db.prepare(
+      `UPDATE orders SET xlm_sent_at = ?, ctx_stellar_txid = ?, updated_at = ? WHERE id = ?`,
+    ).run(new Date().toISOString(), ctxTxHash || null, new Date().toISOString(), orderId);
 
     await notifyPaid(vccJobId);
     db.prepare(`UPDATE orders SET vcc_notified_at = ?, updated_at = ? WHERE id = ?`).run(
@@ -305,7 +358,6 @@ async function handlePayment({
     // trace, internal vocab, all of it. The publicly-stored version
     // gets sanitised so agents can't see the moving parts.
     console.error(`[payment] order ${orderId.slice(0, 8)} fulfillment error: ${err.message}`);
-    const { publicMessage } = require('./lib/sanitize-error');
     db.prepare(`UPDATE orders SET status = 'failed', error = ?, updated_at = ? WHERE id = ?`).run(
       publicMessage(err.message),
       new Date().toISOString(),

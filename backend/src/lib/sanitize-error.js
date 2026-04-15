@@ -86,6 +86,22 @@ const GENERIC = {
 //   6. payment_expired                     — the order's payment
 //      window closed before fulfillment ran.
 const RULES = [
+  // Ambiguous on-chain outcome on the outbound CTX payment leg
+  // (audit F1-jobs 2026-04-15). This runs FIRST — before any
+  // "your payment has been refunded" rules — because the whole
+  // reason we route to this code is that we deliberately did NOT
+  // auto-refund. A generic "refunded automatically" message here
+  // would be a lie to the agent and invite a duplicate charge
+  // complaint that operators then have to debunk.
+  {
+    re: /ctx_payment_ambiguous/i,
+    out: {
+      code: 'payment_pending_review',
+      message:
+        'The payment reached an ambiguous on-chain state and is being verified by an operator. Do not retry this order. Support will update you with a resolution.',
+      retryable: false,
+    },
+  },
   // Whole pipeline temporarily down — frozen by ops or VCC circuit
   // breaker tripped. Runs first because these are system-wide.
   {

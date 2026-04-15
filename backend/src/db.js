@@ -751,6 +751,30 @@ applyMigration(24, () => {
   `);
 });
 
+// Migration 25: ctx_stellar_txid column. Adversarial audit F1-jobs
+// (2026-04-15) — outbound CTX payments that throw with
+// stellarStatus='unknown' or 'applied_failed' (the tx MAY have landed
+// during a lost-response window) had no place to persist the
+// pre-computed envelope hash on the orders row. The payment-handler's
+// first-pass catch was auto-scheduling a refund, and the reconciler
+// was auto-retrying payCtxOrder, both of which can double-spend
+// treasury if the original tx actually landed.
+//
+// This column stores the outbound CTX tx hash on both successful
+// sends (forensic) and ambiguous failures (park marker). The
+// reconciler's retry query filters `ctx_stellar_txid IS NULL` so a
+// parked row never gets retried until an operator manually verifies
+// on-chain and clears the column.
+applyMigration(25, () => {
+  // Idempotent ALTER — SQLite doesn't support IF NOT EXISTS on ADD
+  // COLUMN, so the try/catch handles repeat runs.
+  try {
+    db.exec(`ALTER TABLE orders ADD COLUMN ctx_stellar_txid TEXT`);
+  } catch (err) {
+    if (!/duplicate column name/.test(/** @type {Error} */ (err)?.message || '')) throw err;
+  }
+});
+
 // Audit A-5: post-migration sanity check. If a newer release has rolled
 // through here and bumped the on-disk schema beyond what this binary
 // knows about, fail hard instead of running against a schema we don't
@@ -761,7 +785,7 @@ applyMigration(24, () => {
 //
 // EXPECTED_SCHEMA_VERSION must match the last `applyMigration(N)` call
 // above. Bump it in lock-step with any new migration.
-const EXPECTED_SCHEMA_VERSION = 24;
+const EXPECTED_SCHEMA_VERSION = 25;
 const actualVersion = getSchemaVersion();
 if (actualVersion > EXPECTED_SCHEMA_VERSION) {
   console.error(
