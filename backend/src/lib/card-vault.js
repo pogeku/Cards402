@@ -21,15 +21,44 @@ const { seal, open, hasKey } = require('./secret-box');
  * (Visa, Mastercard) and is left as-is. `null` / `undefined` inputs are
  * preserved so callers can pass partial card payloads without branching.
  *
+ * Empty strings and non-string types for number/cvv/expiry are rejected
+ * with a specific card-vault error rather than silently mapped to null.
+ * A VCC response-parser regression yielding `{number: ""}` previously
+ * passed the falsy check and stored null, making it look like the card
+ * was correctly sealed when in fact no card data was preserved at all —
+ * the order would then flip to `delivered` with empty fields and the
+ * agent would see "card issued" with nothing usable, after funds were
+ * already spent (no refund because status is terminal). Adversarial
+ * audit F1-card-vault.
+ *
  * @param {{number?: string|null, cvv?: string|null, expiry?: string|null, brand?: string|null}} card
  */
 function sealCard(card) {
   return {
-    number: card.number ? seal(card.number) : null,
-    cvv: card.cvv ? seal(card.cvv) : null,
-    expiry: card.expiry ? seal(card.expiry) : null,
+    number: sealField('number', card.number),
+    cvv: sealField('cvv', card.cvv),
+    expiry: sealField('expiry', card.expiry),
     brand: card.brand ?? null,
   };
+}
+
+/**
+ * Validate and seal a single card field. `null`/`undefined` → `null`
+ * (partial-card ok). Anything else must be a non-empty string.
+ * @param {string} fieldName
+ * @param {unknown} value
+ */
+function sealField(fieldName, value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') {
+    throw new Error(`card-vault: cannot seal ${fieldName}: expected string, got ${typeof value}`);
+  }
+  if (value.length === 0) {
+    throw new Error(
+      `card-vault: cannot seal ${fieldName}: empty string (pass null for an absent field)`,
+    );
+  }
+  return seal(value);
 }
 
 /**

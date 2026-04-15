@@ -196,6 +196,66 @@ describe('card-vault — F1 sealing roundtrip', () => {
     }
   });
 
+  // ── F1-card-vault regression guards ──────────────────────────────────────
+  //
+  // sealCard previously used `card.number ? seal : null`, which silently
+  // stored null for any falsy value including empty strings, whitespace-
+  // stripped-to-empty, and non-string types from an upstream parser bug.
+  // A VCC response regression yielding `{number: ""}` would then pass
+  // through and the order would flip to `delivered` with no usable PAN.
+  // Below: null/undefined are still tolerated (partial cards), but "" and
+  // non-string types must throw.
+
+  it('rejects an empty-string number with a field-labelled error', () => {
+    delete require.cache[require.resolve('../../src/lib/secret-box')];
+    delete require.cache[require.resolve('../../src/lib/card-vault')];
+    const { sealCard } = require('../../src/lib/card-vault');
+    assert.throws(
+      () => sealCard({ number: '', cvv: '123', expiry: '12/28', brand: 'Visa' }),
+      /card-vault: cannot seal number: empty string/,
+    );
+  });
+
+  it('rejects an empty-string cvv with a field-labelled error', () => {
+    delete require.cache[require.resolve('../../src/lib/secret-box')];
+    delete require.cache[require.resolve('../../src/lib/card-vault')];
+    const { sealCard } = require('../../src/lib/card-vault');
+    assert.throws(
+      () => sealCard({ number: '4111111111111111', cvv: '', expiry: '12/28', brand: 'Visa' }),
+      /card-vault: cannot seal cvv: empty string/,
+    );
+  });
+
+  it('rejects a non-string number (upstream parser type regression)', () => {
+    delete require.cache[require.resolve('../../src/lib/secret-box')];
+    delete require.cache[require.resolve('../../src/lib/card-vault')];
+    const { sealCard } = require('../../src/lib/card-vault');
+    assert.throws(
+      () =>
+        sealCard({
+          // @ts-expect-error — intentional wrong type
+          number: 4111111111111111,
+          cvv: '123',
+          expiry: '12/28',
+          brand: 'Visa',
+        }),
+      /card-vault: cannot seal number: expected string, got number/,
+    );
+  });
+
+  it('still tolerates null / undefined for a partial card payload', () => {
+    delete process.env.CARDS402_SECRET_BOX_KEY;
+    delete process.env.VCC_TOKEN_KEY;
+    delete require.cache[require.resolve('../../src/lib/secret-box')];
+    delete require.cache[require.resolve('../../src/lib/card-vault')];
+    const { sealCard } = require('../../src/lib/card-vault');
+    const sealed = sealCard({ number: null, cvv: undefined, expiry: null, brand: 'Visa' });
+    assert.equal(sealed.number, null);
+    assert.equal(sealed.cvv, null);
+    assert.equal(sealed.expiry, null);
+    assert.equal(sealed.brand, 'Visa');
+  });
+
   it('rejects a sealed blob with non-hex characters in the iv/tag/ciphertext', () => {
     const previousKey = process.env.CARDS402_SECRET_BOX_KEY;
     process.env.CARDS402_SECRET_BOX_KEY = crypto.randomBytes(32).toString('hex');
