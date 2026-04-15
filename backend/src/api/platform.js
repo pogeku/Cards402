@@ -233,6 +233,27 @@ router.get('/orders', (req, res) => {
   const { status, dashboard_id, api_key_id } = /** @type {any} */ (req.query);
   const limit = capLimit(req.query.limit, 100, 500);
 
+  // F1-platform adversarial audit (2026-04-15): reject array-valued
+  // query params up-front instead of letting them reach the SQLite
+  // bind layer via String([a,b]) → 'a,b'. The old path silently
+  // produced 0 rows for ?status=a&status=b which an operator would
+  // reasonably expect to match EITHER status — instead they got an
+  // empty response with no signal that the filter was malformed.
+  // Matches the same guard I added to /internal/orders in an earlier
+  // cycle for consistency across admin surfaces.
+  for (const [name, value] of /** @type {[string, unknown][]} */ ([
+    ['status', status],
+    ['dashboard_id', dashboard_id],
+    ['api_key_id', api_key_id],
+  ])) {
+    if (value !== undefined && typeof value !== 'string') {
+      return res.status(400).json({
+        error: 'invalid_query_param',
+        message: `${name} must be a single string (no repeated ?${name}=... params).`,
+      });
+    }
+  }
+
   let query = `
     SELECT o.id, o.status, o.amount_usdc, o.payment_asset, o.stellar_txid,
            o.sender_address, o.refund_stellar_txid, o.card_brand,
@@ -497,6 +518,15 @@ router.get('/policy-decisions', (req, res) => {
 });
 
 // ── GET /audit ────────────────────────────────────────────────────────────────
+// F2-platform adversarial audit (2026-04-15): match the
+// lib/audit.js::listAudit contract by parsing the `details` JSON
+// before returning. The dashboard-scoped /dashboard/audit-log
+// endpoint (backed by listAudit) returns details as an object;
+// this cross-tenant /platform/audit endpoint was returning it as a
+// raw string, so any UI that hit both endpoints had to special-case
+// the shape. safeParse falls back to the raw string on a JSON parse
+// failure — preserves forward-compatibility with any legacy or
+// hand-written audit rows that aren't strict JSON.
 router.get('/audit', (req, res) => {
   const limit = capLimit(req.query.limit, 100, 500);
   const rows = /** @type {any[]} */ (
@@ -515,8 +545,21 @@ router.get('/audit', (req, res) => {
       )
       .all(limit)
   );
-  res.json(rows);
+  res.json(
+    rows.map((row) => ({
+      ...row,
+      details: row.details ? safeParseJson(row.details) : null,
+    })),
+  );
 });
+
+function safeParseJson(s) {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return s;
+  }
+}
 
 // ── GET /health ───────────────────────────────────────────────────────────────
 // Platform health snapshot — watcher, dead letter, circuit breaker, recent
@@ -681,6 +724,18 @@ router.post('/unfreeze', (req, res) => {
   // Mirror into audit_log via the hardened recordAudit helper so the
   // entry gets the missing-field guard and the details-size cap that
   // the raw INSERT above bypasses.
+  //
+  // F3-platform adversarial audit (2026-04-15): coerce the x-forwarded-
+  // for and user-agent headers to single strings. Express types these
+  // as `string | string[]` because proxies can set them twice via `add`.
+  // Passing an array directly into recordAudit() violated the column
+  // type contract and produced the only remaining TS2322 warning in
+  // this file (same class of fix as the clientIp helper in api/auth.js
+  // from an earlier cycle).
+  const xff = req.headers?.['x-forwarded-for'];
+  const forwarded = Array.isArray(xff) ? xff[0] || null : xff || null;
+  const uaHeader = req.headers?.['user-agent'];
+  const userAgent = Array.isArray(uaHeader) ? uaHeader[0] || null : uaHeader || null;
   recordAudit({
     dashboardId: 'system',
     actor: { id: req.user.id || null, email: req.user.email, role: req.user.role },
@@ -688,8 +743,8 @@ router.post('/unfreeze', (req, res) => {
     resourceType: 'system',
     resourceId: 'frozen_flag',
     details: { reason, request_id: req.id || null },
-    ip: req.ip || req.headers?.['x-forwarded-for'] || null,
-    userAgent: req.headers?.['user-agent'] || null,
+    ip: req.ip || forwarded,
+    userAgent,
   });
 
   db.prepare(`UPDATE system_state SET value = '0' WHERE key = 'frozen'`).run();
