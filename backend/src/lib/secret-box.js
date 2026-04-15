@@ -28,6 +28,36 @@ const crypto = require('crypto');
 
 const KEY_HEX_RE = /^[0-9a-fA-F]{64}$/;
 
+// Adversarial audit F1-secret-box (2026-04-15): strict regex for the
+// "already sealed" idempotency check in seal(). The previous impl
+// used `startsWith('enc:')`, so a plaintext value that happened to
+// start with "enc:" (e.g. "enc:my_secret_payload") was returned
+// verbatim instead of being encrypted. The caller would think the
+// value was sealed, but the DB would hold plaintext. No current
+// call site passes such input, but the check should verify the
+// full format of a real sealed blob rather than just the marker
+// prefix. A match requires the enc: literal plus three
+// colon-separated hex fields — exactly the shape seal() produces.
+const SEALED_BLOB_RE = /^enc:[0-9a-f]+:[0-9a-f]+:[0-9a-f]*$/i;
+
+// Adversarial audit F2-secret-box (2026-04-15): AES-256-GCM uses
+// a 12-byte IV (24 hex chars) and a 16-byte authentication tag
+// (32 hex chars). These are CONSTANT for every blob this module
+// produces — seal() always generates crypto.randomBytes(12) for
+// the IV and AES-GCM always emits a 16-byte tag at authTagLength:
+// 16. The open() path must enforce both lengths BEFORE calling
+// setAuthTag, because Node's setAuthTag passes through to OpenSSL's
+// EVP_CTRL_GCM_SET_TAG which accepts any tag length from 4 to 16
+// bytes and silently downgrades authentication strength to match.
+// A sealed blob with a 4-byte tag (`enc:<iv>:<4-byte-tag>:<ct>`)
+// would be accepted by the old code and authenticated at 32-bit
+// strength — forgeable with ~2^32 attempts. The previous code
+// comment claimed "Crypto layer enforces IV length / tag length"
+// but that claim was incorrect for Node's setAuthTag surface.
+// Making it true with explicit length checks.
+const IV_HEX_LEN = 24; // 12 bytes
+const TAG_HEX_LEN = 32; // 16 bytes
+
 function isProduction() {
   return process.env.NODE_ENV === 'production';
 }
@@ -88,7 +118,11 @@ let warnedAboutMissingKey = false;
  */
 function seal(plaintext) {
   if (typeof plaintext !== 'string') throw new Error('seal: plaintext must be a string');
-  if (plaintext.startsWith('enc:')) return plaintext; // already sealed
+  // F1-secret-box: full-format idempotency check. A plaintext that
+  // merely starts with "enc:" is NOT a sealed blob and MUST be
+  // encrypted, not returned verbatim. SEALED_BLOB_RE requires the
+  // four-part colon-separated hex shape seal() actually produces.
+  if (SEALED_BLOB_RE.test(plaintext)) return plaintext; // already sealed
   const key = getKey();
   if (!key) {
     if (isProduction()) {
@@ -148,10 +182,24 @@ function open(stored) {
   if (!/^[0-9a-f]+$/i.test(ivHex) || !/^[0-9a-f]+$/i.test(tagHex) || !/^[0-9a-f]*$/i.test(ctHex)) {
     throw new Error('secret-box: malformed sealed blob (non-hex characters in iv/tag/ciphertext)');
   }
-  // Crypto layer enforces IV length (12 bytes = 24 hex) and tag length
-  // (16 bytes = 32 hex) so we don't need to pre-check those; they'll
-  // surface as InvalidArgument / InvalidTagLength errors which are
-  // distinguishable in ops logs from the shape-mismatch case above.
+  // F2-secret-box: enforce exact IV (12 bytes / 24 hex) and tag
+  // (16 bytes / 32 hex) lengths before handing off to setAuthTag.
+  // Node's setAuthTag passes through to OpenSSL which accepts any
+  // GCM tag length from 4-16 bytes and silently downgrades the
+  // authentication strength to match — a 4-byte tag drops forgery
+  // resistance from 2^128 to 2^32. The previous comment here
+  // claimed the crypto layer enforced these lengths, but it does
+  // not for setAuthTag. Make the claim true at this layer.
+  if (ivHex.length !== IV_HEX_LEN) {
+    throw new Error(
+      `secret-box: malformed sealed blob (IV is ${ivHex.length / 2} bytes, expected 12)`,
+    );
+  }
+  if (tagHex.length !== TAG_HEX_LEN) {
+    throw new Error(
+      `secret-box: malformed sealed blob (auth tag is ${tagHex.length / 2} bytes, expected 16)`,
+    );
+  }
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivHex, 'hex'), {
     authTagLength: 16,
   });
