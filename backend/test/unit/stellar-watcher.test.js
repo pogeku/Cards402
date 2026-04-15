@@ -23,7 +23,16 @@ const assert = require('node:assert/strict');
 const { xdr, Address, nativeToScVal, Keypair } = require('@stellar/stellar-sdk');
 
 const db = require('../../src/db');
-const { handlePaymentEvent, _resetDispatchRetries } = require('../../src/payments/stellar');
+const {
+  handlePaymentEvent,
+  _resetDispatchRetries,
+  _getDispatchRetryMapSize,
+  _peekDispatchRetry,
+  _serialiseEventForDeadLetter,
+  _DISPATCH_RETRY_CAP,
+  _MAX_DISPATCH_RETRIES,
+  _DEAD_LETTER_CAP_BYTES,
+} = require('../../src/payments/stellar');
 
 // ── Event fixture builders ──────────────────────────────────────────────────
 
@@ -282,5 +291,215 @@ describe('handlePaymentEvent — F2 poison-pill retry bounding', () => {
     assert.equal(callsB, 1);
     assert.ok(getDeadLetterRow(eventA.txHash));
     assert.equal(getDeadLetterRow(eventB.txHash), undefined);
+  });
+});
+
+// ── F1-stellar: dispatch-retry map saturation behaviour ─────────────────────
+//
+// Pre-fix the map had a 1024-entry "LRU" eviction that was actually FIFO,
+// and JS Map.set() on an existing key did NOT reorder the entry. An
+// actively-poisoning event near MAX_DISPATCH_RETRIES could be evicted
+// at the exact moment the map hit the cap, and when the same batch was
+// re-dispatched (the watcher outer catch rethrow keeps the cursor
+// stuck), its counter restarted from 1. The poison-pill breakout that
+// the whole mechanism exists to guarantee was silently defeated under
+// load. Post-fix: cap raised to 8192 and eviction eliminated entirely;
+// new events beyond the cap are immediately dead-lettered and a
+// one-shot bizEvent flags the saturation for ops.
+
+describe('F1-stellar: dispatch-retry map saturation', () => {
+  beforeEach(() => {
+    db.prepare(`DELETE FROM stellar_dead_letter`).run();
+    _resetDispatchRetries();
+  });
+
+  it('retry counter persists across attempts for the same event id (no eviction)', async () => {
+    // Fill the map up to (cap - 1) entries with distinct "noise" events,
+    // then run 4 attempts on a specific event and verify its counter
+    // is still at 4 (not reset due to eviction).
+    //
+    // We avoid actually failing cap-minus-1 events (that would dead-
+    // letter too many) — instead we poke the internal counter directly
+    // by running real handlePaymentEvent calls on 100 distinct events
+    // and checking none of them evicts the others.
+    const events = [];
+    for (let i = 0; i < 100; i++) {
+      events.push(makeEvent({ orderId: `noise-${i}` }));
+    }
+    const onPayment = async () => {
+      throw new Error('fail');
+    };
+    // Each noise event fails once — 100 entries now in the map.
+    for (const e of events) {
+      await assert.rejects(handlePaymentEvent(e, onPayment, silentLog));
+    }
+    assert.equal(_getDispatchRetryMapSize(), 100);
+
+    // Now run the critical event 4 times. Its counter should reach 4,
+    // NOT be evicted or reset by the 100 noise entries.
+    const critical = makeEvent({ orderId: 'critical' });
+    for (let i = 0; i < 4; i++) {
+      await assert.rejects(handlePaymentEvent(critical, onPayment, silentLog));
+    }
+    assert.equal(
+      _peekDispatchRetry(critical.id),
+      4,
+      'critical event counter should persist at 4 through 100 noise events',
+    );
+    // 5th attempt dead-letters.
+    await handlePaymentEvent(critical, onPayment, silentLog);
+    assert.ok(getDeadLetterRow(critical.txHash));
+  });
+
+  it('saturated map dead-letters NEW incoming events immediately', async () => {
+    // Push the map to exactly DISPATCH_RETRY_CAP by running one
+    // failing attempt per distinct eventId until full. 8192 is big
+    // but manageable in a unit test.
+    const onPayment = async () => {
+      throw new Error('fill');
+    };
+    for (let i = 0; i < _DISPATCH_RETRY_CAP; i++) {
+      await assert.rejects(
+        handlePaymentEvent(makeEvent({ orderId: `fill-${i}` }), onPayment, silentLog),
+      );
+    }
+    assert.equal(_getDispatchRetryMapSize(), _DISPATCH_RETRY_CAP);
+
+    // One more NEW event should be dead-lettered immediately (on
+    // first failure, not after 5) because the map is saturated.
+    const overflowEvent = makeEvent({ orderId: 'overflow' });
+    await handlePaymentEvent(overflowEvent, onPayment, silentLog);
+    assert.ok(
+      getDeadLetterRow(overflowEvent.txHash),
+      'overflow event should be dead-lettered on first failure',
+    );
+    // Map size did NOT grow past the cap.
+    assert.ok(_getDispatchRetryMapSize() <= _DISPATCH_RETRY_CAP);
+  });
+
+  it('existing entries continue to count normally during saturation', async () => {
+    // Fill the map, then bump an existing entry — its counter must
+    // still advance because it's not creating a new map slot.
+    const onPayment = async () => {
+      throw new Error('fill');
+    };
+    const sentinel = makeEvent({ orderId: 'sentinel' });
+    // Sentinel gets counter=1 before saturation.
+    await assert.rejects(handlePaymentEvent(sentinel, onPayment, silentLog));
+    assert.equal(_peekDispatchRetry(sentinel.id), 1);
+
+    for (let i = 0; i < _DISPATCH_RETRY_CAP - 1; i++) {
+      await assert.rejects(
+        handlePaymentEvent(makeEvent({ orderId: `fill-${i}` }), onPayment, silentLog),
+      );
+    }
+    assert.equal(_getDispatchRetryMapSize(), _DISPATCH_RETRY_CAP);
+
+    // Bumping the sentinel again must increment its counter, not be
+    // treated as a new entry. 3 more attempts take it to 4.
+    for (let i = 0; i < 3; i++) {
+      await assert.rejects(handlePaymentEvent(sentinel, onPayment, silentLog));
+    }
+    assert.equal(_peekDispatchRetry(sentinel.id), 4);
+    // 5th attempt dead-letters the sentinel normally.
+    await handlePaymentEvent(sentinel, onPayment, silentLog);
+    assert.ok(getDeadLetterRow(sentinel.txHash));
+  });
+});
+
+// ── F2-stellar: dead-letter size cap ────────────────────────────────────────
+//
+// Pre-fix, serialiseEventForDeadLetter produced unbounded JSON output.
+// A malformed event with a 10MB payload would write a 10MB row to
+// stellar_dead_letter, amplifying a single adversarial event into
+// significant storage cost and breaking the dead-letter table as a
+// diffable forensic surface (ops can't grep through 10MB rows).
+// Post-fix, output > 16KB is replaced with a {_truncated, _original_bytes,
+// preview} marker that still captures the fact that something arrived
+// and a short preview for pattern-matching in queries.
+
+describe('F2-stellar: serialiseEventForDeadLetter size cap', () => {
+  it('small events round-trip unchanged', () => {
+    const event = {
+      id: 'evt-1',
+      ledger: 123,
+      txHash: 'TXHASH1',
+      topic: ['pay_usdc', 'order-abc'],
+      value: 1_000_000n,
+    };
+    const out = _serialiseEventForDeadLetter(event);
+    const parsed = JSON.parse(out);
+    assert.equal(parsed.id, 'evt-1');
+    assert.equal(parsed.ledger, 123);
+    assert.equal(parsed.value, '1000000'); // BigInt → string
+    assert.notEqual(parsed._truncated, true);
+  });
+
+  it('truncates events whose serialised form exceeds the cap', () => {
+    const hugeBlob = 'x'.repeat(50_000);
+    const event = {
+      id: 'evt-big',
+      ledger: 123,
+      txHash: 'TXHASH_BIG',
+      raw: hugeBlob,
+    };
+    const out = _serialiseEventForDeadLetter(event);
+    const parsed = JSON.parse(out);
+    assert.equal(parsed._truncated, true);
+    assert.ok(parsed._original_bytes > 50_000);
+    assert.ok(parsed.preview.length > 0);
+    assert.ok(parsed.preview.length <= 512);
+    // The output itself is bounded — not 50KB.
+    assert.ok(out.length <= 1024, `truncated marker is small, got ${out.length}`);
+  });
+
+  it('dead-letter row stays bounded even for a hostile huge event', async () => {
+    // End-to-end test: a parse-error path with a huge payload should
+    // land in stellar_dead_letter with a truncated raw_event, not the
+    // full multi-MB blob.
+    const event = {
+      id: 'evt-hostile',
+      ledger: 999,
+      txHash: 'TXHASH_HOSTILE',
+      topic: [], // empty — triggers "topic.length < 3" early-return
+      value: null,
+      // Stuff a huge field into the event to blow up the serialised size.
+      bigDiag: 'Y'.repeat(100_000),
+    };
+    // Won't reach dead-letter (topic.length < 3 is the silent-return
+    // branch), so we exercise serialiseEventForDeadLetter directly.
+    const serialised = _serialiseEventForDeadLetter(event);
+    assert.ok(serialised.length <= _DEAD_LETTER_CAP_BYTES + 512);
+    const parsed = JSON.parse(serialised);
+    assert.equal(parsed._truncated, true);
+  });
+
+  it('serialisation failure still produces a labelled marker', () => {
+    const circular = /** @type {any} */ ({ id: 'evt-cycle' });
+    circular.self = circular;
+    const out = _serialiseEventForDeadLetter(circular);
+    assert.match(out, /serialisation_failed/);
+  });
+});
+
+// Smoke check of the exported threshold constants so any future
+// refactor that silently renames them fails loudly.
+describe('F1-stellar: exported constants', () => {
+  it('MAX_DISPATCH_RETRIES is at least 3', () => {
+    assert.ok(_MAX_DISPATCH_RETRIES >= 3);
+  });
+
+  it('DISPATCH_RETRY_CAP is reasonable (not the old 1024 footgun)', () => {
+    // Pre-fix the cap was 1024 — keep this as a regression guard so
+    // anyone lowering it without understanding the F1 bug gets a
+    // failing test.
+    assert.ok(
+      _DISPATCH_RETRY_CAP >= 4096,
+      'cap must leave plenty of headroom for failure cascades',
+    );
+  });
+
+  it('DEAD_LETTER_CAP_BYTES is at least 4KB', () => {
+    assert.ok(_DEAD_LETTER_CAP_BYTES >= 4 * 1024);
   });
 });

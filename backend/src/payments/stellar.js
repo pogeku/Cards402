@@ -296,12 +296,34 @@ function stroopsToDecimal(i128) {
 // contain BigInts (the XDR decoder hands them back for i128 slots) which
 // JSON.stringify refuses by default; coerce them to strings so the dead
 // letter row is diffable and can be replayed by an operator.
+//
+// F2-stellar (2026-04-15): cap the serialised size at DEAD_LETTER_CAP_BYTES.
+// A malformed event with a large XDR payload (hostile contract, protocol
+// upgrade that adds fields, or a bug that shoves a big diag field into
+// the event) would otherwise produce a multi-MB row in stellar_dead_letter
+// — wasting disk and log display space, and amplifying a single adversarial
+// event into a significant storage cost. Truncated rows still capture the
+// fact that something arrived and include a preview, so ops can investigate
+// without having the full raw XDR. Same approach as lib/audit.js's
+// MAX_DETAILS_BYTES truncation.
+const DEAD_LETTER_CAP_BYTES = 16 * 1024;
+
 function serialiseEventForDeadLetter(event) {
+  let encoded;
   try {
-    return JSON.stringify(event, (_, v) => (typeof v === 'bigint' ? String(v) : v));
+    encoded = JSON.stringify(event, (_, v) => (typeof v === 'bigint' ? String(v) : v));
   } catch (e) {
     return `serialisation_failed: ${e.message}`;
   }
+  if (encoded.length <= DEAD_LETTER_CAP_BYTES) return encoded;
+  // Truncation marker with a short preview so ops queries can still
+  // pattern-match on the beginning of the raw event. The `_truncated`
+  // field makes it obvious the row is not a complete dump.
+  return JSON.stringify({
+    _truncated: true,
+    _original_bytes: encoded.length,
+    preview: encoded.slice(0, 512),
+  });
 }
 
 // ── Dispatch retry tracking (F2 audit: poison-pill starvation) ────────────
@@ -324,20 +346,67 @@ function serialiseEventForDeadLetter(event) {
 // gives each new process a fresh chance for the bug to have been fixed
 // before we dead-letter. A bounded cap prevents unbounded growth from
 // transient errors.
+//
+// F1-stellar (2026-04-15): reworked the overflow handling. Pre-fix the
+// cap was 1024 and overflow evicted the "oldest" entry via
+// `dispatchRetries.keys().next().value` — which is FIFO (first-
+// inserted), not LRU. Worse, JS Map's `.set()` on an existing key does
+// NOT reorder the entry, so a counter-bump never refreshed the
+// insertion timestamp. Consequence: an actively-poisoning event near
+// MAX_DISPATCH_RETRIES could be evicted while its counter was at 4,
+// and when the next poll re-dispatched the same batch the counter
+// restarted from 1 — the poison-pill breakout that this whole
+// mechanism exists to guarantee was SILENTLY DEFEATED any time the
+// map was full. In a cascading-failure scenario (many events failing
+// simultaneously, e.g. DB lock contention during a big event batch),
+// the watcher could be stuck forever with no way out.
+//
+// Fix: raise the cap to DISPATCH_RETRY_CAP=8192 (plenty of headroom
+// for any realistic failure cascade — normal operation keeps this map
+// at ~0 entries) and eliminate eviction entirely. When a NEW event
+// would push the map past the cap, we treat it as an immediate
+// dead-letter signal: bumpDispatchRetry returns MAX_DISPATCH_RETRIES,
+// the caller dead-letters the offending event, and the map size
+// stays bounded. Events already in the map continue counting
+// normally so their poison-pill breakout remains intact. Emits
+// `stellar.dispatch_retry_map_full` so ops sees the saturation.
 const MAX_DISPATCH_RETRIES = 5;
-const DISPATCH_RETRY_CAP = 1024;
+const DISPATCH_RETRY_CAP = 8192;
 const dispatchRetries = /** @type {Map<string, number>} */ (new Map());
+// One-shot flag so a sustained cascade emits exactly one alert per
+// saturation period, not one per incoming event.
+let _warnedDispatchMapFull = false;
 
 function bumpDispatchRetry(eventId) {
-  const next = (dispatchRetries.get(eventId) ?? 0) + 1;
-  dispatchRetries.set(eventId, next);
-  // Crude LRU bound: on overflow, drop the oldest insertion-order entry.
-  // Map preserves insertion order so the first key is the oldest.
-  if (dispatchRetries.size > DISPATCH_RETRY_CAP) {
-    const firstKey = dispatchRetries.keys().next().value;
-    if (firstKey !== undefined) dispatchRetries.delete(firstKey);
+  const existing = dispatchRetries.get(eventId);
+  if (existing !== undefined) {
+    // Known event — bump its counter. No cap check needed because
+    // the entry already exists and isn't adding to map size.
+    const next = existing + 1;
+    dispatchRetries.set(eventId, next);
+    return next;
   }
-  return next;
+  // New event. If the map is full, refuse to add and return the
+  // dead-letter threshold — the caller will dead-letter this new
+  // event immediately, which is aggressive but correct in a
+  // saturation scenario where we're already tracking 8192 events.
+  if (dispatchRetries.size >= DISPATCH_RETRY_CAP) {
+    if (!_warnedDispatchMapFull) {
+      _warnedDispatchMapFull = true;
+      bizEvent('stellar.dispatch_retry_map_full', {
+        size: dispatchRetries.size,
+        cap: DISPATCH_RETRY_CAP,
+      });
+    }
+    return MAX_DISPATCH_RETRIES;
+  }
+  dispatchRetries.set(eventId, 1);
+  // Clear the one-shot alert flag when the map drops back to a
+  // healthy level so a future saturation re-alerts.
+  if (_warnedDispatchMapFull && dispatchRetries.size < DISPATCH_RETRY_CAP / 2) {
+    _warnedDispatchMapFull = false;
+  }
+  return 1;
 }
 
 function clearDispatchRetry(eventId) {
@@ -347,6 +416,17 @@ function clearDispatchRetry(eventId) {
 // Exposed for tests — lets a test reset the retry map between cases.
 function _resetDispatchRetries() {
   dispatchRetries.clear();
+  _warnedDispatchMapFull = false;
+}
+
+// Test-only: peek at current retry-map size for the F1 cap tests.
+function _getDispatchRetryMapSize() {
+  return dispatchRetries.size;
+}
+
+// Test-only: inspect the retry count for a specific event id.
+function _peekDispatchRetry(eventId) {
+  return dispatchRetries.get(eventId);
 }
 
 async function handlePaymentEvent(event, onPayment, log) {
@@ -532,4 +612,14 @@ async function handlePaymentEvent(event, onPayment, log) {
   }
 }
 
-module.exports = { startWatcher, handlePaymentEvent, _resetDispatchRetries };
+module.exports = {
+  startWatcher,
+  handlePaymentEvent,
+  _resetDispatchRetries,
+  _getDispatchRetryMapSize,
+  _peekDispatchRetry,
+  _serialiseEventForDeadLetter: serialiseEventForDeadLetter,
+  _DISPATCH_RETRY_CAP: DISPATCH_RETRY_CAP,
+  _MAX_DISPATCH_RETRIES: MAX_DISPATCH_RETRIES,
+  _DEAD_LETTER_CAP_BYTES: DEAD_LETTER_CAP_BYTES,
+};

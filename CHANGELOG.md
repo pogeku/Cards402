@@ -158,3 +158,21 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a typeof guard to `decryptToken` so a non-string
   `system_state.value` can't wedge the token path with an opaque
   TypeError. Audit F1/F2/F3-vcc-client.
+- **Stellar watcher dispatch-retry correctness** — two latent bugs in
+  the Soroban payment watcher's poison-pill breakout. (1) The
+  per-event retry map used a 1024-entry "LRU" eviction that was
+  actually FIFO (JS `Map.set` on existing keys does NOT reorder
+  insertion order), and an evicted entry's counter restarted from 0
+  on next failure. A cascading-failure cascade (1024 events mid-retry)
+  could cause an actively-poisoning event to be evicted at count=4
+  and silently reset to 0 — defeating the whole poison-pill breakout.
+  Fix raises the cap to 8192, eliminates eviction entirely, and
+  dead-letters any new events beyond the cap immediately with a
+  `stellar.dispatch_retry_map_full` bizEvent for ops visibility.
+  (2) `serialiseEventForDeadLetter` had no size cap, so a hostile or
+  malformed event with a multi-MB payload would write a multi-MB row
+  to `stellar_dead_letter` — amplifying one adversarial event into
+  significant storage cost and breaking the dead-letter table as a
+  grep-able forensic surface. Now truncates at 16KB with a
+  `{_truncated, _original_bytes, preview}` marker matching the
+  `audit_log.details` cap pattern. Audit F1/F2-stellar.
