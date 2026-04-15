@@ -387,18 +387,22 @@ async function evaluateRules(dashboardId, opts = {}) {
   const now = opts.now ?? Date.now();
   const firings = [];
   // Cooldown threshold — any firing newer than this wins and suppresses
-  // the rule. Computed in SQL so we don't have to worry about JS Date
-  // parsing of SQLite's `datetime('now')` format (no trailing Z, which
-  // Date.parse interprets inconsistently across platforms).
+  // the rule. F3-alerts: previously the minute count was interpolated
+  // directly into the SQL string, which worked at runtime (the value
+  // comes from a module constant) but was a code-smell footgun for any
+  // future refactor that made the value user-influenced. Now prepared
+  // with the SQL modifier as a bindable parameter — sqlite's datetime()
+  // accepts a modifier string via ? binding.
   const cooldownMinutes = DEFAULT_COOLDOWN_MS / 60000;
+  const cooldownModifier = `-${cooldownMinutes} minutes`;
   const recentFiringStmt = db.prepare(
     `SELECT 1 AS ok FROM alert_firings
-     WHERE rule_id = ? AND datetime(fired_at) > datetime('now', '-${cooldownMinutes} minutes')
+     WHERE rule_id = ? AND datetime(fired_at) > datetime('now', ?)
      LIMIT 1`,
   );
   for (const rule of rules) {
     if (rule.snoozed_until && Date.parse(rule.snoozed_until) > now) continue;
-    const recent = /** @type {any} */ (recentFiringStmt.get(rule.id));
+    const recent = /** @type {any} */ (recentFiringStmt.get(rule.id, cooldownModifier));
     if (recent) continue;
     const result = evaluate(rule, dashboardId, now);
     if (result.tripped) {
@@ -455,6 +459,15 @@ async function deliverFiring(dashboardId, rule, context) {
     const fulfillment = safeRequire('../fulfillment');
     if (typeof fulfillment.fireWebhook === 'function') {
       try {
+        // F1-alerts: pass explicit dashboardId as the 5th context arg so
+        // the delivery actually lands in webhook_deliveries. The alert
+        // payload has no order_id, so fireWebhook's default dashboardId
+        // derivation (via payload.order_id → orders table) returns null
+        // and the log insert falls through the "unattributed" branch.
+        // Operators configuring alert webhooks would otherwise see zero
+        // entries in the webhook delivery log for their alert rules.
+        // Same fix pattern as the test-webhook path from the previous
+        // audit cycle.
         await fulfillment.fireWebhook(
           rule.notify_webhook_url,
           {
@@ -468,6 +481,7 @@ async function deliverFiring(dashboardId, rule, context) {
           },
           null,
           null,
+          { dashboardId },
         );
         delivered = true;
       } catch (err) {

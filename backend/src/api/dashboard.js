@@ -963,10 +963,22 @@ router.get('/alert-rules', requirePermission('alert:read'), (req, res) => {
 router.post('/alert-rules', requirePermission('alert:write'), (req, res) => {
   const { name, kind, config, notify_email, notify_webhook_url } = req.body || {};
   if (!name || !kind) return res.status(400).json({ error: 'missing_fields' });
+  // F2-alerts: route alert rule name through shortString so CRLF /
+  // control chars can't leak into email subjects, webhook payload
+  // rule_name fields, or dashboard UI. Matches the hardening pattern
+  // for api_key labels and approval notes. Rejects an all-control-char
+  // name the same way shortString rejects empty strings.
+  const safeName = shortString(name, 120);
+  if (!safeName) {
+    return res.status(400).json({
+      error: 'invalid_name',
+      message: 'name must be a non-empty string (control characters are stripped)',
+    });
+  }
   try {
     const rule = alerts.createRule({
       dashboardId: req.dashboard.id,
-      name: String(name).slice(0, 120),
+      name: safeName,
       kind: String(kind),
       config: config || {},
       notifyEmail: notify_email || null,
@@ -991,12 +1003,24 @@ router.post('/alert-rules', requirePermission('alert:write'), (req, res) => {
 // PATCH /dashboard/alert-rules/:id
 router.patch('/alert-rules/:id', requirePermission('alert:write'), (req, res) => {
   const { name, config, enabled, snoozedUntil, notify_email, notify_webhook_url } = req.body || {};
+  // F2-alerts: same shortString sanitisation as POST. `undefined` means
+  // "don't touch the name" (existing alerts.updateRule semantics).
+  let safeName;
+  if (name !== undefined) {
+    safeName = shortString(name, 120);
+    if (!safeName) {
+      return res.status(400).json({
+        error: 'invalid_name',
+        message: 'name must be a non-empty string (control characters are stripped)',
+      });
+    }
+  }
   try {
     const rule = alerts.updateRule(
       req.dashboard.id,
       req.params.id,
       {
-        name,
+        name: safeName,
         config,
         enabled,
         snoozedUntil,
