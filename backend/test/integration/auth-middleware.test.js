@@ -255,6 +255,103 @@ describe('auth middleware — /v1/* api key verification', () => {
     assert.equal(blocked.status, 429);
   });
 
+  // ── F1-auth (2026-04-15): invalid expires_at → fail closed ──────────────
+  //
+  // `new Date('not-a-date') < new Date()` is FALSE (`NaN < number`). A
+  // corrupted expires_at column (bad ISO, ops typo, schema drift) used to
+  // silently bypass the expiry check and let the key holder continue past
+  // what was supposed to be a dead expiry. Post-fix the middleware parses
+  // expires_at to a finite number and treats anything else as expired.
+
+  it('rejects a key with a malformed expires_at as api_key_expired (fail closed)', async () => {
+    const { id, key } = await createTestKey({ label: 'bad-expiry' });
+    // Corrupt the row directly — createTestKey validates ISO strings.
+    db.prepare(`UPDATE api_keys SET expires_at = ? WHERE id = ?`).run('not-a-real-date', id);
+    // Silence the expected console.error.
+    const origError = console.error;
+    const errors = [];
+    console.error = (...args) => errors.push(args.join(' '));
+    try {
+      const res = await request.get('/v1/usage').set('X-Api-Key', key);
+      assert.equal(res.status, 401);
+      assert.equal(res.body.error, 'api_key_expired');
+    } finally {
+      console.error = origError;
+    }
+    // Ops visibility: the bad row should have been logged loudly.
+    assert.ok(
+      errors.some((e) => /unparseable expires_at/.test(e) && /failing closed/.test(e)),
+      `expected loud log on corrupted expires_at, got: ${JSON.stringify(errors)}`,
+    );
+  });
+
+  it('rejects a key with expires_at = empty string as api_key_expired', async () => {
+    // `new Date('')` is Invalid Date. Same failure mode as a corrupt row.
+    const { id, key } = await createTestKey({ label: 'empty-expiry' });
+    db.prepare(`UPDATE api_keys SET expires_at = '' WHERE id = ?`).run(id);
+    // Empty string is falsy — the outer `if (candidate.expires_at)` guard
+    // short-circuits, so the key is treated as "no expiry set" and
+    // passes. That's semantically correct (empty ≠ set) but we pin it
+    // here as a regression guard in case anyone changes the outer check.
+    const res = await request.get('/v1/usage').set('X-Api-Key', key);
+    assert.equal(res.status, 200);
+  });
+
+  it('still accepts a key with a valid future expires_at (regression guard)', async () => {
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const { key } = await createTestKey({ label: 'future-regress', expiresAt: tomorrow });
+    const res = await request.get('/v1/usage').set('X-Api-Key', key);
+    assert.equal(res.status, 200);
+  });
+
+  // ── F2-auth (2026-04-15): last_used_at UPDATE failure is tolerated ──────
+  //
+  // Pre-fix, a throw from `db.prepare(...).run(...)` for the last_used_at
+  // bookkeeping write escaped the async middleware and 500'd a request
+  // whose auth had already succeeded. A transient DB lock or disk-full
+  // would break /v1/* for every agent until the write cleared. Post-fix
+  // the write is wrapped in try/catch; the request still proceeds.
+
+  it('still 200s when the last_used_at UPDATE throws (auth already succeeded)', async () => {
+    const { id, key } = await createTestKey({ label: 'update-throws' });
+    // Monkey-patch db.prepare to throw ONLY for the last_used_at UPDATE.
+    // Any other prepare (the candidate SELECT, the usage queries on
+    // /v1/usage) goes through the real prepare untouched.
+    const realPrepare = db.prepare.bind(db);
+    /** @type {any} */ (db).prepare = (sql) => {
+      if (/UPDATE api_keys SET last_used_at/.test(sql)) {
+        return {
+          run: () => {
+            throw new Error('SQLITE_BUSY: simulated lock during last_used_at write');
+          },
+        };
+      }
+      return realPrepare(sql);
+    };
+    // Silence the expected console.warn.
+    const origWarn = console.warn;
+    const warns = [];
+    console.warn = (...args) => warns.push(args.join(' '));
+    try {
+      const res = await request.get('/v1/usage').set('X-Api-Key', key);
+      // Critical: the request still returns 200 despite the write failure.
+      assert.equal(res.status, 200, 'auth should succeed despite last_used_at write failing');
+      assert.ok(res.body.budget);
+    } finally {
+      /** @type {any} */ (db).prepare = realPrepare;
+      console.warn = origWarn;
+    }
+    // And ops gets a warn so they can investigate the underlying lock.
+    assert.ok(
+      warns.some((w) => /last_used_at update failed/.test(w) && /auth still succeeds/.test(w)),
+      `expected warn log on update failure, got: ${JSON.stringify(warns)}`,
+    );
+    // Sanity: the key itself is unchanged (no side effect from the throw).
+    const row = db.prepare(`SELECT id, suspended FROM api_keys WHERE id = ?`).get(id);
+    assert.ok(row);
+    assert.equal(row.suspended, 0);
+  });
+
   it('does not accept bcrypt hash directly as the API key', async () => {
     const { id } = await createTestKey({ label: 'hash-as-key' });
     const row = db.prepare(`SELECT key_hash FROM api_keys WHERE id = ?`).get(id);

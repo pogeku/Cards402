@@ -98,11 +98,35 @@ module.exports = async function auth(req, res, next) {
     // Post-match gates. Each returns a specific error so legitimate key
     // holders can tell the difference between "your key is wrong" and
     // "your key is suspended / expired" — someone without the key can
-    // never reach these branches at all.
-    if (candidate.expires_at && new Date(candidate.expires_at) < new Date()) {
-      return res
-        .status(401)
-        .json({ error: 'api_key_expired', message: 'This API key has expired.' });
+    // never reach these branches at all (bcrypt.compare already proved
+    // possession of the raw key).
+    //
+    // F1-auth (2026-04-15): `new Date('not-a-date') < new Date()` is
+    // `NaN < number` → FALSE. A corrupted expires_at row (bad ISO,
+    // ops typo, schema drift) silently bypasses the expiry check and
+    // lets the key holder continue past what was meant to be a dead
+    // expiry. Fail closed: if expires_at is set but unparseable, treat
+    // the key as expired AND console.error so ops can fix the row.
+    // `api_key_expired` is the right wire verdict — the only way to
+    // reach this branch is after bcrypt already proved key possession,
+    // so there's no additional info leak over the existing expiry path.
+    if (candidate.expires_at) {
+      const expiresAtMs = new Date(candidate.expires_at).getTime();
+      if (!Number.isFinite(expiresAtMs)) {
+        console.error(
+          `[auth] api_keys.id=${candidate.id} has unparseable expires_at=${JSON.stringify(
+            candidate.expires_at,
+          )} — failing closed as expired. Ops: fix the row.`,
+        );
+        return res
+          .status(401)
+          .json({ error: 'api_key_expired', message: 'This API key has expired.' });
+      }
+      if (expiresAtMs < Date.now()) {
+        return res
+          .status(401)
+          .json({ error: 'api_key_expired', message: 'This API key has expired.' });
+      }
     }
     if (candidate.suspended) {
       // Suspended was previously only enforced at order-creation time
@@ -117,8 +141,26 @@ module.exports = async function auth(req, res, next) {
     }
 
     req.apiKey = candidate;
-    // Track last-seen time for agent connection status (fire-and-forget)
-    db.prepare(`UPDATE api_keys SET last_used_at = datetime('now') WHERE id = ?`).run(candidate.id);
+    // F2-auth (2026-04-15): track last-seen for agent connection status,
+    // but truly fire-and-forget. better-sqlite3 `.run()` throws on any
+    // write failure (database locked, disk full, WAL checkpoint collision,
+    // corrupt journal, SQLITE_BUSY during a backup). Pre-fix, that throw
+    // escaped the async middleware and 500'd a request whose auth had
+    // ALREADY succeeded — turning a transient maintenance blip into a
+    // hard failure for every agent hitting /v1/* until the write cleared.
+    // A missed last_used_at timestamp is cosmetic (dashboard agent-connection
+    // status falls a few seconds stale); a 500 on a good request is not.
+    try {
+      db.prepare(`UPDATE api_keys SET last_used_at = datetime('now') WHERE id = ?`).run(
+        candidate.id,
+      );
+    } catch (err) {
+      console.warn(
+        `[auth] last_used_at update failed for api_key_id=${candidate.id}: ${
+          err instanceof Error ? err.message : String(err)
+        } — auth still succeeds`,
+      );
+    }
     return next();
   }
 
