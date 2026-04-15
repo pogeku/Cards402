@@ -120,4 +120,33 @@ describe('permissions.requirePermission middleware', () => {
     assert.equal(statusCode, null);
     assert.equal(nextCalled, true);
   });
+
+  // ── F1-permissions regression: typo guard at construction ───────────────
+  //
+  // Before the fix, requirePermission('agnet:create') (typo) silently
+  // built a middleware that returned true for owners (wildcard) and
+  // false for everyone else — turning the endpoint into "owner-only"
+  // without anyone noticing. Tests run as owner passed; the bug only
+  // surfaced when a non-owner hit the endpoint in production. Now
+  // requirePermission throws at construction time so route
+  // registration fails loudly at app startup.
+
+  it('throws synchronously on an unknown permission string (typo guard)', () => {
+    assert.throws(() => requirePermission('agnet:create'), /unknown permission 'agnet:create'/);
+  });
+
+  it('throws on a completely garbage permission string', () => {
+    assert.throws(() => requirePermission('bogus:permission'), /unknown permission/);
+  });
+
+  it('still accepts every real permission string without throwing', () => {
+    // Smoke test: construct each known permission's middleware and
+    // verify the module itself doesn't reject it. Keeps the
+    // KNOWN_PERMISSIONS set honest with respect to real usage.
+    const { KNOWN_PERMISSIONS } = require('../../src/lib/permissions');
+    for (const p of KNOWN_PERMISSIONS) {
+      const mw = requirePermission(p);
+      assert.equal(typeof mw, 'function', `expected middleware for ${p}`);
+    }
+  });
 });

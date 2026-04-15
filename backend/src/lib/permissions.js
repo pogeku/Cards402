@@ -92,6 +92,43 @@ const MATRIX = {
 /** @type {readonly Role[]} */
 const KNOWN_ROLES = ['owner', 'admin', 'operator', 'viewer'];
 
+// Single source of truth for every permission string the backend
+// recognises. Used by requirePermission() to loud-fail at route
+// registration on typos — without this, a handler wired up as
+// `requirePermission('agnet:create')` would silently become
+// "owner-only" because owners match via the wildcard while every
+// other role returns false. Tests run as owner pass, the bug only
+// surfaces when a non-owner hits the endpoint in production.
+// Adversarial audit F1-permissions.
+//
+// Keep this set in sync with the Permission typedef above. The
+// dashboard:delete / dashboard:update / team:manage / settings:update
+// / dashboard:read entries are listed here even though they may only
+// be granted via the owner wildcard today, so future handlers can
+// use them without tripping the typo guard.
+/** @type {ReadonlySet<string>} */
+const KNOWN_PERMISSIONS = new Set([
+  'dashboard:read',
+  'dashboard:update',
+  'dashboard:delete',
+  'agent:read',
+  'agent:create',
+  'agent:update',
+  'agent:delete',
+  'agent:suspend',
+  'order:read',
+  'approval:read',
+  'approval:decide',
+  'alert:read',
+  'alert:write',
+  'audit:read',
+  'team:manage',
+  'settings:update',
+  'merchant:read',
+  'webhook:read',
+  'webhook:test',
+]);
+
 /**
  * Normalise legacy role values to the current model. The original schema
  * had 'user' — we treat those as 'owner' since they're the sole user on
@@ -129,9 +166,23 @@ function can(role, permission) {
  * Responds 403 if the user is authenticated but lacks permission, and
  * 401 if there's no session on the request.
  *
+ * F1-permissions: throws synchronously at construction time if the
+ * permission string is not in KNOWN_PERMISSIONS. This catches typos at
+ * route registration (app startup) instead of at request time — a
+ * typo'd handler would otherwise silently become owner-only (wildcard)
+ * because only non-owners would fail the check, and the bug would only
+ * surface when a non-owner hit the endpoint in production.
+ *
  * @param {string} permission
  */
 function requirePermission(permission) {
+  if (!KNOWN_PERMISSIONS.has(permission)) {
+    throw new Error(
+      `requirePermission: unknown permission '${permission}'. ` +
+        `Add it to KNOWN_PERMISSIONS in lib/permissions.js or fix the typo. ` +
+        `Known: ${Array.from(KNOWN_PERMISSIONS).sort().join(', ')}`,
+    );
+  }
   return function permissionMiddleware(req, res, next) {
     const user = req.user;
     if (!user) return res.status(401).json({ error: 'unauthorized' });
@@ -148,6 +199,7 @@ function requirePermission(permission) {
 module.exports = {
   MATRIX,
   KNOWN_ROLES,
+  KNOWN_PERMISSIONS,
   normalizeRole,
   can,
   requirePermission,
