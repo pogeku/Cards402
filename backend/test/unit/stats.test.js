@@ -178,3 +178,167 @@ describe('getOrderStats — in_progress bucket (F4)', () => {
     assert.equal(s.in_progress, 1);
   });
 });
+
+// ── F5-stats: dedicated buckets for expired / rejected / awaiting_approval ──
+//
+// Pre-fix these statuses were counted in total_orders but missing from
+// the per-status breakdown, so the sum of detail buckets was strictly
+// less than total_orders whenever any order was in one of these states.
+// Post-fix they have their own fields and the sum-invariant holds.
+
+describe('getOrderStats — F5 missing-bucket coverage', () => {
+  let key;
+
+  beforeEach(async () => {
+    resetDb();
+    key = await createTestKey({ label: 'missing-bucket' });
+  });
+
+  it('counts expired orders in the expired bucket', () => {
+    seed({ status: 'expired', amount: '10.00', api_key_id: key.id });
+    seed({ status: 'expired', amount: '20.00', api_key_id: key.id });
+    const s = getOrderStats();
+    assert.equal(s.expired, 2);
+    // Regression guards: expired must NOT leak into other buckets.
+    assert.equal(s.failed, 0);
+    assert.equal(s.pending, 0);
+    assert.equal(s.in_progress, 0);
+  });
+
+  it('counts rejected orders in the rejected bucket', () => {
+    seed({ status: 'rejected', amount: '10.00', api_key_id: key.id });
+    const s = getOrderStats();
+    assert.equal(s.rejected, 1);
+    assert.equal(s.failed, 0);
+  });
+
+  it('counts awaiting_approval orders in the awaiting_approval bucket', () => {
+    seed({ status: 'awaiting_approval', amount: '10.00', api_key_id: key.id });
+    seed({ status: 'awaiting_approval', amount: '20.00', api_key_id: key.id });
+    seed({ status: 'awaiting_approval', amount: '30.00', api_key_id: key.id });
+    const s = getOrderStats();
+    assert.equal(s.awaiting_approval, 3);
+    assert.equal(s.in_progress, 0);
+    assert.equal(s.pending, 0);
+  });
+
+  it('emptyStats() returns zero for every new bucket', () => {
+    const s = getOrderStats({ apiKeyIds: [] });
+    assert.equal(s.expired, 0);
+    assert.equal(s.rejected, 0);
+    assert.equal(s.awaiting_approval, 0);
+  });
+
+  it('bucket-sum invariant: total_orders equals sum of every detail bucket', () => {
+    // Seed one of every live status + some variety. Post-fix, summing
+    // all detail buckets equals total_orders exactly. Pre-fix, expired
+    // + rejected + awaiting_approval would have been lost and the sum
+    // would have been (total_orders - 3).
+    seed({ status: 'delivered', amount: '10.00', api_key_id: key.id });
+    seed({ status: 'failed', amount: '10.00', api_key_id: key.id });
+    seed({ status: 'refunded', amount: '10.00', api_key_id: key.id });
+    seed({ status: 'pending_payment', amount: '10.00', api_key_id: key.id });
+    seed({ status: 'ordering', amount: '10.00', api_key_id: key.id });
+    seed({ status: 'refund_pending', amount: '10.00', api_key_id: key.id });
+    seed({ status: 'expired', amount: '10.00', api_key_id: key.id });
+    seed({ status: 'rejected', amount: '10.00', api_key_id: key.id });
+    seed({ status: 'awaiting_approval', amount: '10.00', api_key_id: key.id });
+    const s = getOrderStats();
+    assert.equal(s.total_orders, 9);
+    const bucketSum =
+      s.delivered +
+      s.failed +
+      s.refunded +
+      s.pending +
+      s.in_progress +
+      s.refund_pending +
+      s.expired +
+      s.rejected +
+      s.awaiting_approval;
+    assert.equal(
+      bucketSum,
+      s.total_orders,
+      `bucket sum ${bucketSum} != total_orders ${s.total_orders} — a live status is unaccounted for`,
+    );
+  });
+});
+
+// ── F6-stats: non-array apiKeyIds surfaces a clear error ────────────────────
+//
+// Pre-fix a caller passing a string (e.g. 'abc') fell through the empty
+// check, entered the `.length > 0` branch, and crashed on `.map is not a
+// function` — a confusing TypeError leaking from deep inside the SQL
+// builder. Post-fix the shape check at the boundary throws a clear
+// TypeError that points at the offending parameter.
+
+describe('getOrderStats — F6 apiKeyIds type validation', () => {
+  beforeEach(() => resetDb());
+
+  it('throws TypeError when apiKeyIds is a string (regression guard)', () => {
+    assert.throws(
+      // @ts-expect-error — intentional
+      () => getOrderStats({ apiKeyIds: 'abc' }),
+      /apiKeyIds must be an array/,
+    );
+  });
+
+  it('throws TypeError when apiKeyIds is a number', () => {
+    assert.throws(
+      // @ts-expect-error — intentional
+      () => getOrderStats({ apiKeyIds: 42 }),
+      /apiKeyIds must be an array/,
+    );
+  });
+
+  it('throws TypeError when apiKeyIds is a plain object', () => {
+    assert.throws(
+      // @ts-expect-error — intentional
+      () => getOrderStats({ apiKeyIds: { id: 'x' } }),
+      /apiKeyIds must be an array/,
+    );
+  });
+
+  it('accepts undefined apiKeyIds (regression guard for the default platform scope)', () => {
+    // Should NOT throw — undefined is the documented "all keys" mode.
+    const s = getOrderStats();
+    assert.equal(typeof s.total_orders, 'number');
+  });
+});
+
+// ── F7-stats: apiKeyIds length cap ──────────────────────────────────────────
+//
+// SQLite's default SQLITE_LIMIT_VARIABLE_NUMBER is 32766; beyond ~1k
+// ids we'd be burning memory on a multi-megabyte SQL string that would
+// eventually crash the bind. Cap at MAX_SCOPE_IDS=1000 — far beyond any
+// realistic dashboard scope — and throw a clear RangeError BEFORE
+// building the IN clause.
+
+describe('getOrderStats — F7 scope-size cap', () => {
+  beforeEach(() => resetDb());
+
+  it('accepts a scope of exactly MAX_SCOPE_IDS (1000) without throwing', () => {
+    const ids = [];
+    for (let i = 0; i < 1000; i++) ids.push(`k-${i}`);
+    // No real rows match — we're proving the query builds and runs,
+    // not that it returns anything meaningful.
+    const s = getOrderStats({ apiKeyIds: ids });
+    assert.equal(s.total_orders, 0);
+  });
+
+  it('throws RangeError when apiKeyIds exceeds MAX_SCOPE_IDS', () => {
+    const ids = [];
+    for (let i = 0; i < 1001; i++) ids.push(`k-${i}`);
+    assert.throws(() => getOrderStats({ apiKeyIds: ids }), /exceeds MAX_SCOPE_IDS/);
+  });
+
+  it('includes the offending length in the error message', () => {
+    const ids = [];
+    for (let i = 0; i < 5000; i++) ids.push(`k-${i}`);
+    try {
+      getOrderStats({ apiKeyIds: ids });
+      assert.fail('should have thrown');
+    } catch (err) {
+      assert.match(err.message, /5000/);
+    }
+  });
+});
