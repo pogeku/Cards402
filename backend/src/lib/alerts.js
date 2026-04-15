@@ -165,6 +165,28 @@ function safeParse(s) {
   }
 }
 
+// Adversarial audit F1-alerts (2026-04-15): defensive numeric helper for
+// evaluator config. The previous pattern
+//   const windowMinutes = Number(config.windowMinutes) || 30;
+// catches undefined / NaN / 0 via the || fallback, but NOT Infinity:
+// `Number('Infinity') === Infinity` is truthy so the fallback is
+// skipped. Downstream, `new Date(now - Infinity * 60000).toISOString()`
+// throws RangeError: Invalid time value, which takes out the
+// surrounding for-loop and permanently wedges the whole dashboard's
+// alert pipeline — every subsequent tick re-evaluates the same
+// corrupt rule and crashes the same way.
+//
+// `validateConfigForKind` at create time closes this for NEW rules,
+// but legacy rows (pre-validation) and hand-edited DB state can
+// still contain non-finite values. This helper is the evaluator-side
+// belt-and-braces: any non-finite value (Infinity, -Infinity, NaN,
+// non-numeric string) falls through to the default.
+function safeNum(value, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return n;
+}
+
 /**
  * @param {{
  *   dashboardId: string;
@@ -401,17 +423,44 @@ async function evaluateRules(dashboardId, opts = {}) {
      LIMIT 1`,
   );
   for (const rule of rules) {
-    if (rule.snoozed_until && Date.parse(rule.snoozed_until) > now) continue;
-    const recent = /** @type {any} */ (recentFiringStmt.get(rule.id, cooldownModifier));
-    if (recent) continue;
-    const result = evaluate(rule, dashboardId, now);
-    if (result.tripped) {
-      db.prepare(`INSERT INTO alert_firings (rule_id, dashboard_id, context) VALUES (?, ?, ?)`).run(
-        rule.id,
-        dashboardId,
-        JSON.stringify(result.context),
+    // F2-alerts adversarial audit (2026-04-15): wrap per-rule eval +
+    // firing insert in an isolated try/catch. Before this, one corrupt
+    // rule (legacy config with a non-finite value, SQL error during
+    // evaluate(), or a future evaluator throwing for any reason) would
+    // abort the for-loop and permanently wedge the dashboard's alert
+    // pipeline — every subsequent tick hit the same rule and crashed
+    // the same way. The F1-alerts config guards close the specific
+    // non-finite case, but a per-rule try/catch is the structural
+    // defence: any future evaluator that throws for any reason still
+    // lets every other rule in the batch run to completion. A loud
+    // bizEvent + stderr log gives ops the signal to investigate.
+    try {
+      if (rule.snoozed_until && Date.parse(rule.snoozed_until) > now) continue;
+      const recent = /** @type {any} */ (recentFiringStmt.get(rule.id, cooldownModifier));
+      if (recent) continue;
+      const result = evaluate(rule, dashboardId, now);
+      if (result.tripped) {
+        db.prepare(
+          `INSERT INTO alert_firings (rule_id, dashboard_id, context) VALUES (?, ?, ?)`,
+        ).run(rule.id, dashboardId, JSON.stringify(result.context));
+        firings.push({ rule, context: result.context });
+      }
+    } catch (err) {
+      const { event: bizEvent } = safeRequire('./logger');
+      if (typeof bizEvent === 'function') {
+        bizEvent('alerts.rule_evaluate_failed', {
+          rule_id: rule.id,
+          rule_kind: rule.kind,
+          dashboard_id: dashboardId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      console.error(
+        `[alerts] rule ${rule.id} (${rule.kind}) threw during evaluation — skipping, other rules continue: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
       );
-      firings.push({ rule, context: result.context });
+      // continue the for loop — other rules still evaluate normally.
     }
   }
   // Fire notifications out-of-band so one failed channel doesn't block
@@ -555,8 +604,8 @@ function isCircuitFrozen() {
  * @param {number} now
  */
 function evaluateFailureRate(config, dashboardId, now) {
-  const windowMinutes = Number(config.windowMinutes) || 30;
-  const thresholdPct = Number(config.thresholdPct) || 20;
+  const windowMinutes = safeNum(config.windowMinutes, 30);
+  const thresholdPct = safeNum(config.thresholdPct, 20);
   const cutoffMs = now - windowMinutes * 60 * 1000;
   const cutoffIso = new Date(cutoffMs).toISOString();
   // Scope to THIS dashboard's orders by joining against api_keys. A
@@ -592,8 +641,8 @@ function evaluateFailureRate(config, dashboardId, now) {
  * @param {number} now
  */
 function evaluateSpendOver(config, dashboardId, now) {
-  const windowMinutes = Number(config.windowMinutes) || 60;
-  const thresholdUsd = Number(config.thresholdUsd) || 100;
+  const windowMinutes = safeNum(config.windowMinutes, 60);
+  const thresholdUsd = safeNum(config.thresholdUsd, 100);
   const cutoffMs = now - windowMinutes * 60 * 1000;
   const cutoffIso = new Date(cutoffMs).toISOString();
   const row = /** @type {any} */ (
@@ -625,7 +674,7 @@ function evaluateSpendOver(config, dashboardId, now) {
  * @param {string} dashboardId
  */
 function evaluateAgentBalanceLow(config, dashboardId) {
-  const thresholdRemainingUsd = Number(config.thresholdRemainingUsd) || 10;
+  const thresholdRemainingUsd = safeNum(config.thresholdRemainingUsd, 10);
   const rows = /** @type {any[]} */ (
     db
       .prepare(
