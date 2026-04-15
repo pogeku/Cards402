@@ -234,6 +234,22 @@ function buildBudget(apiKey) {
 // notifications (approval email / Discord ping / spend-alert email)
 // fire AFTER commit out-of-band.
 router.post('/', orderCreateLimiter, async (req, res) => {
+  // Adversarial audit F3-orders (2026-04-15): reject requests with a
+  // missing or non-object body upfront. Before this guard, a request
+  // with no body (missing Content-Type, empty body, text/plain, etc.)
+  // landed `req.body = undefined`, which then flowed into
+  // `canonicalJson(req.body)` for the idempotency fingerprint. That
+  // produced a literal `undefined` return (not a string), which
+  // `crypto.createHash('sha256').update(undefined)` rejected with an
+  // opaque TypeError → Express 500. A plain bad-request must return
+  // 400 with a structured error so clients can correct it.
+  if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+    return res.status(400).json({
+      error: 'invalid_request',
+      message: 'Request body must be a JSON object (set Content-Type: application/json).',
+    });
+  }
+
   // Idempotency-Key handling — hardening from the adversarial audit:
   //
   // F2: express parses repeated headers into an array. The previous
@@ -813,7 +829,17 @@ const TERMINAL_STATUSES = new Set(['delivered', 'failed', 'refunded', 'expired',
 // Reconnection: each event carries the full current state, so a client can
 // reopen the stream at any time and rebuild its view from the first event
 // without needing Last-Event-ID replay.
-router.get('/:id/stream', (req, res) => {
+// Adversarial audit F2-orders (2026-04-15): the stream endpoint must
+// share the same per-key rate budget as the polling endpoints. Before
+// this limiter was wired in, an attacker could rapid-cycle
+// open-close-open against a terminal-status order: each open ran
+// SELECT *, acquired a slot, flushed headers, emitted, released the
+// slot on terminal-check. The per-key concurrent-stream cap
+// (MAX_STREAMS_PER_KEY=20) never tripped because the slot was released
+// immediately. A tight loop could hit 1000+ opens/sec, hammering
+// SQLite and socket setup without breaching any counter. Using the
+// existing 600/min poll limiter caps that axis correctly.
+router.get('/:id/stream', orderPollLimiter, (req, res) => {
   const orderId = req.params.id;
   const keyId = req.apiKey.id;
 
@@ -840,17 +866,79 @@ router.get('/:id/stream', (req, res) => {
     });
   }
 
-  res.set({
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache, no-transform',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no', // tell nginx to pass bytes straight through
-  });
-  res.flushHeaders?.();
-  res.write(': connected\n\n');
-
+  // Adversarial audit F1-orders-stream (2026-04-15): forward-declare
+  // the two intervals and the `closed` flag so `closeStream` can be
+  // defined and WIRED TO req.on('close') BEFORE the initial
+  // emit. Previously the initial-emit path ran synchronously between
+  // slot acquisition and req.on('close') registration — so if
+  // buildOrderResponse threw (corrupt sealed card blob, malformed
+  // metadata JSON, openCard() vault miss) or res.write threw (socket
+  // already dead after flushHeaders), the exception propagated to
+  // Express without ever releasing the slot. The counter leaked
+  // permanently until process restart; after enough errors the
+  // per-key or global stream cap blocked legitimate traffic with no
+  // recovery path. Now the close handler is live from the moment the
+  // slot is taken, so any throw in the initial emit lands in its own
+  // try/catch that calls closeStream() and releases the slot.
   let lastUpdated = '';
   let closed = false;
+  /** @type {NodeJS.Timeout | null} */
+  let tick = null;
+  /** @type {NodeJS.Timeout | null} */
+  let keepalive = null;
+
+  // Close-and-cleanup helper. Single source of truth for stream
+  // teardown — the terminal-state branch inside the tick, the
+  // req.on('close') handler, the initial-emit error branch, and any
+  // error path inside the interval callbacks all route through here.
+  // Idempotent via the `closed` flag so a double-call (e.g., tick
+  // hits terminal and then req.on('close') fires right after) doesn't
+  // under-count the per-key slot total.
+  //
+  // res.end() is safe to call on an already-closed response: Node's
+  // HTTP module treats it as a no-op / ERR_STREAM_WRITE_AFTER_END
+  // (non-fatal) so we can invoke it unconditionally.
+  function closeStream() {
+    if (closed) return;
+    closed = true;
+    if (tick) clearInterval(tick);
+    if (keepalive) clearInterval(keepalive);
+    releaseStreamSlot(keyId);
+    try {
+      res.end();
+    } catch {
+      /* socket already dead */
+    }
+  }
+
+  // Register the close handler IMMEDIATELY after acquiring the slot
+  // so every exit path — including an exception thrown between this
+  // line and the interval setup below — releases the slot exactly
+  // once. Without this, the body of the handler had ~40 lines of
+  // synchronous work (flushHeaders, initial emit, interval setup)
+  // during which a thrown exception would bypass cleanup entirely.
+  req.on('close', () => {
+    closeStream();
+  });
+
+  try {
+    res.set({
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no', // tell nginx to pass bytes straight through
+    });
+    res.flushHeaders?.();
+    res.write(': connected\n\n');
+  } catch (err) {
+    console.error(
+      `[orders.stream] header flush error for ${orderId}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    closeStream();
+    return;
+  }
 
   function emit(row) {
     const payload = buildOrderResponse(row);
@@ -859,35 +947,28 @@ router.get('/:id/stream', (req, res) => {
     return TERMINAL_STATUSES.has(row.status);
   }
 
-  // Initial state — so reconnects always see current phase on first message.
-  lastUpdated = initial.updated_at;
-  if (emit(initial)) {
-    releaseStreamSlot(keyId);
-    res.end();
+  // Initial state — so reconnects always see current phase on first
+  // message. Wrap in try/catch because buildOrderResponse can throw
+  // from openCard() (sealed blob decryption failure, missing vault
+  // key) or metadata JSON.parse, and res.write can throw on a dead
+  // socket. Any throw must close the stream cleanly, not leak the
+  // slot into a global counter.
+  let terminal;
+  try {
+    lastUpdated = initial.updated_at;
+    terminal = emit(initial);
+  } catch (err) {
+    console.error(
+      `[orders.stream] initial emit error for ${orderId}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    closeStream();
     return;
   }
-
-  // Close-and-cleanup helper. Single source of truth for stream
-  // teardown — both the terminal-state branch inside the tick, the
-  // req.on('close') handler, and any error path inside the interval
-  // callbacks route through here. Idempotent via the `closed` flag
-  // so a double-call (e.g., tick hits terminal and then req.on('close')
-  // fires right after) doesn't under-count the per-key slot total.
-  //
-  // res.end() is safe to call on an already-closed response: Node's
-  // HTTP module treats it as a no-op / ERR_STREAM_WRITE_AFTER_END
-  // (non-fatal) so we can invoke it unconditionally.
-  function closeStream() {
-    if (closed) return;
-    closed = true;
-    clearInterval(tick);
-    clearInterval(keepalive);
-    releaseStreamSlot(keyId);
-    try {
-      res.end();
-    } catch {
-      /* socket already dead */
-    }
+  if (terminal) {
+    closeStream();
+    return;
   }
 
   // F1-sse-stream: wrap the tick in try/catch. Previously a SQLite
@@ -899,7 +980,7 @@ router.get('/:id/stream', (req, res) => {
   // a single bad row or racy disconnect. Now we log the error to
   // stderr, close just this stream, and let the other ~999
   // concurrent streams and every background job keep running.
-  const tick = setInterval(() => {
+  tick = setInterval(() => {
     if (closed) return;
     try {
       const row = /** @type {any} */ (
@@ -927,7 +1008,7 @@ router.get('/:id/stream', (req, res) => {
   // Same catch-and-close discipline as the tick — a dead socket can
   // surface as a res.write() throw between Node's 'close' event and
   // our handler running. Don't take the process down for it.
-  const keepalive = setInterval(() => {
+  keepalive = setInterval(() => {
     if (closed) return;
     try {
       res.write(': keepalive\n\n');
@@ -941,13 +1022,10 @@ router.get('/:id/stream', (req, res) => {
     }
   }, 15000);
 
-  // F2-sse-stream: the close handler now delegates to closeStream()
-  // instead of duplicating its cleanup logic. Any future cleanup
-  // step added to closeStream is automatically picked up by the
-  // disconnect path.
-  req.on('close', () => {
-    closeStream();
-  });
+  // F1-orders-stream (2026-04-15): the req.on('close') registration
+  // that used to live here moved up to immediately after slot
+  // acquisition, so every early-exit path (initial-emit throw, header
+  // flush throw, interval setup throw) also triggers a slot release.
 });
 
 // GET /orders/:id — poll status, returns card details when delivered

@@ -100,6 +100,34 @@ describe('POST /v1/orders', () => {
     assert.equal(res.body.error, 'invalid_amount');
   });
 
+  // Adversarial audit F3-orders (2026-04-15). Before the fix, a POST
+  // that reached the handler with req.body === undefined (or an
+  // array) flowed into canonicalJson(req.body) → crypto.createHash
+  // (...).update(undefined) which throws because update() requires a
+  // string or Buffer. Express caught it as a 500 with no useful
+  // error code — callers had no way to tell "bad request shape" from
+  // "backend broken". Now the handler early-returns 400
+  // invalid_request with a structured message. The primary reachable
+  // case is a JSON array (express parses it, req.body IS an array,
+  // and the destructure pattern `const { amount_usdc } = req.body`
+  // silently reads undefined without a crash — but with a bogus
+  // idempotency fingerprint that would mismatch on retry). The
+  // guard also defends the theoretical undefined-body case via the
+  // `!req.body` short-circuit.
+  it('returns 400 invalid_request when body is a JSON array (F3)', async () => {
+    // Arrays are objects but not the shape this endpoint expects.
+    // The guard explicitly rejects Array.isArray(req.body) so an
+    // agent sending a list can't accidentally match the destructure
+    // of { amount_usdc, ... } from an array (which would silently
+    // read `undefined` for each).
+    const res = await request
+      .post('/v1/orders')
+      .set('X-Api-Key', key.key)
+      .send([{ amount_usdc: '10.00' }]);
+    assert.equal(res.status, 400);
+    assert.equal(res.body.error, 'invalid_request');
+  });
+
   it('returns 400 for zero amount', async () => {
     const res = await request
       .post('/v1/orders')
@@ -253,6 +281,47 @@ describe('GET /v1/orders/:id', () => {
     const res = await request.get(`/v1/orders/${orderId}`).set('X-Api-Key', key.key);
     assert.equal(res.body.phase, 'expired');
     assert.ok(res.body.note);
+  });
+
+  // Adversarial audit F1-orders-stream (2026-04-15). The SSE endpoint
+  // used to acquire a stream slot before registering req.on('close'),
+  // which meant any throw from the initial buildOrderResponse/emit
+  // pair (e.g. openCard on a corrupt sealed card blob) leaked the
+  // slot counter permanently. After enough errors the per-key or
+  // global cap blocked legitimate traffic with no recovery path. The
+  // fix moves the close handler immediately after slot acquisition
+  // and wraps the initial emit in try/catch that routes to
+  // closeStream(). This test proves the slot is released by opening
+  // a stream against an order whose sealed card_number is malformed
+  // — openCard throws during the initial emit — and asserting the
+  // stream slot counter returns to its baseline.
+  it('releases the stream slot when initial emit throws (F1)', async () => {
+    const { db } = require('../helpers/app');
+    const { openSSEStreamCount } = require('../../src/api/orders');
+
+    const orderId = seedOrder({ api_key_id: key.id, status: 'delivered' });
+    // Write a malformed sealed blob. secret-box.open() only attempts
+    // decryption on values starting with `enc:`; in test env
+    // CARDS402_SECRET_BOX_KEY is unset, so any `enc:` blob throws
+    // `secret-box: CARDS402_SECRET_BOX_KEY not set, cannot decrypt`.
+    // That bubbles out of openCard → buildOrderResponse → emit, which
+    // before F1 leaked the slot permanently.
+    db.prepare(
+      `UPDATE orders
+       SET card_number = 'enc:aa:bb:cc', card_cvv = 'enc:aa:bb:cc', card_expiry = 'enc:aa:bb:cc'
+       WHERE id = ?`,
+    ).run(orderId);
+
+    const before = openSSEStreamCount().total;
+    // supertest on an SSE endpoint: the server's closeStream() runs
+    // res.end() after the initial-emit throw, so the response closes
+    // and supertest resolves rather than hanging indefinitely.
+    await request.get(`/v1/orders/${orderId}/stream`).set('X-Api-Key', key.key);
+    // Give the 'close' handler one tick to run.
+    await new Promise((resolve) => setImmediate(resolve));
+    const after = openSSEStreamCount().total;
+
+    assert.equal(after, before, 'slot counter must return to baseline after initial emit error');
   });
 
   it('returns 404 for order belonging to different key', async () => {
