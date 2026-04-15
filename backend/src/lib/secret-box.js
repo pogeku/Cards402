@@ -26,14 +26,56 @@
 
 const crypto = require('crypto');
 
+const KEY_HEX_RE = /^[0-9a-fA-F]{64}$/;
+
 function isProduction() {
   return process.env.NODE_ENV === 'production';
 }
 
-function getKey() {
-  const hex = process.env.CARDS402_SECRET_BOX_KEY || process.env.VCC_TOKEN_KEY;
-  if (!hex || hex.length !== 64) return null;
+// F1 fix: strict-validate any key env var that is set, regardless of
+// whether it's the preferred or the legacy name. env.js already
+// validates CARDS402_SECRET_BOX_KEY via zod, but the legacy
+// VCC_TOKEN_KEY name is not enumerated in the schema — so a typo
+// (wrong length or non-hex chars) would silently fall through to the
+// dev/test plaintext-fallback path and the operator would think
+// encryption was enabled when it wasn't. Validating at module load
+// means the next seal()/open() call sees a hard failure rather than a
+// confusing silent downgrade.
+//
+// F2: if both names are set to DIFFERENT values, warn loudly. Operators
+// rotating by adding a new var without unsetting the old one otherwise
+// get no signal that their rotation didn't cover the legacy fallback.
+function loadKeyFromEnv() {
+  const preferred = process.env.CARDS402_SECRET_BOX_KEY;
+  const legacy = process.env.VCC_TOKEN_KEY;
+  for (const [name, val] of [
+    ['CARDS402_SECRET_BOX_KEY', preferred],
+    ['VCC_TOKEN_KEY', legacy],
+  ]) {
+    if (val && !KEY_HEX_RE.test(val)) {
+      throw new Error(
+        `secret-box: ${name} must be 64 hex characters (32 bytes). ` +
+          `Generate one with \`openssl rand -hex 32\`.`,
+      );
+    }
+  }
+  if (preferred && legacy && preferred !== legacy) {
+    console.warn(
+      '[secret-box] both CARDS402_SECRET_BOX_KEY and VCC_TOKEN_KEY are set ' +
+        'to different values — using CARDS402_SECRET_BOX_KEY. Unset the ' +
+        'legacy VCC_TOKEN_KEY to remove this warning.',
+    );
+  }
+  const hex = preferred || legacy;
+  if (!hex) return null;
   return Buffer.from(hex, 'hex');
+}
+
+function getKey() {
+  // Re-read the env on every call so tests that mutate process.env
+  // between cases see fresh values. The validation loop above is
+  // cheap — two regex tests and a string compare.
+  return loadKeyFromEnv();
 }
 
 let warnedAboutMissingKey = false;
