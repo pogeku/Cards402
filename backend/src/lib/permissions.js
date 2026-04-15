@@ -39,10 +39,18 @@
  *   | 'webhook:test'
  * } Permission */
 
+// Adversarial audit F2-permissions (2026-04-15): MATRIX and each of
+// its grant arrays are Object.frozen() at module load so no caller can
+// silently mutate the RBAC table at runtime. A line like
+//   MATRIX.viewer.push('dashboard:delete')
+// would otherwise escalate viewers to a destructive permission with no
+// git-visible change, no test failure, and no signal in the audit
+// log. The grant arrays are frozen individually (Object.freeze is
+// shallow) so `.push`/`.splice`/`[0] =` all throw in strict mode.
 /** @type {Record<Role, ReadonlyArray<import('./permissions').Permission | '*'>>} */
-const MATRIX = {
-  owner: ['*'],
-  admin: [
+const MATRIX = Object.freeze({
+  owner: Object.freeze(['*']),
+  admin: Object.freeze([
     'dashboard:read',
     'dashboard:update',
     'agent:read',
@@ -61,8 +69,8 @@ const MATRIX = {
     'merchant:read',
     'webhook:read',
     'webhook:test',
-  ],
-  operator: [
+  ]),
+  operator: Object.freeze([
     'dashboard:read',
     'agent:read',
     'agent:create',
@@ -76,8 +84,8 @@ const MATRIX = {
     'merchant:read',
     'webhook:read',
     'webhook:test',
-  ],
-  viewer: [
+  ]),
+  viewer: Object.freeze([
     'dashboard:read',
     'agent:read',
     'order:read',
@@ -86,11 +94,11 @@ const MATRIX = {
     'audit:read',
     'merchant:read',
     'webhook:read',
-  ],
-};
+  ]),
+});
 
 /** @type {readonly Role[]} */
-const KNOWN_ROLES = ['owner', 'admin', 'operator', 'viewer'];
+const KNOWN_ROLES = Object.freeze(['owner', 'admin', 'operator', 'viewer']);
 
 // Single source of truth for every permission string the backend
 // recognises. Used by requirePermission() to loud-fail at route
@@ -106,8 +114,16 @@ const KNOWN_ROLES = ['owner', 'admin', 'operator', 'viewer'];
 // / dashboard:read entries are listed here even though they may only
 // be granted via the owner wildcard today, so future handlers can
 // use them without tripping the typo guard.
-/** @type {ReadonlySet<string>} */
-const KNOWN_PERMISSIONS = new Set([
+// Frozen array (not a Set) so Object.freeze actually prevents
+// mutation. A Set's `.add()` bypasses Object.freeze because it writes
+// to an internal slot rather than a property. An attacker or buggy
+// refactor inside the process could otherwise do
+//   KNOWN_PERMISSIONS.add('bogus:permission')
+// and silently register a permission that the requirePermission
+// typo-guard then accepts. Frozen array + .includes() is O(19) per
+// lookup — negligible for a startup-time typo check.
+/** @type {readonly string[]} */
+const KNOWN_PERMISSIONS = Object.freeze([
   'dashboard:read',
   'dashboard:update',
   'dashboard:delete',
@@ -134,13 +150,28 @@ const KNOWN_PERMISSIONS = new Set([
  * had 'user' — we treat those as 'owner' since they're the sole user on
  * their dashboard. Anything unrecognised falls back to 'viewer' for safety.
  *
+ * Adversarial audit F1-permissions (2026-04-15): case-insensitive and
+ * whitespace-tolerant. The previous implementation did an exact-string
+ * match against the lowercase KNOWN_ROLES, so `normalizeRole('Owner')`
+ * fell through to `'viewer'`. Every code path that stored a role
+ * today used lowercase so the bug was latent, but any future
+ * migration, data import, admin DB edit, or team-invite feature that
+ * wrote a role with non-canonical casing would silently deauth
+ * users across every mutation endpoint — the audit_log row would be
+ * misattributed and `requirePermission` would 403 even legitimate
+ * owners. Lowercasing + trimming the input before the set check
+ * closes the class at the normalization layer.
+ *
  * @param {string | null | undefined} role
  * @returns {Role}
  */
 function normalizeRole(role) {
-  if (role === 'user') return 'owner';
-  if (role && KNOWN_ROLES.includes(/** @type {Role} */ (role))) {
-    return /** @type {Role} */ (role);
+  if (typeof role !== 'string') return 'viewer';
+  const canonical = role.trim().toLowerCase();
+  if (canonical === '') return 'viewer';
+  if (canonical === 'user') return 'owner';
+  if (KNOWN_ROLES.includes(/** @type {Role} */ (canonical))) {
+    return /** @type {Role} */ (canonical);
   }
   return 'viewer';
 }
@@ -176,11 +207,11 @@ function can(role, permission) {
  * @param {string} permission
  */
 function requirePermission(permission) {
-  if (!KNOWN_PERMISSIONS.has(permission)) {
+  if (!KNOWN_PERMISSIONS.includes(permission)) {
     throw new Error(
       `requirePermission: unknown permission '${permission}'. ` +
         `Add it to KNOWN_PERMISSIONS in lib/permissions.js or fix the typo. ` +
-        `Known: ${Array.from(KNOWN_PERMISSIONS).sort().join(', ')}`,
+        `Known: ${[...KNOWN_PERMISSIONS].sort().join(', ')}`,
     );
   }
   return function permissionMiddleware(req, res, next) {
