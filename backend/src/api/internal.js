@@ -16,6 +16,7 @@ const { Router } = require('express');
 const requireAuth = require('../middleware/requireAuth');
 const requireInternal = require('../middleware/requireInternal');
 const requireCardReveal = require('../middleware/requireCardReveal');
+const { recordAudit } = require('../lib/audit');
 // scheduleRefund import removed along with the manual refund endpoint — see below
 const { getOrderStats } = require('../lib/stats');
 
@@ -29,6 +30,25 @@ router.use(requireInternal);
 // for an audited single-order reveal.
 router.get('/orders', (req, res) => {
   const { status, limit = 100, api_key_id } = req.query;
+
+  // F3-internal adversarial audit (2026-04-15): reject non-string
+  // query params instead of letting them reach the SQLite bind layer.
+  // `?status=a&status=b` parses into an array which better-sqlite3
+  // rejects at bind time with an opaque 500. Clear 400 keeps ops
+  // tooling out of the unknown-error bucket.
+  if (status !== undefined && typeof status !== 'string') {
+    return res.status(400).json({
+      error: 'invalid_query_param',
+      message: 'status must be a single string (no repeated ?status=... params).',
+    });
+  }
+  if (api_key_id !== undefined && typeof api_key_id !== 'string') {
+    return res.status(400).json({
+      error: 'invalid_query_param',
+      message: 'api_key_id must be a single string.',
+    });
+  }
+
   let query = `
     SELECT o.id, o.status, o.amount_usdc, o.payment_asset,
            o.stellar_txid, o.sender_address, o.refund_stellar_txid,
@@ -51,7 +71,26 @@ router.get('/orders', (req, res) => {
     params.push(api_key_id);
   }
   query += ` ORDER BY o.created_at DESC LIMIT ?`;
-  params.push(/** @type {any} */ (Math.min(parseInt(String(limit)) || 100, 1000)));
+  // F2-internal adversarial audit (2026-04-15): clamp LIMIT into [1, 1000].
+  // The previous formula was `Math.min(parseInt(...) || 100, 1000)`, which
+  // has two holes:
+  //
+  //   - `parseInt('-5') || 100 === -5` — -5 is truthy so the fallback is
+  //     skipped. Math.min(-5, 1000) is -5. SQLite treats LIMIT -5 as
+  //     "no upper bound" and returns the full orders table.
+  //   - `parseInt('0') || 100 === 100` — 0 quietly maps to 100 (OK but
+  //     inconsistent).
+  //
+  // Wrap Math.min in Math.max(1, ...) so any value below 1 rounds up to
+  // 1 (including NaN via the final || 100 fallback). The authenticated
+  // internal caller is trusted, but the fix bounds the worst-case
+  // SELECT for ops tooling that accidentally sends ?limit=-1.
+  const rawLimit = parseInt(String(limit), 10);
+  const clampedLimit = Math.max(
+    1,
+    Math.min(Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 100, 1000),
+  );
+  params.push(/** @type {any} */ (clampedLimit));
   res.json(db.prepare(query).all(...params));
 });
 
@@ -105,32 +144,67 @@ router.get('/orders/:id/card', requireCardReveal, (req, res) => {
 
   // Audit FIRST, ship SECOND. If the audit write can't be persisted,
   // fail closed with 503 — an un-audited reveal must not happen.
+  //
+  // F1-internal adversarial audit (2026-04-15): route the write through
+  // recordAudit() instead of a hand-rolled db.prepare INSERT. The
+  // previous direct insert had a column-mismatch bug that passed the
+  // literal string 'internal_card_reveal' into the actor_role column
+  // instead of req.user.role. Every card reveal landed with actor_role
+  // set to a constant, so operational queries like
+  //   SELECT * FROM audit_log WHERE actor_role = 'owner'
+  // silently EXCLUDED every card reveal, and the "which privilege
+  // level performed this reveal" forensic signal was permanently
+  // corrupted. Going through recordAudit() fixes the column mapping,
+  // inherits the details-byte truncation cap, uses normalizeRole()
+  // for consistent role encoding, and brings the write into
+  // alignment with every other audit path in the codebase.
+  //
+  // recordAudit() already swallows its own errors (audit writes are
+  // best-effort by design) so we can't rely on it to throw on
+  // failure. Use a count-before / count-after strategy to verify the
+  // row landed durably — timestamp-independent (no YYYY-MM-DD vs
+  // YYYY-MM-DDTHH:MM:SS.sssZ format mismatch against the SQLite
+  // default) and immune to clock skew. Fail-closed with 503 if the
+  // post-count didn't increment.
   try {
     const dashId =
       db.prepare(`SELECT dashboard_id FROM api_keys WHERE id = ?`).get(order.api_key_id)
         ?.dashboard_id || 'system';
-    // Cap the user_agent at 512 bytes at the call site so a caller with
-    // a pathologically long UA can't bloat the audit_log row.
-    const rawUa = req.headers['user-agent'] || null;
-    const userAgent = rawUa && typeof rawUa === 'string' ? rawUa.slice(0, 512) : rawUa;
-    db.prepare(
-      `INSERT INTO audit_log
-         (dashboard_id, actor_user_id, actor_email, actor_role, action, resource_type, resource_id, details, ip, user_agent)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      dashId,
-      req.user.id || null,
-      req.user.email,
-      'internal_card_reveal',
-      'order.card_reveal',
-      'card_reveal',
-      order.id,
-      JSON.stringify({ api_key_id: order.api_key_id }),
-      req.ip || null,
-      userAgent,
-    );
+    const preCount = /** @type {any} */ (
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM audit_log
+           WHERE action = 'internal_card_reveal' AND resource_id = ?`,
+        )
+        .get(order.id)
+    ).n;
+    recordAudit({
+      dashboardId: dashId,
+      actor: {
+        id: req.user.id || null,
+        email: req.user.email,
+        role: req.user.role,
+      },
+      action: 'internal_card_reveal',
+      resourceType: 'order',
+      resourceId: order.id,
+      details: { api_key_id: order.api_key_id },
+      ip: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+    });
+    const postCount = /** @type {any} */ (
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM audit_log
+           WHERE action = 'internal_card_reveal' AND resource_id = ?`,
+        )
+        .get(order.id)
+    ).n;
+    if (postCount !== preCount + 1) {
+      throw new Error('audit row did not land in audit_log');
+    }
   } catch (err) {
-    console.error(`[internal] audit log insert failed for card reveal: ${err.message}`);
+    console.error(`[internal] audit log write failed for card reveal: ${err.message}`);
     return res.status(503).json({
       error: 'audit_unavailable',
       message:
