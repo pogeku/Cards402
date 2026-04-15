@@ -167,14 +167,44 @@ function policyCheck(apiKeyId, amount) {
 }
 
 // ── Budget helper (exported for use in /v1/usage) ─────────────────────────────
+//
+// Adversarial audit F1-usage: buildBudget previously reported
+// remaining_usdc = limit - total_spent_usdc, counting only SETTLED
+// spend. But the POST /v1/orders spend-limit check uses
+// settled + in_flight + amount > limit — so an agent with
+// settled=$50 and two $30 pending_payment orders saw
+// remaining="$50.00" on /v1/usage and then got spend_limit_exceeded
+// on the next order. Fixed by querying the in-flight total inside
+// buildBudget and subtracting it from remaining_usdc, matching the
+// exact calculation POST /v1/orders uses (including awaiting_approval
+// after the earlier approval-flow audit). The legacy spent_usdc
+// field stays settled-only for backwards compatibility; new
+// in_flight_usdc and committed_usdc fields expose the breakdown.
+
+const IN_FLIGHT_STATUSES_SQL = `('pending_payment','ordering','refund_pending','awaiting_approval')`;
 
 function buildBudget(apiKey) {
-  const spent = parseFloat(apiKey.total_spent_usdc || '0');
+  const settled = parseFloat(apiKey.total_spent_usdc || '0');
   const limit = apiKey.spend_limit_usdc ? parseFloat(apiKey.spend_limit_usdc) : null;
+  const inFlightRow = /** @type {any} */ (
+    db
+      .prepare(
+        `SELECT COALESCE(SUM(CAST(amount_usdc AS REAL)), 0) AS total
+         FROM orders
+         WHERE api_key_id = ? AND status IN ${IN_FLIGHT_STATUSES_SQL}`,
+      )
+      .get(apiKey.id)
+  );
+  const inFlight = parseFloat(inFlightRow?.total || '0');
+  const committed = settled + inFlight;
   return {
-    spent_usdc: spent.toFixed(2),
+    spent_usdc: settled.toFixed(2),
+    in_flight_usdc: inFlight.toFixed(2),
+    committed_usdc: committed.toFixed(2),
     limit_usdc: limit !== null ? limit.toFixed(2) : null,
-    remaining_usdc: limit !== null ? Math.max(0, limit - spent).toFixed(2) : null,
+    // remaining now subtracts committed (settled + in-flight) so it
+    // matches what the next POST /v1/orders spend check will see.
+    remaining_usdc: limit !== null ? Math.max(0, limit - committed).toFixed(2) : null,
   };
 }
 

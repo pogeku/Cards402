@@ -333,4 +333,83 @@ describe('GET /v1/usage', () => {
     assert.equal(res.body.orders.delivered, 2);
     assert.equal(res.body.orders.failed, 1);
   });
+
+  // ── F1-usage: budget reflects in-flight spend ─────────────────────────────
+  //
+  // Before this fix buildBudget reported remaining_usdc = limit -
+  // total_spent_usdc, counting only SETTLED spend. An agent with
+  // pending_payment orders saw a remaining number that the next
+  // POST /v1/orders spend check then rejected because it counts
+  // in-flight too. buildBudget now includes in_flight in its
+  // committed calculation.
+
+  it('budget.remaining_usdc subtracts in-flight orders, not just settled', async () => {
+    // Seed a pending_payment order — counts as in-flight per
+    // orders.js spend check, but not settled (total_spent_usdc = 0).
+    seedOrder({
+      api_key_id: key.id,
+      status: 'pending_payment',
+      amount_usdc: '30.00',
+    });
+    seedOrder({
+      api_key_id: key.id,
+      status: 'pending_payment',
+      amount_usdc: '30.00',
+    });
+    const res = await request.get('/v1/usage').set('X-Api-Key', key.key);
+    assert.equal(res.status, 200);
+    // settled is still zero — no vcc-callback has run.
+    assert.equal(res.body.budget.spent_usdc, '0.00');
+    // in_flight_usdc exposes the reserved amount
+    assert.equal(res.body.budget.in_flight_usdc, '60.00');
+    // committed = settled + in_flight
+    assert.equal(res.body.budget.committed_usdc, '60.00');
+    // remaining = limit - committed = 100 - 60 = 40
+    assert.equal(res.body.budget.remaining_usdc, '40.00');
+  });
+
+  it('budget.remaining_usdc counts awaiting_approval as in-flight (matches orders.js F1)', async () => {
+    // After the earlier approval-flow audit, awaiting_approval is
+    // counted as in-flight by the POST /v1/orders spend check.
+    // buildBudget must match.
+    seedOrder({
+      api_key_id: key.id,
+      status: 'awaiting_approval',
+      amount_usdc: '50.00',
+    });
+    const res = await request.get('/v1/usage').set('X-Api-Key', key.key);
+    assert.equal(res.body.budget.in_flight_usdc, '50.00');
+    assert.equal(res.body.budget.remaining_usdc, '50.00');
+  });
+
+  it('budget.remaining_usdc is null when no spend limit set, regardless of in-flight', async () => {
+    const unlimitedKey = await createTestKey({ label: 'unlim2' });
+    seedOrder({
+      api_key_id: unlimitedKey.id,
+      status: 'pending_payment',
+      amount_usdc: '500.00',
+    });
+    const res = await request.get('/v1/usage').set('X-Api-Key', unlimitedKey.key);
+    assert.equal(res.body.budget.limit_usdc, null);
+    assert.equal(res.body.budget.remaining_usdc, null);
+    // The new fields still populate.
+    assert.equal(res.body.budget.in_flight_usdc, '500.00');
+  });
+
+  // ── F2/F3-usage: terminal statuses excluded from in_progress ──────────────
+
+  it('in_progress excludes expired and rejected (terminal-negative statuses)', async () => {
+    seedOrder({ api_key_id: key.id, status: 'pending_payment' });
+    seedOrder({ api_key_id: key.id, status: 'ordering' });
+    seedOrder({ api_key_id: key.id, status: 'expired' });
+    seedOrder({ api_key_id: key.id, status: 'rejected' });
+    const res = await request.get('/v1/usage').set('X-Api-Key', key.key);
+    // pending_payment + ordering = 2 genuine in-progress
+    assert.equal(res.body.orders.in_progress, 2);
+    // Expired and rejected get their own buckets
+    assert.equal(res.body.orders.expired, 1);
+    assert.equal(res.body.orders.rejected, 1);
+    // Total still counts everything
+    assert.equal(res.body.orders.total, 4);
+  });
 });

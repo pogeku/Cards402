@@ -616,16 +616,32 @@ app.post('/v1/agent/status', agentStatusLimiter, (req, res) => {
 // GET /v1/usage — agent's own spend and order summary
 // Runs COUNT + SUM over orders. Same per-key throttle as the rest of
 // the agent read surface.
+//
+// Adversarial audit (2026-04-15):
+//
+// F2-usage: in_progress previously used `NOT IN ('delivered','failed',
+//   'refunded')` as the complement filter — which incorrectly counted
+//   EXPIRED and REJECTED orders (both terminal-negative) as still in
+//   progress. An agent with 5 dead expired orders saw "5 orders in
+//   progress" when nothing was actually in flight. Now excludes every
+//   terminal status from the complement and uses COALESCE so an empty
+//   orders table returns 0 instead of null per-bucket.
+//
+// F3-usage: added explicit expired and rejected counters so agents
+//   can see the full picture — previously both were hidden inside the
+//   wrong in_progress bucket.
 app.get('/v1/usage', orderPollLimiter, (req, res) => {
   const counts = db
     .prepare(
       `
     SELECT
       COUNT(*) AS total,
-      SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) AS delivered,
-      SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
-      SUM(CASE WHEN status = 'refunded' THEN 1 ELSE 0 END) AS refunded,
-      SUM(CASE WHEN status NOT IN ('delivered','failed','refunded') THEN 1 ELSE 0 END) AS in_progress
+      COALESCE(SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END), 0) AS delivered,
+      COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
+      COALESCE(SUM(CASE WHEN status = 'refunded' THEN 1 ELSE 0 END), 0) AS refunded,
+      COALESCE(SUM(CASE WHEN status = 'expired' THEN 1 ELSE 0 END), 0) AS expired,
+      COALESCE(SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END), 0) AS rejected,
+      COALESCE(SUM(CASE WHEN status NOT IN ('delivered','failed','refunded','expired','rejected') THEN 1 ELSE 0 END), 0) AS in_progress
     FROM orders WHERE api_key_id = ?
   `,
     )
