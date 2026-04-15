@@ -8,6 +8,7 @@ const {
   expireStaleOrders,
   pruneIdempotencyKeys,
   reconcileOrderingFulfillment,
+  purgeOldCards,
 } = require('../../src/jobs');
 const vccClient = require('../../src/vcc-client');
 const { createTestKey, resetDb, db } = require('../helpers/app');
@@ -212,6 +213,202 @@ describe('pruneIdempotencyKeys', () => {
 
     const after = db.prepare(`SELECT * FROM idempotency_keys WHERE key = ?`).get(iKey);
     assert.ok(after, 'fresh row should still exist after pruning');
+  });
+});
+
+// ── purgeOldCards — F1/F2-prune regression guards ───────────────────────
+//
+// purgeOldCards used to parseInt(env || '30') with no validation. A
+// misconfigured CARD_RETENTION_DAYS could instantly destroy all card
+// data (0, huge number) or silently disable the purge (NaN, negative).
+// Also used to filter `status = 'delivered'` which would miss any
+// non-delivered row that somehow had card data left on it. Both fixed
+// in the 2026-04-15 audit.
+
+describe('purgeOldCards — retention validation (F1)', () => {
+  let origEnv;
+
+  beforeEach(() => {
+    resetDb();
+    origEnv = process.env.CARD_RETENTION_DAYS;
+  });
+
+  function restoreEnv() {
+    if (origEnv === undefined) delete process.env.CARD_RETENTION_DAYS;
+    else process.env.CARD_RETENTION_DAYS = origEnv;
+  }
+
+  async function seedRecentDeliveredCard() {
+    const { id: keyId } = await createTestKey({ label: 'recent-card-key' });
+    const orderId = uuidv4();
+    db.prepare(
+      `
+      INSERT INTO orders (id, status, amount_usdc, payment_asset, api_key_id,
+                          card_number, card_cvv, card_expiry, card_brand,
+                          created_at, updated_at)
+      VALUES (?, 'delivered', '10.00', 'usdc', ?,
+              'enc:iv:tag:ct', 'enc:iv:tag:ct', 'enc:iv:tag:ct', 'Visa',
+              datetime('now'), datetime('now'))
+      `,
+    ).run(orderId, keyId);
+    return orderId;
+  }
+
+  it('CARD_RETENTION_DAYS=0 does NOT wipe recent card data (regression)', async () => {
+    // Pre-fix: 0 → datetime('now', '-0 days') = now → every delivered
+    // card matches the WHERE and gets wiped on the first tick.
+    process.env.CARD_RETENTION_DAYS = '0';
+    const orderId = await seedRecentDeliveredCard();
+
+    // Silence the expected warning in this test case.
+    const origWarn = console.warn;
+    console.warn = () => {};
+    try {
+      purgeOldCards();
+    } finally {
+      console.warn = origWarn;
+      restoreEnv();
+    }
+
+    const row = db.prepare(`SELECT card_number FROM orders WHERE id = ?`).get(orderId);
+    assert.ok(row.card_number !== null, 'recent card data must survive the fallback default');
+  });
+
+  it('CARD_RETENTION_DAYS=abc falls back to default and still prunes (regression)', async () => {
+    process.env.CARD_RETENTION_DAYS = 'abc';
+
+    // Seed an OLD delivered card that should be wiped under the default 30d.
+    const { id: keyId } = await createTestKey({ label: 'old-card-key' });
+    const orderId = uuidv4();
+    db.prepare(
+      `
+      INSERT INTO orders (id, status, amount_usdc, payment_asset, api_key_id,
+                          card_number, card_cvv, card_expiry, card_brand,
+                          created_at, updated_at)
+      VALUES (?, 'delivered', '10.00', 'usdc', ?,
+              'enc:iv:tag:ct', 'enc:iv:tag:ct', 'enc:iv:tag:ct', 'Visa',
+              datetime('now', '-60 days'), datetime('now', '-60 days'))
+      `,
+    ).run(orderId, keyId);
+
+    const origWarn = console.warn;
+    console.warn = () => {};
+    try {
+      purgeOldCards();
+    } finally {
+      console.warn = origWarn;
+      restoreEnv();
+    }
+
+    // Pre-fix: 'abc' → NaN → SQL parse failure → silent no-op → row
+    // survives forever. Post-fix: falls back to default 30d → row is 60
+    // days old → gets purged.
+    const row = db.prepare(`SELECT card_number FROM orders WHERE id = ?`).get(orderId);
+    assert.equal(row.card_number, null, 'old card should be purged via fallback default');
+  });
+
+  it('CARD_RETENTION_DAYS=-5 falls back to default', async () => {
+    process.env.CARD_RETENTION_DAYS = '-5';
+    const orderId = await seedRecentDeliveredCard();
+
+    const origWarn = console.warn;
+    console.warn = () => {};
+    try {
+      purgeOldCards();
+    } finally {
+      console.warn = origWarn;
+      restoreEnv();
+    }
+
+    // Recent card survives the 30d default.
+    const row = db.prepare(`SELECT card_number FROM orders WHERE id = ?`).get(orderId);
+    assert.ok(row.card_number !== null);
+  });
+
+  it('CARD_RETENTION_DAYS=9999999 (astronomical) falls back to default', async () => {
+    // Pre-fix: astronomical value flips WHERE clause to match everything
+    // (datetime('now', '-9999999 days') is in the far past, so every
+    // updated_at > that → matches all delivered orders).
+    //
+    // Wait — re-reading the query: it's `datetime(updated_at) <
+    // datetime('now', '-9999999 days')`. For a huge negative offset,
+    // the right side is a VERY EARLY date. A row's updated_at (recent)
+    // is LATER than that early date, so the comparison is false → no
+    // match. So actually a huge value would UNDER-prune, not over-prune.
+    // Still worth guarding against because the cap-at-10-years check
+    // catches typo'd values that should have been reasonable.
+    process.env.CARD_RETENTION_DAYS = '9999999';
+    const orderId = await seedRecentDeliveredCard();
+
+    const origWarn = console.warn;
+    console.warn = () => {};
+    try {
+      purgeOldCards();
+    } finally {
+      console.warn = origWarn;
+      restoreEnv();
+    }
+
+    const row = db.prepare(`SELECT card_number FROM orders WHERE id = ?`).get(orderId);
+    // Under the default 30d fallback, a recent row survives.
+    assert.ok(row.card_number !== null);
+  });
+
+  it('CARD_RETENTION_DAYS=30 (valid) prunes old data, keeps recent data', async () => {
+    process.env.CARD_RETENTION_DAYS = '30';
+    const recentOrderId = await seedRecentDeliveredCard();
+    const { id: keyId } = await createTestKey({ label: 'old-valid-key' });
+    const oldOrderId = uuidv4();
+    db.prepare(
+      `
+      INSERT INTO orders (id, status, amount_usdc, payment_asset, api_key_id,
+                          card_number, card_cvv, card_expiry, card_brand,
+                          created_at, updated_at)
+      VALUES (?, 'delivered', '10.00', 'usdc', ?,
+              'enc:iv:tag:ct', 'enc:iv:tag:ct', 'enc:iv:tag:ct', 'Visa',
+              datetime('now', '-45 days'), datetime('now', '-45 days'))
+      `,
+    ).run(oldOrderId, keyId);
+
+    try {
+      purgeOldCards();
+    } finally {
+      restoreEnv();
+    }
+
+    const recent = db.prepare(`SELECT card_number FROM orders WHERE id = ?`).get(recentOrderId);
+    assert.ok(recent.card_number !== null, 'recent row should survive');
+    const old = db.prepare(`SELECT card_number FROM orders WHERE id = ?`).get(oldOrderId);
+    assert.equal(old.card_number, null, 'old row should be purged');
+  });
+
+  it('purges a refunded-post-delivery row (F2 — widened filter)', async () => {
+    // Pre-fix: WHERE status='delivered' missed rows that had transitioned
+    // delivered → refunded with leftover card data. Post-fix: filter on
+    // card_number IS NOT NULL so any row with leftover card data is
+    // purged regardless of status.
+    process.env.CARD_RETENTION_DAYS = '30';
+    const { id: keyId } = await createTestKey({ label: 'refunded-card-key' });
+    const orderId = uuidv4();
+    db.prepare(
+      `
+      INSERT INTO orders (id, status, amount_usdc, payment_asset, api_key_id,
+                          card_number, card_cvv, card_expiry, card_brand,
+                          created_at, updated_at)
+      VALUES (?, 'refunded', '10.00', 'usdc', ?,
+              'enc:iv:tag:ct', 'enc:iv:tag:ct', 'enc:iv:tag:ct', 'Visa',
+              datetime('now', '-60 days'), datetime('now', '-60 days'))
+      `,
+    ).run(orderId, keyId);
+
+    try {
+      purgeOldCards();
+    } finally {
+      restoreEnv();
+    }
+
+    const row = db.prepare(`SELECT card_number FROM orders WHERE id = ?`).get(orderId);
+    assert.equal(row.card_number, null, 'refunded row with leftover card data must be purged');
   });
 });
 

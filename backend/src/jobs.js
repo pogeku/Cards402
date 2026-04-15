@@ -602,20 +602,28 @@ function expireApprovalRequests() {
 //
 // Default retention: 30 days. Tuned via CARD_RETENTION_DAYS. Card_brand
 // stays — it isn't sensitive and is useful for analytics.
+//
+// Adversarial audit F2-prune: filter on `card_number IS NOT NULL`
+// rather than `status = 'delivered'`. Today the vcc-callback flow
+// only ever writes card data on the delivered transition, so the
+// status filter is equivalent — but any future admin-override path
+// that leaves card data on a non-delivered row (e.g. a manual
+// refund post-delivery) would silently skip the purge and leak
+// PAN/CVV past its TTL. Filtering on the presence of card data
+// makes the privacy objective unambiguous.
 function purgeOldCards() {
-  const days = parseInt(process.env.CARD_RETENTION_DAYS || '30', 10);
+  const days = parseRetentionDays('CARD_RETENTION_DAYS', 30);
   const result = db
     .prepare(
       `
     UPDATE orders
     SET card_number = NULL, card_cvv = NULL, card_expiry = NULL
-    WHERE status = 'delivered'
-      AND card_number IS NOT NULL
+    WHERE card_number IS NOT NULL
       AND datetime(updated_at) < datetime('now', ?)
   `,
     )
     .run(`-${days} days`);
-  if (result.changes > 0) log(`purged card data on ${result.changes} delivered order(s)`);
+  if (result.changes > 0) log(`purged card data on ${result.changes} order(s)`);
 }
 
 // Clean up expired idempotency keys older than 24 hours
@@ -681,7 +689,7 @@ function pruneExpiredAgentClaims() {
 // before persistence so there's no data-minimisation concern beyond
 // the standard "small tables are faster to query" argument.
 function pruneWebhookDeliveries() {
-  const days = parseInt(process.env.WEBHOOK_LOG_RETENTION_DAYS || '30', 10);
+  const days = parseRetentionDays('WEBHOOK_LOG_RETENTION_DAYS', 30);
   const result = db
     .prepare(`DELETE FROM webhook_deliveries WHERE datetime(created_at) < datetime('now', ?)`)
     .run(`-${days} days`);
@@ -693,11 +701,48 @@ function pruneWebhookDeliveries() {
 // order blocked" — a 90-day window is plenty for operator follow-up
 // questions, and the audit_log has its own history.
 function prunePolicyDecisions() {
-  const days = parseInt(process.env.POLICY_DECISIONS_RETENTION_DAYS || '90', 10);
+  const days = parseRetentionDays('POLICY_DECISIONS_RETENTION_DAYS', 90);
   const result = db
     .prepare(`DELETE FROM policy_decisions WHERE datetime(created_at) < datetime('now', ?)`)
     .run(`-${days} days`);
   if (result.changes > 0) log(`pruned ${result.changes} policy decision(s)`);
+}
+
+// Parse a retention-days env var. Rejects:
+//   - non-numeric input (parseInt → NaN)
+//   - zero or negative values (would either wipe everything on every
+//     tick via `-0 days` / `--5 days` or silently disable the prune
+//     via datetime() parse failure)
+//   - values over MAX_RETENTION_DAYS (defense against an env typo
+//     producing an astronomical value that flips the WHERE clause)
+// Invalid input logs a one-time warning and falls back to `defaultDays`.
+// This is the F1-prune fix: every retention knob is now safe under
+// misconfiguration instead of silently destroying card data or silently
+// not pruning at all.
+const MIN_RETENTION_DAYS = 1;
+const MAX_RETENTION_DAYS = 3650; // 10 years
+const _warnedRetentionKeys = new Set();
+function parseRetentionDays(envVarName, defaultDays) {
+  const raw = process.env[envVarName];
+  if (raw === undefined || raw === null || raw === '') return defaultDays;
+  const parsed = parseInt(raw, 10);
+  if (
+    !Number.isFinite(parsed) ||
+    parsed < MIN_RETENTION_DAYS ||
+    parsed > MAX_RETENTION_DAYS ||
+    String(parsed) !== raw.trim() // catches "3.14", "5abc", " 5", etc.
+  ) {
+    if (!_warnedRetentionKeys.has(envVarName)) {
+      console.warn(
+        `[jobs] ${envVarName}=${JSON.stringify(raw)} is not a valid retention ` +
+          `day count (expected integer ${MIN_RETENTION_DAYS}-${MAX_RETENTION_DAYS}). ` +
+          `Falling back to default ${defaultDays} days.`,
+      );
+      _warnedRetentionKeys.add(envVarName);
+    }
+    return defaultDays;
+  }
+  return parsed;
 }
 
 // Poll Horizon for every agent wallet sitting in 'awaiting_funding'.
