@@ -339,12 +339,25 @@ async function getVccJobStatus(vccJobId) {
 // reason instead of the old boolean-blind failure.
 const { verifyCallback } = require('./lib/hmac');
 
-function verifyVccSignature(rawBody, signature, timestamp, orderId, nonce, secret = null) {
+function verifyVccSignature(
+  rawBody,
+  signature,
+  timestamp,
+  orderId,
+  nonce,
+  secret = null,
+  { requireV3 = false } = {},
+) {
   // Audit F2: callers (vcc-callback handler) look up the per-order
   // callback_secret first and pass it in here. Falls back to the global
   // VCC_CALLBACK_SECRET only when the per-order secret is unavailable
   // (legacy orders pre-F2, or first-receipt race where the order row
   // hasn't been flushed yet).
+  //
+  // Audit F1-vcc-callback (2026-04-15): the handler now sets requireV3
+  // whenever the order row carries a stored nonce or per-order secret,
+  // so a downgrade attack cannot reach v2 validation even if the
+  // attacker omits the X-VCC-Nonce header.
   return verifyCallback({
     secret: secret || process.env.VCC_CALLBACK_SECRET,
     signatureHeader: signature,
@@ -352,6 +365,7 @@ function verifyVccSignature(rawBody, signature, timestamp, orderId, nonce, secre
     orderId,
     nonce: nonce || undefined,
     rawBody,
+    requireV3,
   });
 }
 

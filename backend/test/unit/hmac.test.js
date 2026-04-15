@@ -226,6 +226,92 @@ describe('verifyCallback — v2', () => {
   });
 });
 
+describe('verifyCallback — requireV3 option (audit F1-vcc-callback)', () => {
+  const NONCE = 'strict-v3-nonce';
+
+  it('accepts a valid v3 signature when requireV3 is true', () => {
+    const ts = String(Date.now());
+    const sig = signCallback({
+      secret: SECRET,
+      timestamp: ts,
+      orderId: ORDER_ID,
+      rawBody: BODY,
+      nonce: NONCE,
+    });
+    const v = verifyCallback({
+      secret: SECRET,
+      timestamp: ts,
+      signatureHeader: `sha256=${sig}`,
+      orderId: ORDER_ID,
+      nonce: NONCE,
+      rawBody: BODY,
+      requireV3: true,
+    });
+    assert.deepEqual(v, { ok: true, version: 3 });
+  });
+
+  it('rejects a valid v2 signature when requireV3 is true', () => {
+    // Sender signs v2 (no nonce). Receiver is v3-enrolled and requires v3.
+    // Without requireV3 the library would happily accept v2. With
+    // requireV3 the fallback is disabled and we get bad_signature.
+    const ts = String(Date.now());
+    const sig = signCallback({ secret: SECRET, timestamp: ts, orderId: ORDER_ID, rawBody: BODY });
+    const v = verifyCallback({
+      secret: SECRET,
+      timestamp: ts,
+      signatureHeader: `sha256=${sig}`,
+      orderId: ORDER_ID,
+      nonce: NONCE, // receiver has it, but the sender didn't sign it
+      rawBody: BODY,
+      requireV3: true,
+    });
+    assert.equal(v.ok, false);
+    assert.equal(v.reason, 'bad_signature');
+  });
+
+  it('rejects a v2 signature when the header nonce is absent under requireV3', () => {
+    // The nonce-bypass scenario: attacker omits X-VCC-Nonce so the
+    // library's v3 branch is skipped. Without requireV3, v2 would pass.
+    // With requireV3 we refuse because v2 is categorically disallowed.
+    const ts = String(Date.now());
+    const sig = signCallback({ secret: SECRET, timestamp: ts, orderId: ORDER_ID, rawBody: BODY });
+    const v = verifyCallback({
+      secret: SECRET,
+      timestamp: ts,
+      signatureHeader: `sha256=${sig}`,
+      orderId: ORDER_ID,
+      nonce: undefined,
+      rawBody: BODY,
+      requireV3: true,
+    });
+    assert.equal(v.ok, false);
+    assert.equal(v.reason, 'bad_signature');
+  });
+
+  it('still rejects a tampered v3 signature under requireV3', () => {
+    const ts = String(Date.now());
+    // Wrong secret → v3 digest won't match.
+    const sig = signCallback({
+      secret: 'not-the-real-secret',
+      timestamp: ts,
+      orderId: ORDER_ID,
+      rawBody: BODY,
+      nonce: NONCE,
+    });
+    const v = verifyCallback({
+      secret: SECRET,
+      timestamp: ts,
+      signatureHeader: `sha256=${sig}`,
+      orderId: ORDER_ID,
+      nonce: NONCE,
+      rawBody: BODY,
+      requireV3: true,
+    });
+    assert.equal(v.ok, false);
+    assert.equal(v.reason, 'bad_signature');
+  });
+});
+
 describe('verifyCallback — v1 rejection (audit F6)', () => {
   // F6 removed v1 acceptance. v1 was `${timestamp}.${rawBody}` with no
   // order_id binding — a leaked secret could be used to forge a callback

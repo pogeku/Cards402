@@ -197,24 +197,24 @@ beforeEach(() => {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function signVccCallback(payload, secretOverride = null) {
-  // v2 protocol — order_id is bound into the signing payload. The audit-F6
-  // fix removed v1 acceptance from the verifier, so tests must include the
-  // order_id in both the signing payload AND the X-VCC-Order-Id header.
-  // The audit-F2 fix also moved callback secrets per-order — callers that
-  // know the per-order secret should pass it in via secretOverride;
-  // otherwise we fall back to the env secret (only legacy orders without
-  // a stored per-order secret will accept this).
+function signVccCallback(payload, secretOverride = null, nonceOverride = null) {
+  // v3 protocol — order_id AND per-job nonce are bound into the signing
+  // payload. The audit F1-vcc-callback fix (2026-04-15) made v3 mandatory
+  // for any order with a stored callback_nonce, so real vcc — which is
+  // given the nonce at invoice time — signs v3 and the tests must
+  // mirror that. Callers override the nonce only when simulating the
+  // attacker (e.g. "unknown nonce" test cases).
   const timestamp = String(Date.now());
   const body = JSON.stringify(payload);
   const orderId = payload.order_id;
   if (!orderId) throw new Error('signVccCallback: payload.order_id is required');
   const secret = secretOverride || process.env.VCC_CALLBACK_SECRET;
-  const sig = crypto
-    .createHmac('sha256', secret)
-    .update(`${timestamp}.${orderId}.${body}`)
-    .digest('hex');
-  return { timestamp, signature: `sha256=${sig}`, body, orderId };
+  const nonce = nonceOverride !== null ? nonceOverride : getOrderCallbackNonce(orderId);
+  const signPayload = nonce
+    ? `${timestamp}.${orderId}.${nonce}.${body}`
+    : `${timestamp}.${orderId}.${body}`;
+  const sig = crypto.createHmac('sha256', secret).update(signPayload).digest('hex');
+  return { timestamp, signature: `sha256=${sig}`, body, orderId, nonce };
 }
 
 // Read the sealed per-order callback_secret from the orders table and
@@ -225,6 +225,14 @@ function getOrderCallbackSecret(orderId) {
   if (!row?.callback_secret) return null;
   const { open } = require('../../src/lib/secret-box');
   return open(row.callback_secret);
+}
+
+// Read the per-order callback_nonce. Tests simulating vcc include it in
+// the signing payload (v3) and as the X-VCC-Nonce header. Audit
+// F1-vcc-callback (2026-04-15) made this mandatory for v3-enrolled orders.
+function getOrderCallbackNonce(orderId) {
+  const row = db.prepare(`SELECT callback_nonce FROM orders WHERE id = ?`).get(orderId);
+  return row?.callback_nonce || null;
 }
 
 async function createOrderViaApi(apiKey, amount = '10.00') {
@@ -314,13 +322,14 @@ describe('e2e cards402 ↔ vcc: happy path', () => {
     const card = { number: '4111111111111111', cvv: '123', expiry: '12/28', brand: 'Visa' };
     const callbackPayload = { order_id: orderId, status: 'fulfilled', card };
     const orderSecret = getOrderCallbackSecret(orderId);
-    const { timestamp, signature, body } = signVccCallback(callbackPayload, orderSecret);
+    const { timestamp, signature, body, nonce } = signVccCallback(callbackPayload, orderSecret);
     const callbackRes = await request
       .post('/vcc-callback')
       .set('Content-Type', 'application/json')
       .set('X-VCC-Timestamp', timestamp)
       .set('X-VCC-Signature', signature)
       .set('X-VCC-Order-Id', orderId)
+      .set('X-VCC-Nonce', nonce)
       .send(body);
     assert.equal(
       callbackRes.status,
@@ -358,13 +367,14 @@ describe('e2e cards402 ↔ vcc: vcc reports failure', () => {
     // secret so the verifier accepts it.
     const payload = { order_id: orderId, status: 'failed', error: 'ctx_order_rejected' };
     const orderSecret = getOrderCallbackSecret(orderId);
-    const { timestamp, signature, body } = signVccCallback(payload, orderSecret);
+    const { timestamp, signature, body, nonce } = signVccCallback(payload, orderSecret);
     const cbRes = await request
       .post('/vcc-callback')
       .set('Content-Type', 'application/json')
       .set('X-VCC-Timestamp', timestamp)
       .set('X-VCC-Signature', signature)
       .set('X-VCC-Order-Id', orderId)
+      .set('X-VCC-Nonce', nonce)
       .send(body);
     assert.equal(cbRes.status, 200);
 
@@ -441,7 +451,7 @@ describe('e2e cards402 ↔ vcc: per-order callback secret (audit F2)', () => {
     // a callback for this order — the verifier looks up the per-order
     // secret first and only falls back to env when there isn't one.
     const card = { number: '4111111111111111', cvv: '123', expiry: '12/28', brand: 'Visa' };
-    const { timestamp, signature, body } = signVccCallback(
+    const { timestamp, signature, body, nonce } = signVccCallback(
       { order_id: orderId, status: 'fulfilled', card },
       // No per-order secret override → uses env. Should fail because the
       // order has its own secret stored after handlePayment ran.
@@ -452,6 +462,7 @@ describe('e2e cards402 ↔ vcc: per-order callback secret (audit F2)', () => {
       .set('X-VCC-Timestamp', timestamp)
       .set('X-VCC-Signature', signature)
       .set('X-VCC-Order-Id', orderId)
+      .set('X-VCC-Nonce', nonce)
       .send(body);
     assert.equal(res.status, 401);
     assert.equal(res.body.error, 'invalid_signature');
@@ -466,6 +477,7 @@ describe('e2e cards402 ↔ vcc: per-order callback secret (audit F2)', () => {
       .set('X-VCC-Timestamp', ok.timestamp)
       .set('X-VCC-Signature', ok.signature)
       .set('X-VCC-Order-Id', orderId)
+      .set('X-VCC-Nonce', ok.nonce)
       .send(ok.body);
     assert.equal(goodRes.status, 200);
   });
@@ -568,7 +580,7 @@ describe('e2e cards402 ↔ vcc: terminal callback ignored', () => {
 
     const card = { number: '4000000000000002', cvv: '456', expiry: '01/29', brand: 'Visa' };
     const orderSecret = getOrderCallbackSecret(orderId);
-    const { timestamp, signature, body } = signVccCallback(
+    const { timestamp, signature, body, nonce } = signVccCallback(
       {
         order_id: orderId,
         status: 'fulfilled',
@@ -582,6 +594,7 @@ describe('e2e cards402 ↔ vcc: terminal callback ignored', () => {
       .set('X-VCC-Timestamp', timestamp)
       .set('X-VCC-Signature', signature)
       .set('X-VCC-Order-Id', orderId)
+      .set('X-VCC-Nonce', nonce)
       .send(body);
 
     // Second callback for the same order — should be a no-op.
@@ -592,6 +605,7 @@ describe('e2e cards402 ↔ vcc: terminal callback ignored', () => {
       .set('X-VCC-Timestamp', sig2.timestamp)
       .set('X-VCC-Signature', sig2.signature)
       .set('X-VCC-Order-Id', orderId)
+      .set('X-VCC-Nonce', sig2.nonce)
       .send(sig2.body);
     assert.equal(res2.status, 200);
     assert.equal(res2.body.note, 'already_terminal');

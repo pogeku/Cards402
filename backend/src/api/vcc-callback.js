@@ -67,39 +67,94 @@ router.post('/', (req, res) => {
     timestamp_expired: 'timestamp_expired',
     bad_signature: 'invalid_signature',
   };
-  // Audit C-3 + F2: combined order-row read. We need both the per-order
-  // callback_secret (F2 — replaces the global env secret as the verification
-  // material) and the stored nonce (C-3) before we can verify the signature,
-  // so a single SELECT does both jobs.
+
+  // Adversarial audit F1/F2 (2026-04-15): the pre-verification order-row
+  // read is the anchor for two downgrade attacks that existed in the
+  // original handler:
+  //
+  //   F1 — Nonce bypass: when an order was minted with a callback_nonce
+  //        (v3), the original handler only rejected a mismatch when both
+  //        sides were non-null. An attacker who knew the shared secret
+  //        but NOT the per-order nonce could omit X-VCC-Nonce entirely
+  //        and the verifier would fall through to v2 (which doesn't bind
+  //        the nonce). Fix: if the row has a callback_nonce, the header
+  //        nonce is mandatory AND must match, and we set requireV3 on
+  //        the verifier call so v2 fallback is disabled in hmac.js too.
+  //
+  //   F2 — Per-order secret silent fallback: when an order has a sealed
+  //        callback_secret and secret-box.open() throws (key rotation,
+  //        corrupted ciphertext, truncated row), the original handler
+  //        swallowed the error and fell through to VCC_CALLBACK_SECRET,
+  //        silently downgrading to the pre-F2 shared-secret model. Fix:
+  //        if the row carries a non-NULL callback_secret, decrypt
+  //        failure is a hard reject. The legitimate "legacy order" path
+  //        is `callback_secret IS NULL`, not "we tried and failed".
+  //
+  // Both fixes depend on reading the row BEFORE signature verification
+  // so we know whether to require v3 and whether to tolerate a NULL
+  // per-order secret.
   let storedNonce = null;
   let perOrderSecret = null;
+  let orderHasPerOrderSecret = false;
+  let orderExistsForPreCheck = false;
+
   if (headerOrderId) {
     const row = /** @type {any} */ (
       db
-        .prepare(`SELECT callback_nonce, callback_secret FROM orders WHERE id = ?`)
+        .prepare(`SELECT id, callback_nonce, callback_secret FROM orders WHERE id = ?`)
         .get(headerOrderId)
     );
-    if (row?.callback_nonce) storedNonce = row.callback_nonce;
-    if (row?.callback_secret) {
-      try {
-        const { open } = require('../lib/secret-box');
-        perOrderSecret = open(row.callback_secret);
-      } catch (err) {
-        // Secret-box failure (e.g. wrong key after rotation) — fall back to
-        // the env secret rather than refusing the callback outright. Logged
-        // for ops so a key rotation incident is visible.
-        console.warn(
-          `[vcc-callback] failed to open per-order callback_secret for ${headerOrderId}: ${err.message}`,
-        );
+    if (row) {
+      orderExistsForPreCheck = true;
+      if (row.callback_nonce) storedNonce = row.callback_nonce;
+      if (row.callback_secret) {
+        orderHasPerOrderSecret = true;
+        try {
+          const { open } = require('../lib/secret-box');
+          perOrderSecret = open(row.callback_secret);
+        } catch (err) {
+          // F2 fix: fail-closed. The row has a non-NULL per-order secret;
+          // if we can't open it we refuse the callback outright instead of
+          // downgrading to VCC_CALLBACK_SECRET. An ops-visible alert plus
+          // a 401 on the wire. This differs from legacy orders (row exists
+          // but callback_secret IS NULL), which still fall through to the
+          // env secret below.
+          console.warn(
+            `[vcc-callback] per-order callback_secret decrypt failed for ${headerOrderId}: ${err.message}`,
+          );
+          bizEvent('callback.rejected', {
+            reason: 'per_order_secret_unavailable',
+            order_id: headerOrderId,
+            error: err.message,
+          });
+          return res.status(401).json({ error: 'invalid_signature' });
+        }
       }
     }
-    // Nonce mismatch is a hard reject — if vcc claims a nonce that doesn't
-    // match what we stored at invoice time, somebody is replaying.
-    if (headerNonce && storedNonce && headerNonce !== storedNonce) {
-      bizEvent('callback.rejected', { reason: 'nonce_mismatch', order_id: headerOrderId });
-      return res.status(401).json({ error: 'invalid_signature' });
+
+    // F1 fix: nonce enforcement is now mandatory when the row has one.
+    // The header MUST be present AND must match — no "if both present"
+    // shortcut. This is the anchor check that prevents an attacker from
+    // downgrading to v2 by simply not sending X-VCC-Nonce.
+    if (storedNonce) {
+      if (!headerNonce || headerNonce !== storedNonce) {
+        bizEvent('callback.rejected', {
+          reason: !headerNonce ? 'nonce_missing' : 'nonce_mismatch',
+          order_id: headerOrderId,
+        });
+        return res.status(401).json({ error: 'invalid_signature' });
+      }
     }
   }
+
+  // Any order enrolled in the v3 protocol (has a stored nonce or a
+  // per-order secret) must be verified under v3. requireV3 disables the
+  // v2 fallback inside verifyCallback even if some other code path ever
+  // drops storedNonce before calling in. Belt-and-braces: the mandatory
+  // nonce check above already kills v2-downgrade attacks, but paying
+  // the library-level cost of rejecting v2 signatures here closes the
+  // attack class at both layers.
+  const requireV3 = Boolean(storedNonce) || orderHasPerOrderSecret;
 
   const rawBody = req.rawBody;
   const verdict = verifyVccSignature(
@@ -109,14 +164,20 @@ router.post('/', (req, res) => {
     headerOrderId,
     storedNonce,
     perOrderSecret,
+    { requireV3 },
   );
   if (!verdict.ok) {
     bizEvent('callback.rejected', {
       reason: verdict.reason,
       order_id: headerOrderId || null,
+      require_v3: requireV3,
     });
     return res.status(401).json({ error: WIRE_ERROR[verdict.reason] || 'invalid_signature' });
   }
+  // Guard against the unlikely case where the row vanished between the
+  // pre-check and the main SELECT below. Not a security issue — just
+  // avoids a confusing 404 after a successful signature verify.
+  void orderExistsForPreCheck;
 
   const { order_id, status, card, error } = req.body;
   if (!order_id || !status) {

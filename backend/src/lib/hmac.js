@@ -90,6 +90,15 @@ function signCallback({ secret, timestamp, orderId, rawBody, nonce }) {
  * @param {string} args.rawBody        Raw request body captured by express verify.
  * @param {number} [args.maxSkewMs]    Replay window.
  * @param {number} [args.now]          Injected clock for tests.
+ * @param {boolean} [args.requireV3]   If true, v2 fallback is disabled — a
+ *                                     v3-enrolled order will NOT accept a
+ *                                     signature that only binds order_id.
+ *                                     Callers set this whenever the order's
+ *                                     stored nonce or per-order secret is
+ *                                     non-NULL, so a downgrade attack on the
+ *                                     header fields can't reach v2 validation
+ *                                     regardless of handler-side checks.
+ *                                     Audit F1-vcc-callback.
  */
 function verifyCallback({
   secret,
@@ -100,6 +109,7 @@ function verifyCallback({
   rawBody,
   maxSkewMs = DEFAULT_SKEW_MS,
   now = Date.now(),
+  requireV3 = false,
 }) {
   if (!secret || !signatureHeader || !timestamp || rawBody === null || rawBody === undefined) {
     return { ok: false, reason: 'missing_fields' };
@@ -123,6 +133,13 @@ function verifyCallback({
       nonce,
     });
     if (safeEqHex(provided, expectedV3)) return { ok: true, version: 3 };
+  }
+
+  // requireV3 short-circuits the v2 fallback. Used by vcc-callback when the
+  // order row has a stored nonce or per-order secret — v3 is mandatory and
+  // a v2 signature is a downgrade attempt.
+  if (requireV3) {
+    return { ok: false, reason: 'bad_signature' };
   }
 
   // v2: order_id in the signing payload, no nonce. Transitional fallback —

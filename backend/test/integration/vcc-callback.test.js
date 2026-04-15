@@ -279,3 +279,215 @@ describe('POST /vcc-callback — failed', () => {
     assert.equal(res.body.note, 'already_terminal');
   });
 });
+
+// ── Adversarial audit F1/F2 (2026-04-15) ──────────────────────────────────
+// Regression guards for two downgrade attacks on the v3 callback protocol:
+//
+//   F1 — Nonce bypass. An order minted with a callback_nonce (v3) must
+//        reject any callback that omits X-VCC-Nonce or supplies the
+//        wrong value. Previously the handler only checked for a
+//        mismatch when both sides were non-null, so an attacker with
+//        the shared secret could drop the header entirely and the
+//        verifier would fall through to v2.
+//
+//   F2 — Per-order secret silent fallback. An order minted with a
+//        sealed callback_secret must reject any callback whose secret
+//        row fails to decrypt — not silently fall back to the env
+//        secret. The legitimate "legacy order" fallback is the
+//        callback_secret IS NULL case, not "we tried and failed".
+
+describe('POST /vcc-callback — F1 nonce enforcement', () => {
+  beforeEach(() => resetDb());
+
+  function v3Sign({ body, nonce, secret = VCC_CALLBACK_SECRET, timestampOverride = null }) {
+    const timestamp = timestampOverride ?? Date.now().toString();
+    const bodyStr = typeof body === 'string' ? body : JSON.stringify(body);
+    const parsed = typeof body === 'string' ? JSON.parse(body) : body;
+    const sig = crypto
+      .createHmac('sha256', secret)
+      .update(`${timestamp}.${parsed.order_id}.${nonce}.${bodyStr}`)
+      .digest('hex');
+    return { timestamp, signature: `sha256=${sig}`, bodyStr };
+  }
+
+  it('accepts a correctly-signed v3 callback with matching X-VCC-Nonce', async () => {
+    const id = seedOrder();
+    const nonce = 'nonce-happy-path-v3';
+    db.prepare(`UPDATE orders SET callback_nonce = ? WHERE id = ?`).run(nonce, id);
+
+    const body = {
+      order_id: id,
+      status: 'fulfilled',
+      card: {
+        number: '4111111111111111',
+        cvv: '123',
+        expiry: '12/27',
+        brand: 'Visa',
+      },
+    };
+    const { timestamp, signature, bodyStr } = v3Sign({ body, nonce });
+    const res = await request
+      .post('/vcc-callback')
+      .set({
+        'Content-Type': 'application/json',
+        'X-VCC-Timestamp': timestamp,
+        'X-VCC-Signature': signature,
+        'X-VCC-Order-Id': id,
+        'X-VCC-Nonce': nonce,
+      })
+      .send(bodyStr);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.ok, true);
+  });
+
+  it('rejects a v2 signature when the order has a callback_nonce (downgrade bypass)', async () => {
+    // This is the exact F1 attack: the order has a stored nonce, but
+    // the attacker forges a v2 signature (no nonce in payload) and
+    // omits X-VCC-Nonce entirely. Previously the handler's nonce check
+    // was a no-op because `headerNonce && storedNonce` was false, and
+    // verifyCallback's v2 fallback accepted it. Now the handler rejects
+    // at the pre-verification nonce check with reason=nonce_missing.
+    const id = seedOrder();
+    db.prepare(`UPDATE orders SET callback_nonce = ? WHERE id = ?`).run('the-real-nonce', id);
+
+    const body = {
+      order_id: id,
+      status: 'fulfilled',
+      card: {
+        number: '4111111111111111',
+        cvv: '123',
+        expiry: '12/27',
+        brand: 'Visa',
+      },
+    };
+    // v2 signing (no nonce) using the still-valid shared secret.
+    const { timestamp, signature, bodyStr, orderId } = sign(body);
+    const res = await request
+      .post('/vcc-callback')
+      .set(makeHeaders(timestamp, signature, orderId)) // no X-VCC-Nonce
+      .send(bodyStr);
+    assert.equal(res.status, 401);
+    assert.equal(res.body.error, 'invalid_signature');
+    // And the order must NOT have transitioned.
+    const row = db.prepare(`SELECT status FROM orders WHERE id = ?`).get(id);
+    assert.equal(row.status, 'ordering');
+  });
+
+  it('rejects when X-VCC-Nonce header value differs from the stored nonce', async () => {
+    const id = seedOrder();
+    db.prepare(`UPDATE orders SET callback_nonce = ? WHERE id = ?`).run('real-nonce', id);
+
+    const body = {
+      order_id: id,
+      status: 'fulfilled',
+      card: {
+        number: '4111111111111111',
+        cvv: '123',
+        expiry: '12/27',
+        brand: 'Visa',
+      },
+    };
+    // Sign v3 with the WRONG nonce — signature is internally valid but
+    // doesn't match what cards402 stored at invoice time.
+    const { timestamp, signature, bodyStr } = v3Sign({ body, nonce: 'wrong-nonce' });
+    const res = await request
+      .post('/vcc-callback')
+      .set({
+        'Content-Type': 'application/json',
+        'X-VCC-Timestamp': timestamp,
+        'X-VCC-Signature': signature,
+        'X-VCC-Order-Id': id,
+        'X-VCC-Nonce': 'wrong-nonce',
+      })
+      .send(bodyStr);
+    assert.equal(res.status, 401);
+    assert.equal(res.body.error, 'invalid_signature');
+  });
+
+  it('allows v2 callbacks for orders without a stored nonce (legacy)', async () => {
+    // Pre-F1 orders have callback_nonce IS NULL. They should still
+    // accept v2 signatures under the shared VCC_CALLBACK_SECRET so the
+    // upgrade path is backwards-compatible for in-flight fulfillments.
+    const id = seedOrder();
+    // Make sure the column is NULL (seedOrder doesn't set it).
+    db.prepare(`UPDATE orders SET callback_nonce = NULL WHERE id = ?`).run(id);
+
+    const body = {
+      order_id: id,
+      status: 'fulfilled',
+      card: {
+        number: '4111111111111111',
+        cvv: '123',
+        expiry: '12/27',
+        brand: 'Visa',
+      },
+    };
+    const res = await postCallback(body);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.ok, true);
+  });
+});
+
+describe('POST /vcc-callback — F2 per-order secret decrypt failure', () => {
+  beforeEach(() => resetDb());
+
+  it('rejects (fail-closed) when per-order callback_secret cannot be opened', async () => {
+    // F2: a row with a non-NULL but malformed callback_secret must be
+    // refused outright. Previously the handler swallowed the secret-
+    // box error, silently fell back to VCC_CALLBACK_SECRET, and let a
+    // v2 signature under the global secret pass — neutralising the
+    // per-order-secret threat model entirely.
+    //
+    // Install a malformed "enc:..." blob that secret-box.open() will
+    // reject with "malformed sealed blob". In the test env the box has
+    // no key, so open() would normally pass-through plaintext — we use
+    // a blob starting with "enc:" to force the decrypt code path.
+    const id = seedOrder();
+    const malformedBlob = 'enc:aa:bb:cc:extra-part';
+    db.prepare(`UPDATE orders SET callback_secret = ? WHERE id = ?`).run(malformedBlob, id);
+
+    const body = {
+      order_id: id,
+      status: 'fulfilled',
+      card: {
+        number: '4111111111111111',
+        cvv: '123',
+        expiry: '12/27',
+        brand: 'Visa',
+      },
+    };
+    // Attacker uses the still-valid global shared secret. Pre-F2 this
+    // would have been accepted because the handler fell back to it.
+    const { timestamp, signature, bodyStr, orderId } = sign(body);
+    const res = await request
+      .post('/vcc-callback')
+      .set(makeHeaders(timestamp, signature, orderId))
+      .send(bodyStr);
+    assert.equal(res.status, 401);
+    assert.equal(res.body.error, 'invalid_signature');
+    // Order must not have transitioned.
+    const row = db.prepare(`SELECT status FROM orders WHERE id = ?`).get(id);
+    assert.equal(row.status, 'ordering');
+  });
+
+  it('still accepts legacy orders with callback_secret IS NULL via the env secret', async () => {
+    // The legitimate fallback: a pre-F2 order has no per-order secret
+    // at all. These still work under VCC_CALLBACK_SECRET until they
+    // age out of the pipeline.
+    const id = seedOrder();
+    db.prepare(`UPDATE orders SET callback_secret = NULL WHERE id = ?`).run(id);
+
+    const body = {
+      order_id: id,
+      status: 'fulfilled',
+      card: {
+        number: '4111111111111111',
+        cvv: '123',
+        expiry: '12/27',
+        brand: 'Visa',
+      },
+    };
+    const res = await postCallback(body);
+    assert.equal(res.status, 200);
+  });
+});
