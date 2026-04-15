@@ -59,6 +59,22 @@ router.get('/orders', (req, res) => {
 // Returns raw PAN/CVV/expiry. Every call writes an audit_log entry so
 // reveal activity is reviewable. Gated by requireCardReveal in addition
 // to the existing requireAuth + requireInternal stack.
+//
+// F1-card-reveal (2026-04-15 audit): the audit write used to be a
+// best-effort try/catch AFTER building the response, with the comment
+// "Don't let audit-log failure block the reveal". That's the correct
+// trade-off for ordinary operations — but card reveal is the exception
+// because the reveal is only policy-justified BY the audit trail. If
+// the audit write silently fails (disk full, corrupt table, schema
+// drift), the old code shipped plaintext PAN/CVV/expiry with no paper
+// trail and ops lost the ability to investigate any downstream breach.
+//
+// The fix:
+//   1. Open the card vault first (so a decrypt failure surfaces its
+//      own specific error, not as a reveal 503).
+//   2. Write the audit row synchronously. On ANY failure, return 503
+//      immediately and do NOT ship the card.
+//   3. Only after the audit is durable, return the card JSON.
 router.get('/orders/:id/card', requireCardReveal, (req, res) => {
   const order = db
     .prepare(
@@ -70,17 +86,33 @@ router.get('/orders/:id/card', requireCardReveal, (req, res) => {
   if (!order.card_number) {
     return res.status(409).json({ error: 'no_card', message: 'Order has no card data' });
   }
-  // F1: card columns are sealed at rest. openCard handles both sealed and
-  // legacy plaintext rows transparently.
-  const { openCard } = require('../lib/card-vault');
-  const card = openCard(order);
 
-  // Audit the reveal — actor, target, IP, UA. Resource_type = 'card_reveal'
-  // makes filtering trivial in the audit log search later.
+  // Open the vault first. A decrypt failure (GCM tag mismatch / key
+  // rotation / truncated blob) surfaces through openCard's field-
+  // labelled error and gets a 500 — we don't want to conflate that
+  // with the audit-unavailable path below.
+  const { openCard } = require('../lib/card-vault');
+  let card;
+  try {
+    card = openCard(order);
+  } catch (err) {
+    console.error(`[internal] card-vault open failed for ${order.id}: ${err.message}`);
+    return res.status(500).json({
+      error: 'card_vault_unavailable',
+      message: 'Card data could not be decrypted. Check the vault key and vault integrity.',
+    });
+  }
+
+  // Audit FIRST, ship SECOND. If the audit write can't be persisted,
+  // fail closed with 503 — an un-audited reveal must not happen.
   try {
     const dashId =
       db.prepare(`SELECT dashboard_id FROM api_keys WHERE id = ?`).get(order.api_key_id)
         ?.dashboard_id || 'system';
+    // Cap the user_agent at 512 bytes at the call site so a caller with
+    // a pathologically long UA can't bloat the audit_log row.
+    const rawUa = req.headers['user-agent'] || null;
+    const userAgent = rawUa && typeof rawUa === 'string' ? rawUa.slice(0, 512) : rawUa;
     db.prepare(
       `INSERT INTO audit_log
          (dashboard_id, actor_user_id, actor_email, actor_role, action, resource_type, resource_id, details, ip, user_agent)
@@ -95,11 +127,15 @@ router.get('/orders/:id/card', requireCardReveal, (req, res) => {
       order.id,
       JSON.stringify({ api_key_id: order.api_key_id }),
       req.ip || null,
-      req.headers['user-agent'] || null,
+      userAgent,
     );
   } catch (err) {
-    // Don't let audit-log failure block the reveal — log to stderr instead.
     console.error(`[internal] audit log insert failed for card reveal: ${err.message}`);
+    return res.status(503).json({
+      error: 'audit_unavailable',
+      message:
+        'Card reveal blocked: audit log write could not be persisted. An un-audited reveal is not permitted. Try again shortly, and alert ops if this persists.',
+    });
   }
 
   res.json({

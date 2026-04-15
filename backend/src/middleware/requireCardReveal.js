@@ -24,6 +24,15 @@ function getCardRevealEmails() {
 module.exports = function requireCardReveal(req, res, next) {
   if (!req.user) return res.status(401).json({ error: 'unauthenticated' });
 
+  // F2-card-reveal: defensive type check. requireAuth always populates
+  // req.user.email from a NOT NULL UNIQUE column, but any future auth
+  // middleware that sets req.user via a different code path would
+  // trigger a TypeError on .toLowerCase() and cascade to 500. Fail
+  // closed on a missing email instead of crashing.
+  if (typeof req.user.email !== 'string' || req.user.email.length === 0) {
+    return res.status(401).json({ error: 'unauthenticated', message: 'Missing email in session' });
+  }
+
   const email = req.user.email.toLowerCase();
   const allowed = getCardRevealEmails();
 
