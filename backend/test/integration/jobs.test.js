@@ -169,3 +169,97 @@ describe('pruneIdempotencyKeys', () => {
     assert.ok(after, 'fresh row should still exist after pruning');
   });
 });
+
+// ── retryWebhooks — F1-retry-webhooks vault failure path ──────────────────
+//
+// Before the 2026-04-15 audit, a card-vault decrypt failure during
+// payload rehydration propagated out of the rehydration block as a
+// generic delivery failure. The retry loop would burn 3 attempts over
+// ~35 minutes before marking the row "webhook failed" with a cryptic
+// "card-vault: failed to open card_number" as last_error — the
+// on-call engineer would debug the customer's endpoint when the real
+// problem was our vault. Fix: mark the row permanently failed on the
+// first openCard throw, emit a distinct bizEvent, and do not attempt
+// to fire the webhook with half-baked {card: null} data.
+
+describe('retryWebhooks — vault failure path (F1)', () => {
+  beforeEach(() => {
+    resetDb();
+  });
+
+  it('marks row permanently failed on card-vault decrypt failure without firing', async () => {
+    const { retryWebhooks } = require('../../src/jobs');
+    const { id: keyId } = await createTestKey({ label: 'vault-fail-key' });
+    const orderId = uuidv4();
+
+    // Insert an orders row with a CORRUPTED sealed card_number — the
+    // enc: envelope looks structurally valid (4 parts, hex chars)
+    // but the GCM tag won't authenticate, so open() throws.
+    db.prepare(
+      `
+      INSERT INTO orders (id, status, amount_usdc, payment_asset, api_key_id,
+                          card_number, card_cvv, card_expiry, card_brand,
+                          created_at, updated_at)
+      VALUES (?, 'delivered', '10.00', 'usdc', ?,
+              'enc:aabbccddeeff0011223344556677:00112233445566778899aabbccddeeff:deadbeef',
+              NULL, NULL, 'Visa', datetime('now'), datetime('now'))
+    `,
+    ).run(orderId, keyId);
+
+    // Queue a webhook row with a card-redacted payload, due now.
+    const webhookId = uuidv4();
+    db.prepare(
+      `
+      INSERT INTO webhook_queue (id, url, payload, secret, attempts, next_attempt, last_error)
+      VALUES (?, 'https://hooks.example.com/vault-test', ?, NULL, 1, datetime('now', '-1 minute'), 'first failure')
+    `,
+    ).run(
+      webhookId,
+      JSON.stringify({
+        order_id: orderId,
+        status: 'delivered',
+        card: { number: null, cvv: null, expiry: null, brand: 'Visa' },
+      }),
+    );
+
+    // Force a real CARDS402_SECRET_BOX_KEY so the vault actually tries
+    // to decrypt (and fails the GCM tag). Without a key the open() is
+    // a pass-through and the corrupt value would ship as-is — which
+    // is a different (less interesting) code path.
+    const prev = process.env.CARDS402_SECRET_BOX_KEY;
+    process.env.CARDS402_SECRET_BOX_KEY = 'a'.repeat(64);
+    // Blow away any require cache so secret-box re-reads the env.
+    delete require.cache[require.resolve('../../src/lib/secret-box')];
+    delete require.cache[require.resolve('../../src/lib/card-vault')];
+
+    // Track fetch calls — fireWebhook must NOT be called on the vault-
+    // failure path. Stub global.fetch to assert it doesn't fire.
+    const origFetch = global.fetch;
+    let fetchCalled = false;
+    // @ts-expect-error — test stub
+    global.fetch = async () => {
+      fetchCalled = true;
+      return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+    };
+
+    try {
+      await retryWebhooks();
+    } finally {
+      global.fetch = origFetch;
+      if (prev === undefined) delete process.env.CARDS402_SECRET_BOX_KEY;
+      else process.env.CARDS402_SECRET_BOX_KEY = prev;
+      delete require.cache[require.resolve('../../src/lib/secret-box')];
+      delete require.cache[require.resolve('../../src/lib/card-vault')];
+    }
+
+    assert.equal(fetchCalled, false, 'vault failure must NOT attempt to fire the webhook');
+
+    const row = db.prepare(`SELECT * FROM webhook_queue WHERE id = ?`).get(webhookId);
+    // attempts is MAX_WEBHOOK_ATTEMPTS + 1 = 4, which is > MAX and thus
+    // will never be re-selected by retryWebhooks again. Permanent.
+    assert.ok(row.attempts > 3, `expected permanently failed (attempts > 3), got ${row.attempts}`);
+    // last_error must carry the vault-specific prefix, not a
+    // generic HTTP / fetch error.
+    assert.match(row.last_error, /vault_open_failed/);
+  });
+});

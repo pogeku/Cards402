@@ -402,9 +402,43 @@ async function retryWebhooks() {
               .get(payload.order_id)
           );
           if (orderRow && orderRow.card_number) {
+            // F1-retry-webhooks: catch vault-decrypt failures separately
+            // from delivery failures. Before this, an openCard() throw
+            // (GCM tag mismatch, key rotation, corrupted ciphertext)
+            // propagated out of this block, landed in the generic
+            // delivery catch, and burned 3 retry attempts over ~35
+            // minutes before marking the row "webhook failed" with a
+            // cryptic "card-vault: failed to open card_number" as the
+            // last_error. The on-call engineer would then debug the
+            // customer's endpoint when the real problem was in our
+            // vault. Now we mark the row permanently failed on the
+            // first open() throw, emit a distinct bizEvent so ops can
+            // alert on vault-specific failures, and do NOT attempt to
+            // fire the webhook with half-baked data (shipping
+            // {status:'delivered', card:null} to the customer would be
+            // worse than no delivery — they'd have no idea whether to
+            // retry or accept).
             const { openCard } = require('./lib/card-vault');
-            const card = openCard(orderRow);
-            payload.card = card;
+            try {
+              payload.card = openCard(orderRow);
+            } catch (vaultErr) {
+              const { event: bizEvent } = require('./lib/logger');
+              const vaultMsg = vaultErr instanceof Error ? vaultErr.message : String(vaultErr);
+              log(`  webhook ${row.id.slice(0, 8)} abandoned: vault open failed — ${vaultMsg}`);
+              bizEvent('webhook.vault_open_failed', {
+                id: row.id,
+                order_id: payload.order_id,
+                url: row.url,
+                attempts: row.attempts,
+                error: vaultMsg,
+              });
+              db.prepare(
+                `UPDATE webhook_queue
+                 SET attempts = ?, last_error = ?, next_attempt = ?
+                 WHERE id = ?`,
+              ).run(MAX_WEBHOOK_ATTEMPTS + 1, `vault_open_failed: ${vaultMsg}`, now, row.id);
+              return; // Skip the fire, skip the delivery catch path.
+            }
           }
         }
         await fireWebhook(row.url, payload, row.secret, null);
