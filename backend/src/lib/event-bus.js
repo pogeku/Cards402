@@ -43,12 +43,38 @@ bus.setMaxListeners(1000);
 /**
  * Emit a dashboard event. Swallows listener errors so a misbehaving SSE
  * client can't take down the write path.
+ *
+ * Adversarial audit F1-event-bus (2026-04-15): payload spread must
+ * come FIRST, then the controlled `type` and `at` fields overlay on
+ * top. The previous order `{ type, at, ...payload }` meant a caller
+ * that passed a payload containing its own `type` or `at` field
+ * would silently overwrite the event's type — JavaScript spread
+ * precedence: the later key wins. No current caller triggers this
+ * because they construct explicit payload objects, but a future
+ * caller doing `emitBusEvent('order', { ...row })` where row has a
+ * `type` column would misroute every event to whatever the row's
+ * type happened to be. Controlled-field-overlay-after-spread makes
+ * the precedence structurally safe.
+ *
+ * F2-event-bus (2026-04-15): Object.freeze the final event so
+ * listeners can't mutate the shared reference. EventEmitter passes
+ * the same object to every listener synchronously — a mutating
+ * listener (accidental or not) affects all subsequent listeners.
+ * Sloppy-mode writes to a frozen object silently fail; strict-mode
+ * throws; the listener's own try/catch inside `wrapped` catches
+ * the throw either way.
+ *
  * @param {string} type
  * @param {object} payload
  */
 function emit(type, payload) {
   try {
-    bus.emit('event', { type, at: new Date().toISOString(), ...payload });
+    const event = Object.freeze({
+      ...payload,
+      type,
+      at: new Date().toISOString(),
+    });
+    bus.emit('event', event);
   } catch (err) {
     /* never throw — dashboard is best-effort */
     console.error('[event-bus] emit failed:', err);
