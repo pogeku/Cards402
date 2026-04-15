@@ -124,6 +124,46 @@ describe('expireStaleOrders', () => {
     const order = db.prepare(`SELECT * FROM orders WHERE id = ?`).get(orderId);
     assert.equal(order.status, 'pending_payment');
   });
+
+  // F1-expire regression: only rows actually flipped by the UPDATE
+  // should receive the 'expired' webhook. Previously expireStaleOrders
+  // iterated the initial SELECT set, so a row raced to 'delivered' by
+  // a concurrent vcc-callback between SELECT and UPDATE would still
+  // receive an 'expired' webhook — the agent got two contradictory
+  // notifications.
+  //
+  // We can't cleanly observe the webhook fanout without mocking
+  // enqueueWebhook, so this test asserts the DB-level correctness: if
+  // a row is ALREADY 'delivered' before expireStaleOrders runs, it
+  // doesn't get flipped back and the result.changes count is zero
+  // for that row — which is the precondition the fix relies on.
+  it('does not flip an already-delivered row back to expired', async () => {
+    const { id: keyId } = await createTestKey({ label: 'race-key' });
+    const deliveredId = uuidv4();
+    const expireId = uuidv4();
+    // One row raced to delivered by a prior vcc-callback — old enough
+    // to be a candidate on created_at. Second row is a normal stale
+    // pending_payment that should expire.
+    db.prepare(
+      `
+      INSERT INTO orders (id, status, amount_usdc, payment_asset, api_key_id, created_at, updated_at)
+      VALUES (?, 'delivered', '15.00', 'usdc', ?, datetime('now', '-3 hours'), datetime('now', '-1 hour'))
+    `,
+    ).run(deliveredId, keyId);
+    db.prepare(
+      `
+      INSERT INTO orders (id, status, amount_usdc, payment_asset, api_key_id, created_at, updated_at)
+      VALUES (?, 'pending_payment', '20.00', 'usdc', ?, datetime('now', '-3 hours'), datetime('now', '-3 hours'))
+    `,
+    ).run(expireId, keyId);
+
+    expireStaleOrders();
+
+    const delivered = db.prepare(`SELECT status FROM orders WHERE id = ?`).get(deliveredId);
+    const expired = db.prepare(`SELECT status FROM orders WHERE id = ?`).get(expireId);
+    assert.equal(delivered.status, 'delivered', 'delivered row must not be flipped back');
+    assert.equal(expired.status, 'expired', 'stale pending_payment must be expired');
+  });
 });
 
 // ── pruneIdempotencyKeys ──────────────────────────────────────────────────────

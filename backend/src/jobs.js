@@ -46,35 +46,52 @@ function log(msg) {
 async function expireStaleOrders() {
   const { enqueueWebhook } = require('./fulfillment');
 
-  // Fetch expiring orders before updating so we have webhook info
-  const expiring = /** @type {any[]} */ (
+  // Adversarial audit F1-expire: SELECT-then-UPDATE-then-webhook used
+  // to fire expired webhooks for rows from the initial SELECT without
+  // confirming each row was actually flipped by the UPDATE. A
+  // concurrent vcc-callback flipping pending_payment → delivered
+  // between the SELECT and the UPDATE would leave the row in the
+  // initial SELECT set (so we'd fire an 'expired' webhook) even
+  // though the re-filtered UPDATE correctly skipped it. Agent ends
+  // up with two contradictory notifications: "expired" followed by
+  // "delivered".
+  //
+  // Fix: UPDATE first with a unique updated_at marker, then SELECT
+  // rows matching status='expired' AND updated_at=@marker. That's
+  // the exact set our UPDATE flipped, so the webhook fanout is
+  // correct by construction — rows that raced to 'delivered' are
+  // no longer in our result.
+  const now = new Date().toISOString();
+  const cutoff = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+
+  const result = db
+    .prepare(
+      `
+    UPDATE orders SET status = 'expired', updated_at = ?
+    WHERE status = 'pending_payment' AND datetime(created_at) < datetime(?)
+  `,
+    )
+    .run(now, cutoff);
+
+  if (result.changes === 0) return;
+
+  const expired = /** @type {any[]} */ (
     db
       .prepare(
         `
     SELECT o.*, k.webhook_secret, k.default_webhook_url
     FROM orders o
     LEFT JOIN api_keys k ON o.api_key_id = k.id
-    WHERE o.status = 'pending_payment'
-      AND datetime(o.created_at) < datetime('now', '-2 hours')
+    WHERE o.status = 'expired' AND o.updated_at = ?
   `,
       )
-      .all()
+      .all(now)
   );
 
-  if (expiring.length === 0) return;
-
-  const now = new Date().toISOString();
-  db.prepare(
-    `
-    UPDATE orders SET status = 'expired', updated_at = ?
-    WHERE status = 'pending_payment' AND datetime(created_at) < datetime('now', '-2 hours')
-  `,
-  ).run(now);
-
-  log(`expired ${expiring.length} stale order(s)`);
+  log(`expired ${result.changes} stale order(s)`);
 
   // Notify agents via webhook (fire-and-forget)
-  for (const order of expiring) {
+  for (const order of expired) {
     const webhookUrl = order.webhook_url || order.default_webhook_url;
     if (webhookUrl) {
       enqueueWebhook(
