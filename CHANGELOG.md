@@ -113,3 +113,10 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Stellar txids and destinations no longer printed to unredacted stdout.
   Audit A-3.
+- **Platform-owner helper hardening** — `lib/platform.js::isPlatformOwner`
+  now fails closed on non-string truthy input (pre-fix, a number / boolean /
+  object reached `.trim()` and threw TypeError) and on whitespace-only
+  inputs where both sides collapsed to empty (pre-fix, `'' === ''` returned
+  TRUE and granted platform-owner to anyone with an empty email). Added
+  first-time test coverage for `requirePlatformOwner` and `requireOwner`
+  middleware — both had zero direct tests. Audit F1-platform / F2-platform.
