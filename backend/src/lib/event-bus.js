@@ -57,12 +57,29 @@ function emit(type, payload) {
 
 /**
  * Subscribe to events. Returns a disposer.
- * @param {(evt: object) => void} handler
+ *
+ * Handles both synchronous throws AND async rejections — the previous
+ * implementation only caught sync errors, so an async handler
+ * (e.g. one that does `await db.query(...)` inside) that rejected
+ * would escape as an unhandled promise rejection. The listener would
+ * appear subscribed but every event it received would silently fail,
+ * with the only signal being a node-level rejection warning on stderr.
+ * Adversarial audit F1-event-bus.
+ *
+ * @param {(evt: object) => void | Promise<void>} handler
  */
 function subscribe(handler) {
   const wrapped = (evt) => {
     try {
-      handler(evt);
+      const result = handler(evt);
+      // If the handler returned a thenable, also catch its rejection.
+      // Use .then(noop, errorHandler) rather than .catch so a non-
+      // Promise thenable without a .catch method still works.
+      if (result && typeof (/** @type {any} */ (result).then) === 'function') {
+        /** @type {any} */ (result).then(undefined, (err) => {
+          console.error('[event-bus] async handler rejected:', err);
+        });
+      }
     } catch (err) {
       console.error('[event-bus] handler threw:', err);
     }
@@ -71,4 +88,14 @@ function subscribe(handler) {
   return () => bus.off('event', wrapped);
 }
 
-module.exports = { emit, subscribe };
+/**
+ * Current number of subscribers. Exposed for observability so ops
+ * can catch a leaked-disposer bug (a stream-close path that forgets
+ * to unsubscribe) before the silent max-listeners warning fires at
+ * 1000. Adversarial audit F2-event-bus.
+ */
+function listenerCount() {
+  return bus.listenerCount('event');
+}
+
+module.exports = { emit, subscribe, listenerCount };
