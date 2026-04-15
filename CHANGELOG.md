@@ -108,6 +108,22 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - vcc-callback handler is now DB-atomic on both fulfilled and failed
   branches (claim-style UPDATE WHERE NOT IN terminal set) — eliminates
   parallel-callback race. Audit C-6.
+- **Mobile nav sheet now opens to full viewport height.** The sticky
+  top nav uses `backdrop-filter: blur(...)`, which (per CSS spec) turns
+  the nav into a containing block for `position: fixed` descendants —
+  so the mobile sheet's `top: 64, bottom: 0` was being calculated
+  relative to the 64px nav instead of the viewport, collapsing the
+  sheet to ~0px of content. Portaled the sheet to `document.body` so
+  it escapes the nav's containing-block scope and is genuinely
+  viewport-fixed.
+- **More-menu hover/click interaction.** The "More" dropdown used to
+  open on hover and then CLOSE if the user clicked the button — a
+  clunky interaction because most users read the button as
+  navigable and instinctively click it, instantly dismissing the
+  dropdown they just opened. Click now only opens the dropdown (never
+  closes it); hover on/off still controls both directions, and
+  keyboard users can still activate via Enter/Space since click →
+  open. ESC and click-outside still dismiss.
 
 ### Security
 

@@ -7,6 +7,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { MouseEvent } from 'react';
 
 const PRIMARY: { href: string; label: string }[] = [
@@ -28,6 +29,11 @@ export function NavLinks() {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  // SSR-safe portal guard. createPortal(document.body) can't run on the
+  // server because document doesn't exist; flip `mounted` on after the
+  // first client-side render so the portal only mounts in the browser.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
   const moreWrapRef = useRef<HTMLDivElement>(null);
 
   // ESC closes the dropdown, and a click outside the wrapper closes
@@ -102,7 +108,15 @@ export function NavLinks() {
           onMouseLeave={() => setMoreOpen(false)}
         >
           <button
-            onClick={() => setMoreOpen((v) => !v)}
+            // Hover controls both open and close (onMouseEnter/Leave on
+            // the wrapper above). Click used to toggle, which created a
+            // clunky "hover opens → click closes" flow: most users read
+            // the button as a navigable target and click it, instantly
+            // dismissing the dropdown they just opened. Now click only
+            // OPENS (never closes) — keyboard users can still activate
+            // the dropdown via Enter/Space since click → open, and ESC
+            // + click-outside still handle dismissal.
+            onClick={() => setMoreOpen(true)}
             aria-expanded={moreOpen}
             aria-haspopup="true"
             style={{
@@ -293,44 +307,56 @@ export function NavLinks() {
         </svg>
       </button>
 
-      {/* Mobile sheet */}
-      {mobileOpen && (
-        <div
-          className="nav-mobile-sheet"
-          style={{
-            position: 'fixed',
-            top: 64,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: 'rgba(5,5,5,0.96)',
-            backdropFilter: 'blur(16px)',
-            WebkitBackdropFilter: 'blur(16px)',
-            zIndex: 40,
-            padding: '1.5rem 1.35rem',
-            overflowY: 'auto',
-          }}
-          onClick={() => setMobileOpen(false)}
-        >
-          {[...PRIMARY, ...MORE, { href: '/dashboard', label: 'Dashboard', body: '' }].map((l) => (
-            <Link
-              key={l.href}
-              href={l.href}
-              style={{
-                display: 'block',
-                padding: '1rem 0',
-                fontSize: '1.2rem',
-                fontFamily: 'var(--font-display)',
-                color: 'var(--fg)',
-                textDecoration: 'none',
-                borderBottom: '1px solid var(--border)',
-              }}
-            >
-              {l.label}
-            </Link>
-          ))}
-        </div>
-      )}
+      {/* Mobile sheet — portaled to document.body to escape the nav's
+          containing block. The sticky nav uses `backdrop-filter`, which
+          turns the nav into a containing block for `position: fixed`
+          descendants. Without the portal, the sheet's `top: 64, bottom: 0`
+          was calculated relative to the 64px-tall nav instead of the
+          viewport — collapsing to ~0px content height. Portaling to
+          document.body puts the sheet at the top of the DOM tree where
+          its fixed positioning is genuinely viewport-relative. */}
+      {mounted &&
+        mobileOpen &&
+        createPortal(
+          <div
+            className="nav-mobile-sheet"
+            style={{
+              position: 'fixed',
+              top: 64,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: 'rgba(5,5,5,0.96)',
+              backdropFilter: 'blur(16px)',
+              WebkitBackdropFilter: 'blur(16px)',
+              zIndex: 40,
+              padding: '1.5rem 1.35rem',
+              overflowY: 'auto',
+            }}
+            onClick={() => setMobileOpen(false)}
+          >
+            {[...PRIMARY, ...MORE, { href: '/dashboard', label: 'Dashboard', body: '' }].map(
+              (l) => (
+                <Link
+                  key={l.href}
+                  href={l.href}
+                  style={{
+                    display: 'block',
+                    padding: '1rem 0',
+                    fontSize: '1.2rem',
+                    fontFamily: 'var(--font-display)',
+                    color: 'var(--fg)',
+                    textDecoration: 'none',
+                    borderBottom: '1px solid var(--border)',
+                  }}
+                >
+                  {l.label}
+                </Link>
+              ),
+            )}
+          </div>,
+          document.body,
+        )}
 
       <style>{`
         @media (max-width: 860px) {
