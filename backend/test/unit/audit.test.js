@@ -6,7 +6,7 @@ require('../helpers/env');
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const { db, resetDb } = require('../helpers/app');
-const { recordAudit, listAudit } = require('../../src/lib/audit');
+const { recordAudit, recordAuditFromReq, listAudit } = require('../../src/lib/audit');
 
 describe('audit log', () => {
   const dashboardId = 'test-dashboard-1';
@@ -260,5 +260,102 @@ describe('audit log', () => {
     const result = listAudit(dashboardId, { limit: NaN, offset: NaN });
     assert.ok(Array.isArray(result));
     assert.ok(result.length >= 1);
+  });
+
+  // ── F5 regression: BigInt in details ─────────────────────────────────────
+  //
+  // Before the 2026-04-15 audit, JSON.stringify(details) had no replacer,
+  // so a BigInt in details (Stellar i128 amounts, SUM() over large columns
+  // surfaced by SQLite, or any caller plumbing a BigInt through details)
+  // threw "Do not know how to serialize a BigInt" and routed straight to
+  // the `_serialise_failed` marker — losing all the detail data on what
+  // should have been a normal row. lib/logger.js::safeStringify already
+  // had this replacer; audit.js was inconsistent.
+
+  it('serialises BigInt details values to strings (not _serialise_failed)', () => {
+    recordAudit({
+      dashboardId,
+      actor: { email: 'a@example.com', role: 'owner' },
+      action: 'bigint.details',
+      details: {
+        stellarAmount: 12345678901234567890n,
+        nested: { count: 42n },
+        normal: 'string',
+      },
+    });
+    const row = db.prepare(`SELECT details FROM audit_log WHERE action = ?`).get('bigint.details');
+    const parsed = JSON.parse(row.details);
+    // Critically: this is NOT a serialise-failed marker.
+    assert.notEqual(parsed._serialise_failed, true);
+    // BigInts round-tripped as strings (JSON has no BigInt type).
+    assert.equal(parsed.stellarAmount, '12345678901234567890');
+    assert.equal(parsed.nested.count, '42');
+    assert.equal(parsed.normal, 'string');
+  });
+
+  // ── F6 regression: array-valued headers in recordAuditFromReq ────────────
+  //
+  // Node's IncomingHttpHeaders types x-forwarded-for and user-agent as
+  // `string | string[]`. A misconfigured proxy (or hostile client) that
+  // sets the header twice means Node returns an array. better-sqlite3
+  // rejects array binds with a TypeError, which recordAudit()'s outer
+  // try/catch logs and SWALLOWS — erasing the audit row. The fix coerces
+  // arrays to their first element before bind.
+
+  it('recordAuditFromReq coerces array x-forwarded-for to first element, row lands', () => {
+    const fakeReq = {
+      dashboard: { id: dashboardId },
+      user: { id: 'u1', email: 'a@example.com', role: 'owner' },
+      headers: {
+        // Double-set header → Node returns an array.
+        'x-forwarded-for': ['10.0.0.1', '10.0.0.2'],
+        'user-agent': 'curl/8.0',
+      },
+      ip: null,
+    };
+    recordAuditFromReq(fakeReq, 'array.xff', {
+      resourceType: 'agent',
+      resourceId: 'a1',
+    });
+    const row = db
+      .prepare(`SELECT ip, user_agent FROM audit_log WHERE action = ?`)
+      .get('array.xff');
+    assert.ok(row, 'audit row must land despite array header — pre-fix this row was LOST');
+    assert.equal(row.ip, '10.0.0.1');
+    assert.equal(row.user_agent, 'curl/8.0');
+  });
+
+  it('recordAuditFromReq coerces array user-agent to first element', () => {
+    const fakeReq = {
+      dashboard: { id: dashboardId },
+      user: { id: 'u1', email: 'a@example.com', role: 'owner' },
+      headers: {
+        'user-agent': ['agent-a', 'agent-b'],
+      },
+      ip: '127.0.0.1',
+    };
+    recordAuditFromReq(fakeReq, 'array.ua');
+    const row = db.prepare(`SELECT ip, user_agent FROM audit_log WHERE action = ?`).get('array.ua');
+    assert.ok(row);
+    assert.equal(row.ip, '127.0.0.1');
+    assert.equal(row.user_agent, 'agent-a');
+  });
+
+  it('recordAuditFromReq handles plain string headers unchanged', () => {
+    const fakeReq = {
+      dashboard: { id: dashboardId },
+      user: { id: 'u1', email: 'a@example.com', role: 'owner' },
+      headers: {
+        'x-forwarded-for': '10.0.0.1',
+        'user-agent': 'curl/8.0',
+      },
+      ip: null,
+    };
+    recordAuditFromReq(fakeReq, 'string.headers');
+    const row = db
+      .prepare(`SELECT ip, user_agent FROM audit_log WHERE action = ?`)
+      .get('string.headers');
+    assert.equal(row.ip, '10.0.0.1');
+    assert.equal(row.user_agent, 'curl/8.0');
   });
 });

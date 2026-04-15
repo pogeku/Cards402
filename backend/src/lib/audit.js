@@ -70,6 +70,18 @@ const insertStmt = db.prepare(`
   )
 `);
 
+// Adversarial audit F5-audit (2026-04-15): BigInt-safe replacer.
+// Plain JSON.stringify throws on BigInt values ("Do not know how to
+// serialize a BigInt"), which used to route straight to the
+// `_serialise_failed` marker and LOSE the detail data. The Stellar
+// watcher (i128 amounts), any SUM() over a large column that SQLite
+// may surface as a BigInt, and any caller that plumbs a BigInt
+// through a detail field would all silently degrade. lib/logger.js::
+// safeStringify already has this replacer; audit.js was inconsistent.
+function bigintReplacer(_key, value) {
+  return typeof value === 'bigint' ? value.toString() : value;
+}
+
 /**
  * Serialise the caller's details object and truncate if over the
  * MAX_DETAILS_BYTES cap. Over-cap writes become a string with a
@@ -83,7 +95,7 @@ function serialiseDetails(details) {
   if (!details) return null;
   let encoded;
   try {
-    encoded = JSON.stringify(details);
+    encoded = JSON.stringify(details, bigintReplacer);
   } catch (err) {
     // Circular reference or other JSON serialisation failure. Preserve
     // the event but surface the failure mode in the stored blob.
@@ -95,12 +107,17 @@ function serialiseDetails(details) {
   if (encoded.length <= MAX_DETAILS_BYTES) return encoded;
   // Cap hit. Keep a short preview of the original so ops can still
   // pattern-match on it in queries, and mark the truncation so it
-  // doesn't masquerade as a complete record.
-  return JSON.stringify({
-    _truncated: true,
-    _original_bytes: encoded.length,
-    preview: encoded.slice(0, 512),
-  });
+  // doesn't masquerade as a complete record. Use the bigint-safe
+  // replacer here too so a BigInt leak in the marker payload doesn't
+  // regress to the catch branch.
+  return JSON.stringify(
+    {
+      _truncated: true,
+      _original_bytes: encoded.length,
+      preview: encoded.slice(0, 512),
+    },
+    bigintReplacer,
+  );
 }
 
 /** @param {AuditEvent} event */
@@ -158,6 +175,20 @@ function recordAudit(event) {
 function recordAuditFromReq(req, action, opts = {}) {
   const dashboardId = req.dashboard?.id;
   if (!dashboardId) return;
+  // F6-audit (2026-04-15): coerce x-forwarded-for and user-agent to
+  // a single string before passing to recordAudit. Node's IncomingHttpHeaders
+  // types both as `string | string[]` — if a reverse proxy sets the header
+  // twice (misconfigured multi-hop, or a buggy client sending UA twice),
+  // Node returns an array. better-sqlite3 rejects array binds with a
+  // TypeError, which the outer try/catch in recordAudit() logs and
+  // SWALLOWS, losing the audit row. The whole point of audit logging is
+  // that the row always lands — a hostile or misconfigured upstream
+  // should not be able to erase its own trace by double-setting a header.
+  // Same class of fix as the clientIp helper in api/auth.js.
+  const xff = req.headers?.['x-forwarded-for'];
+  const forwarded = Array.isArray(xff) ? xff[0] || null : xff || null;
+  const uaHeader = req.headers?.['user-agent'];
+  const userAgent = Array.isArray(uaHeader) ? uaHeader[0] || null : uaHeader || null;
   recordAudit({
     dashboardId,
     actor: req.user ? { id: req.user.id, email: req.user.email, role: req.user.role } : null,
@@ -165,8 +196,8 @@ function recordAuditFromReq(req, action, opts = {}) {
     resourceType: opts.resourceType,
     resourceId: opts.resourceId,
     details: opts.details,
-    ip: req.ip || req.headers?.['x-forwarded-for'] || null,
-    userAgent: req.headers?.['user-agent'] || null,
+    ip: req.ip || forwarded,
+    userAgent,
   });
 }
 
