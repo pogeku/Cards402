@@ -37,7 +37,17 @@ patchCache('lib/ssrf', {
 // ── Load modules after patching ───────────────────────────────────────────────
 
 const db = require('../../src/db');
-const { isFrozen, scheduleRefund, fireWebhook, enqueueWebhook } = require('../../src/fulfillment');
+const {
+  isFrozen,
+  scheduleRefund,
+  fireWebhook,
+  enqueueWebhook,
+  _computeUsdcRefundAmount,
+  _recordCircuitSuccess,
+  _recordCircuitFailure,
+  _circuitIsOpen,
+  _circuitBreakerState,
+} = require('../../src/fulfillment');
 
 // ── Fetch mock ────────────────────────────────────────────────────────────────
 
@@ -559,5 +569,207 @@ describe('enqueueWebhook', () => {
 
     const queued = db.prepare(`SELECT secret FROM webhook_queue`).get();
     assert.equal(queued.secret, null);
+  });
+});
+
+// ── F1-fulfillment: webhook circuit breaker race ───────────────────────────
+//
+// Pre-fix, `recordCircuitSuccess` unconditionally zeroed `openedUntil`.
+// Same bug class as vcc-client::recordVccSuccess (fixed earlier this
+// session). A webhook call that was already in flight when the breaker
+// tripped could complete successfully and wipe `openedUntil` — reopening
+// the gate for every subsequent caller even though the origin was still
+// broken. Per-origin state makes this race narrower than the vcc-client
+// module-level version, but the fix is identical: only clear the
+// timestamp after the cooldown has expired naturally.
+
+describe('F1-fulfillment: recordCircuitSuccess during cooldown', () => {
+  const ORIGIN = 'https://racy.example.com';
+
+  beforeEach(() => {
+    _circuitBreakerState.delete(ORIGIN);
+  });
+
+  it('breaker stays OPEN after an in-flight success during cooldown', () => {
+    // Trip the breaker: 5 consecutive failures within the 60s window.
+    for (let i = 0; i < 5; i++) _recordCircuitFailure(ORIGIN);
+    assert.equal(_circuitIsOpen(ORIGIN), true, 'breaker should be in cooldown');
+
+    const tripped = _circuitBreakerState.get(ORIGIN);
+    const trippedUntil = tripped.openedUntil;
+
+    // Simulate an in-flight success from a call that started BEFORE
+    // the trip. It must NOT wipe openedUntil.
+    _recordCircuitSuccess(ORIGIN);
+
+    const after = _circuitBreakerState.get(ORIGIN);
+    assert.equal(
+      after.openedUntil,
+      trippedUntil,
+      'in-flight success must not reopen a tripped breaker',
+    );
+    assert.equal(
+      _circuitIsOpen(ORIGIN),
+      true,
+      'circuitIsOpen should still return true after the in-flight success',
+    );
+  });
+
+  it('recordCircuitSuccess still zeroes `failures` during cooldown', () => {
+    for (let i = 0; i < 5; i++) _recordCircuitFailure(ORIGIN);
+    // The trip resets failures to []; subsequent pre-trip in-flight
+    // failures could refill it. Add one to simulate.
+    _recordCircuitFailure(ORIGIN);
+    assert.equal(_circuitBreakerState.get(ORIGIN).failures.length, 1);
+
+    _recordCircuitSuccess(ORIGIN);
+    assert.equal(
+      _circuitBreakerState.get(ORIGIN).failures.length,
+      0,
+      'failures counter always zeroes, even during cooldown',
+    );
+  });
+
+  it('recordCircuitSuccess clears openedUntil naturally once cooldown expires', () => {
+    // Trip, then fake the cooldown expiry by stomping openedUntil
+    // into the past directly on the internal state reference.
+    for (let i = 0; i < 5; i++) _recordCircuitFailure(ORIGIN);
+    _circuitBreakerState.get(ORIGIN).openedUntil = Date.now() - 1000;
+    // The guard considers it closed now.
+    assert.equal(_circuitIsOpen(ORIGIN), false);
+    // A success with cooldown expired should clear the timestamp.
+    _recordCircuitSuccess(ORIGIN);
+    assert.equal(_circuitBreakerState.get(ORIGIN).openedUntil, 0);
+  });
+
+  it('fresh origin (no state yet) is a no-op on success', () => {
+    // recordCircuitSuccess on an origin we've never seen must not
+    // create a new Map entry or throw.
+    _recordCircuitSuccess('https://fresh.example.com');
+    assert.equal(_circuitBreakerState.has('https://fresh.example.com'), false);
+  });
+});
+
+// ── F2-fulfillment: refund includes excess_usdc ────────────────────────────
+//
+// Pre-fix, scheduleRefund sent `order.amount_usdc` (the QUOTED amount)
+// regardless of how much the agent actually paid. An agent overpaying
+// by $0.50 against a $10.00 order saw the overpayment tracked in
+// order.excess_usdc by payment-handler.js, but the refund path silently
+// ignored that column and refunded only $10.00 — quietly keeping the
+// $0.50 on a failed order. This is a financial correctness bug: cards402
+// takes customer money when a fulfillment fails. The fix sums amount_usdc
+// and excess_usdc in BigInt stroops and refunds the total.
+
+describe('F2-fulfillment: computeUsdcRefundAmount helper', () => {
+  it('returns the quoted amount unchanged when excess is null', () => {
+    assert.equal(_computeUsdcRefundAmount('10.00', null), '10.0000000');
+  });
+
+  it('returns the quoted amount unchanged when excess is empty string', () => {
+    assert.equal(_computeUsdcRefundAmount('10.00', ''), '10.0000000');
+  });
+
+  it('adds excess to quoted amount in stroop precision', () => {
+    // $10.00 + $0.50 = $10.50. In stroop precision: 100000000 + 5000000 = 105000000.
+    assert.equal(_computeUsdcRefundAmount('10.00', '0.5000000'), '10.5000000');
+  });
+
+  it('handles microcent-level excess without float rounding', () => {
+    // The whole reason this uses BigInt stroops: floats would round
+    // 10.00 + 0.0000001 badly. BigInt arithmetic is exact.
+    assert.equal(_computeUsdcRefundAmount('10.00', '0.0000001'), '10.0000001');
+  });
+
+  it('returns a zero-decimal form when both inputs are zero/empty', () => {
+    assert.equal(_computeUsdcRefundAmount('', ''), '0.0000000');
+    assert.equal(_computeUsdcRefundAmount(null, null), '0.0000000');
+  });
+
+  it('treats corrupt excess_usdc as zero (does not inflate the refund)', () => {
+    // Garbage in excess_usdc must not turn into an infinite refund.
+    assert.equal(_computeUsdcRefundAmount('10.00', 'not-a-number'), '10.0000000');
+    assert.equal(_computeUsdcRefundAmount('10.00', '10.0.0'), '10.0000000');
+    assert.equal(_computeUsdcRefundAmount('10.00', '-5'), '10.0000000');
+  });
+});
+
+describe('F2-fulfillment: refund sends amount_usdc + excess_usdc end-to-end', () => {
+  beforeEach(() => {
+    resetDb();
+    fetchCalls.length = 0;
+    xlmSenderMock.sendUsdc = async () => 'refund_usdc_txhash';
+    xlmSenderMock.sendXlm = async () => 'refund_xlm_txhash';
+  });
+
+  it('refunds quoted amount + excess when overpaid', async () => {
+    // Spy on sendUsdc to capture the amount it's called with.
+    const sendCalls = [];
+    xlmSenderMock.sendUsdc = async (opts) => {
+      sendCalls.push(opts);
+      return 'refund_txhash';
+    };
+
+    const id = seedOrder({
+      sender_address: 'GOVERPAID',
+      payment_asset: 'usdc_soroban',
+      amount_usdc: '10.00',
+      // Seed excess_usdc directly via an UPDATE since seedOrder doesn't
+      // expose that column.
+    });
+    db.prepare(`UPDATE orders SET excess_usdc = '0.5000000' WHERE id = ?`).run(id);
+
+    await scheduleRefund(id);
+
+    assert.equal(sendCalls.length, 1);
+    assert.equal(sendCalls[0].amount, '10.5000000', 'refund must include the $0.50 overpayment');
+    const order = getOrder(id);
+    assert.equal(order.status, 'refunded');
+    assert.equal(order.refund_stellar_txid, 'refund_txhash');
+  });
+
+  it('refunds the quoted amount unchanged when excess_usdc is NULL (legacy case)', async () => {
+    // Most orders have excess_usdc IS NULL — agent paid exactly the
+    // quoted amount. The fix must not break this dominant path.
+    const sendCalls = [];
+    xlmSenderMock.sendUsdc = async (opts) => {
+      sendCalls.push(opts);
+      return 'refund_txhash';
+    };
+
+    const id = seedOrder({
+      sender_address: 'GEXACT',
+      payment_asset: 'usdc_soroban',
+      amount_usdc: '10.00',
+    });
+    // excess_usdc IS NULL by default.
+
+    await scheduleRefund(id);
+
+    assert.equal(sendCalls.length, 1);
+    // Quoted $10.00 → 7-decimal canonical form.
+    assert.equal(sendCalls[0].amount, '10.0000000');
+    assert.equal(getOrder(id).status, 'refunded');
+  });
+
+  it('refunds quoted amount when excess_usdc is corrupt (fail-safe, not inflate)', async () => {
+    // A future bug in the excess tracker that wrote garbage into
+    // excess_usdc must not turn into a gigantic refund. The helper
+    // treats anything non-numeric as 0.
+    const sendCalls = [];
+    xlmSenderMock.sendUsdc = async (opts) => {
+      sendCalls.push(opts);
+      return 'refund_txhash';
+    };
+
+    const id = seedOrder({
+      sender_address: 'GCORRUPT',
+      payment_asset: 'usdc_soroban',
+      amount_usdc: '10.00',
+    });
+    db.prepare(`UPDATE orders SET excess_usdc = 'not-a-number' WHERE id = ?`).run(id);
+
+    await scheduleRefund(id);
+    assert.equal(sendCalls[0].amount, '10.0000000');
   });
 });

@@ -158,6 +158,29 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a typeof guard to `decryptToken` so a non-string
   `system_state.value` can't wedge the token path with an opaque
   TypeError. Audit F1/F2/F3-vcc-client.
+- **Fulfillment refund correctness + webhook breaker race** — two
+  fixes in src/fulfillment.js. (1) **Refund now includes
+  `excess_usdc`** — the USDC refund path previously sent
+  `order.amount_usdc` (the QUOTED amount) regardless of how much the
+  agent actually paid. An agent overpaying by $0.50 against a $10.00
+  order had the overpayment tracked in `order.excess_usdc` by
+  payment-handler.js, but the refund handler silently ignored that
+  column and refunded only $10.00 — quietly keeping the $0.50 on a
+  failed order. This was a financial correctness bug: cards402 took
+  customer money on every failed overpaid order. Fix sums
+  `amount_usdc + excess_usdc` in BigInt stroop precision and refunds
+  the total. Corrupt `excess_usdc` values are treated as zero (fail-
+  safe, cannot inflate the refund). The `refund.sent` bizEvent now
+  emits `quoted_amount` and `excess_amount` alongside the total for
+  ops visibility. (2) **Webhook circuit-breaker race** —
+  `recordCircuitSuccess` unconditionally cleared `openedUntil`, so an
+  in-flight webhook request that was fired before the breaker tripped
+  could complete successfully and wipe the cooldown timestamp —
+  reopening the gate for every subsequent caller even though the
+  origin was still broken. Same bug class as vcc-client F1 earlier
+  this session; fix is identical (leave `openedUntil` intact during
+  active cooldown, zero `failures` unconditionally). Audit
+  F1/F2-fulfillment.
 - **Payment handler treasury-drain guard + catch-block resilience** —
   three fixes in the Soroban payment handler that gates the
   pending_payment → ordering transition. (1) `toStroops('')` returns

@@ -100,8 +100,20 @@ function recordCircuitSuccess(origin) {
   if (!origin) return;
   const s = circuitBreakerState.get(origin);
   if (s) {
+    // F1-fulfillment (2026-04-15): don't wipe `openedUntil` during
+    // active cooldown. Same bug class fixed in vcc-client::recordVccSuccess
+    // earlier this session: a webhook call that was already in flight
+    // when the breaker tripped could complete successfully and — under
+    // the pre-fix — reset openedUntil to 0, reopening the gate for every
+    // subsequent caller even though the origin was still broken. The
+    // per-origin map makes this race narrower than the vcc-client
+    // module-level state, but the fix is the same: zero `failures`
+    // unconditionally (so the next post-cooldown window starts fresh)
+    // but leave openedUntil alone until the cooldown expires naturally.
     s.failures = [];
-    s.openedUntil = 0;
+    if (Date.now() >= s.openedUntil) {
+      s.openedUntil = 0;
+    }
   }
 }
 
@@ -286,6 +298,50 @@ function isValidRefundAmount(amount) {
   return parseFloat(s) > 0;
 }
 
+// F2-fulfillment (2026-04-15): decimal-string-safe sum for the USDC
+// refund path. Pre-fix, scheduleRefund sent `order.amount_usdc` (the
+// QUOTED amount) regardless of how much the agent actually paid. If
+// an agent paid $10.50 against a $10.00 order — a normal scenario per
+// the handlePayment comments — the order row ended up with:
+//   amount_usdc  = '10.00'       (the quoted amount)
+//   excess_usdc  = '0.5000000'   (the overpayment delta, in stroop
+//                                 precision)
+// When fulfillment failed and scheduleRefund ran, we refunded only
+// $10.00 and silently kept the $0.50 of excess — taking customer
+// money on a failed order. The fix sums the two columns in BigInt
+// stroops (same precision model as payment-handler.js::compareDecimal)
+// and returns a decimal-string total suitable for sendUsdc. Invalid
+// or missing excess_usdc is treated as 0, so the legacy case (agent
+// paid exactly the quoted amount, excess_usdc IS NULL) refunds the
+// quoted amount unchanged.
+function toStroopsOrZero(s) {
+  if (s === null || s === undefined || s === '') return 0n;
+  const str = String(s).trim();
+  if (!/^\d+(\.\d+)?$/.test(str)) return 0n;
+  const [whole, frac = ''] = str.split('.');
+  const paddedFrac = (frac + '0000000').slice(0, 7);
+  return BigInt(whole || '0') * 10_000_000n + BigInt(paddedFrac || '0');
+}
+
+function stroopsToDecimal(stroops) {
+  const whole = stroops / 10_000_000n;
+  const frac = String(stroops % 10_000_000n).padStart(7, '0');
+  return `${whole}.${frac}`;
+}
+
+/**
+ * Compute the total USDC amount to refund for an order: the quoted
+ * amount_usdc plus any excess_usdc tracked from an overpayment.
+ * Returns a decimal-string in stroop precision (7 fractional digits).
+ * @param {string|null|undefined} amountUsdc
+ * @param {string|null|undefined} excessUsdc
+ */
+function computeUsdcRefundAmount(amountUsdc, excessUsdc) {
+  const quoted = toStroopsOrZero(amountUsdc);
+  const excess = toStroopsOrZero(excessUsdc);
+  return stroopsToDecimal(quoted + excess);
+}
+
 // Adversarial audit F1-fulfillment (2026-04-15). xlm-sender's submitWithRetry
 // now annotates submit failures with `stellarStatus` ('not_landed' | 'applied_
 // failed' | 'unknown') and a pre-computed `txHash` (see audit F1-xlm-sender in
@@ -431,10 +487,23 @@ async function scheduleRefund(orderId) {
       );
       return;
     }
+    // F2-fulfillment: refund the FULL paid amount, not just the quoted
+    // amount. Pre-fix, an overpayment of e.g. $0.50 on a $10.00 order
+    // was tracked in order.excess_usdc by payment-handler.js but the
+    // refund path ignored it and sent only $10.00 — silently keeping
+    // the $0.50. computeUsdcRefundAmount sums amount_usdc + excess_usdc
+    // in stroop precision (BigInt) and returns a decimal-string total.
+    const refundAmount = computeUsdcRefundAmount(order.amount_usdc, order.excess_usdc);
+    // Defence: if somehow the sum is malformed (should be impossible
+    // given toStroopsOrZero is tolerant), fall back to the quoted
+    // amount rather than sending something garbage. isValidRefundAmount
+    // is the same guard used above so this mirrors the existing
+    // failure path.
+    const amountToSend = isValidRefundAmount(refundAmount) ? refundAmount : order.amount_usdc;
     try {
       const txHash = await sendUsdc({
         destination: order.sender_address,
-        amount: order.amount_usdc,
+        amount: amountToSend,
         memo: `refund:${orderId.slice(0, 18)}`,
       });
       db.prepare(
@@ -443,11 +512,13 @@ async function scheduleRefund(orderId) {
       bizEvent('refund.sent', {
         order_id: orderId,
         asset: 'usdc',
-        amount: order.amount_usdc,
+        amount: amountToSend,
+        quoted_amount: order.amount_usdc,
+        excess_amount: order.excess_usdc || null,
         txid: txHash,
       });
     } catch (err) {
-      recordRefundSendFailure(orderId, 'usdc', order.amount_usdc, err);
+      recordRefundSendFailure(orderId, 'usdc', amountToSend, err);
     }
   }
 }
@@ -460,4 +531,10 @@ module.exports = {
   redactCardFields,
   WEBHOOK_RETRY_DELAYS_MS,
   MAX_WEBHOOK_ATTEMPTS,
+  // Test-only exports for the 2026-04-15 audit hardening.
+  _computeUsdcRefundAmount: computeUsdcRefundAmount,
+  _recordCircuitSuccess: recordCircuitSuccess,
+  _recordCircuitFailure: recordCircuitFailure,
+  _circuitIsOpen: circuitIsOpen,
+  _circuitBreakerState: circuitBreakerState,
 };
