@@ -516,6 +516,56 @@ app.get('/status', statusLimiter, (req, res) => {
   });
 });
 
+// Adversarial audit F1-auth (2026-04-15): pre-auth DoS amplifier cap.
+//
+// `app.use('/v1', auth)` runs every /v1/* request through bcrypt before
+// any per-route rate limiter kicks in. A malformed-but-prefix-valid key
+// triggers one bcrypt compare (~60ms at cost 10) on a clean install, or
+// up to 20 compares on legacy installs via the NULL-prefix fallback —
+// see middleware/auth.js::MAX_AUTH_CANDIDATES. At 1 compare per request,
+// an attacker flooding bad keys saturates a single CPU core with ~15
+// requests per second. At 20 compares per request, 1 request per second
+// is enough.
+//
+// Fix: failed-auth-only rate limiter, keyed per-IP, applied BEFORE the
+// auth middleware. `skipSuccessfulRequests: true` means every 2xx
+// response is NOT counted, so legitimate agents with valid keys are
+// unaffected regardless of poll cadence. Only the attackers' 401 /
+// missing_api_key / invalid_api_key responses consume budget.
+//
+// Default 60 failures per 15 minutes per IP. Generous for real agent
+// rotations or initial misconfiguration (a handful of failed attempts
+// before the operator realises they copy-pasted the wrong key),
+// strict enough to cap the amplifier at 60 × 60ms = 3.6s of CPU per
+// IP per 15 minutes ≈ 0.4% CPU per attacker IP. A multi-IP distributed
+// attack still works but costs the attacker real infrastructure for a
+// fraction-of-a-percent CPU hit per IP. Env-configurable via
+// AUTH_FAILURE_LIMIT_PER_WINDOW so ops can tighten further after
+// observing real traffic.
+const authFailureLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: parseInt(process.env.AUTH_FAILURE_LIMIT_PER_WINDOW || '60', 10),
+  // The kernel of the fix: only count responses that didn't succeed.
+  // Legit agents polling /v1/orders/:id at 10/s never touch this budget.
+  skipSuccessfulRequests: true,
+  keyGenerator: (/** @type {any} */ req) => ipKeyGenerator(req),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  handler: (_req, res) =>
+    res.status(429).json({
+      error: 'too_many_failed_auth_attempts',
+      message:
+        'Too many failed authentication attempts from this IP. Wait a few minutes and retry with a valid key.',
+    }),
+});
+
+// Order is critical: authFailureLimiter MUST run before auth. If it
+// runs after, the bcrypt compare has already executed and the cap is
+// pointless. The limiter internally checks the counter at request
+// START — which is always before any downstream middleware — and
+// increments it once the response is flushed.
+app.use('/v1', authFailureLimiter);
+
 // All /v1/* routes require a valid API key
 app.use('/v1', auth);
 

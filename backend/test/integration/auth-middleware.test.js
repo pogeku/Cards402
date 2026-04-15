@@ -148,6 +148,113 @@ describe('auth middleware — /v1/* api key verification', () => {
     assert.equal(res.body.error, 'invalid_api_key');
   });
 
+  // Adversarial audit F1-auth (2026-04-15): the pre-auth failure rate
+  // limiter caps the bcrypt DoS amplifier. This test exercises the
+  // pattern in isolation rather than against the production app, for
+  // two reasons:
+  //
+  //   1. The production limiter reads its cap from the env at module
+  //      load time, so mutating process.env mid-suite has no effect
+  //      on the already-instantiated limiter.
+  //   2. The integration test suite makes hundreds of intentionally-
+  //      failing auth requests from 127.0.0.1 across many test files,
+  //      so the production limit is raised in helpers/env.js — the
+  //      cap is never tripped during normal runs.
+  //
+  // The minimal Express app here wires the same `rateLimit(...)` with
+  // `skipSuccessfulRequests: true` at a low budget (3 failures) and
+  // proves the pattern: failed responses count, successful ones do
+  // not, and the 4th failure gets 429 instead of 401.
+  it('authFailureLimiter: caps failed auths per IP, leaves successes alone (F1)', async () => {
+    const express = require('express');
+    const supertest = require('supertest');
+    const { rateLimit } = require('express-rate-limit');
+
+    const miniApp = express();
+
+    const limiter = rateLimit({
+      windowMs: 60 * 1000,
+      limit: 3,
+      skipSuccessfulRequests: true,
+      // Fixed key — supertest hits localhost but the exact req.ip
+      // can vary between supertest versions / Node builds. For this
+      // test we want every request to land in the same bucket so we
+      // can observe the counter directly.
+      keyGenerator: () => 'unit-test-bucket',
+      standardHeaders: 'draft-7',
+      legacyHeaders: false,
+      handler: (_req, res) => res.status(429).json({ error: 'too_many_failed_auth_attempts' }),
+    });
+
+    // Same order as app.js: limiter BEFORE the "auth" stage.
+    miniApp.use('/v1', limiter);
+    miniApp.use('/v1', (req, res, next) => {
+      // Stub auth: success if X-Api-Key === 'valid', else 401.
+      if (req.headers['x-api-key'] === 'valid') return next();
+      res.status(401).json({ error: 'invalid_api_key' });
+    });
+    miniApp.get('/v1/usage', (_req, res) => res.json({ ok: true }));
+
+    const miniRequest = supertest(miniApp);
+
+    // 3 failures — all pass through to 401 because we're within budget.
+    for (let i = 0; i < 3; i++) {
+      const res = await miniRequest.get('/v1/usage').set('X-Api-Key', 'bad');
+      assert.equal(res.status, 401, `attempt ${i + 1} should still reach auth`);
+      assert.equal(res.body.error, 'invalid_api_key');
+    }
+
+    // 4th failure — limiter fires, 429 before reaching auth.
+    const fourth = await miniRequest.get('/v1/usage').set('X-Api-Key', 'bad');
+    assert.equal(fourth.status, 429);
+    assert.equal(fourth.body.error, 'too_many_failed_auth_attempts');
+
+    // Successful auths must NOT consume budget. But we're already at
+    // the cap, so sending a successful request would still be blocked
+    // by the limiter CHECK at request start — skipSuccessfulRequests
+    // controls incrementing, not gating. The limiter's semantics are:
+    // "allow `limit` non-2xx responses per window; once the counter is
+    // at `limit`, ALL further requests are 429'd until a successful
+    // one brings the counter below the cap". So the right assertion
+    // here is: once the budget is spent, even good keys are
+    // temporarily blocked — that's the intended throttle effect.
+    //
+    // Instead: prove that in a FRESH limiter instance, a successful
+    // request does NOT advance the counter.
+    const miniApp2 = express();
+    const limiter2 = rateLimit({
+      windowMs: 60 * 1000,
+      limit: 2,
+      skipSuccessfulRequests: true,
+      // Distinct bucket name from the first limiter so state doesn't leak.
+      keyGenerator: () => 'unit-test-bucket-2',
+      standardHeaders: 'draft-7',
+      legacyHeaders: false,
+      handler: (_req, res) => res.status(429).json({ error: 'too_many_failed_auth_attempts' }),
+    });
+    miniApp2.use('/v1', limiter2);
+    miniApp2.use('/v1', (req, res, next) => {
+      if (req.headers['x-api-key'] === 'valid') return next();
+      res.status(401).json({ error: 'invalid_api_key' });
+    });
+    miniApp2.get('/v1/usage', (_req, res) => res.json({ ok: true }));
+    const miniRequest2 = supertest(miniApp2);
+
+    // 10 successful requests — budget is 2, but successes don't count.
+    for (let i = 0; i < 10; i++) {
+      const res = await miniRequest2.get('/v1/usage').set('X-Api-Key', 'valid');
+      assert.equal(res.status, 200, `successful attempt ${i + 1} should not be blocked`);
+    }
+    // Now 2 failures — still OK because the budget hasn't been touched.
+    for (let i = 0; i < 2; i++) {
+      const res = await miniRequest2.get('/v1/usage').set('X-Api-Key', 'bad');
+      assert.equal(res.status, 401);
+    }
+    // 3rd failure exhausts the budget.
+    const blocked = await miniRequest2.get('/v1/usage').set('X-Api-Key', 'bad');
+    assert.equal(blocked.status, 429);
+  });
+
   it('does not accept bcrypt hash directly as the API key', async () => {
     const { id } = await createTestKey({ label: 'hash-as-key' });
     const row = db.prepare(`SELECT key_hash FROM api_keys WHERE id = ?`).get(id);

@@ -29,3 +29,14 @@ process.env.SMTP_FROM = 'noreply@cards402.test';
 
 // Zero out retry delays so failure-path tests don't take 10s+ each
 process.env.RETRY_BACKOFF_MS = '0';
+
+// Audit F1-auth (2026-04-15): the pre-auth failure rate limiter has a
+// production default of 60 failures per 15 minutes per IP. The test
+// suite makes hundreds of intentionally-failing auth requests across
+// auth-middleware.test.js, orders.test.js, platform.test.js, etc. —
+// all from 127.0.0.1 — so the prod default would trip mid-suite and
+// cause downstream tests to see 429 instead of the expected 401/403.
+// Raise the cap to 10_000 in test env so only the dedicated regression
+// test for the limiter (which lowers it explicitly via its own
+// helpers) exercises the cap.
+process.env.AUTH_FAILURE_LIMIT_PER_WINDOW = '10000';
