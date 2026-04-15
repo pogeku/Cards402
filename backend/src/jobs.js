@@ -123,6 +123,21 @@ async function expireStaleOrders() {
 // After STUCK_FAIL_AFTER_MS with no progress, or MAX_FULFILLMENT_ATTEMPTS retries,
 // the order is marked failed and a refund is queued via scheduleRefund.
 async function reconcileOrderingFulfillment() {
+  // F2-reconcile: freeze-first short-circuit. Unlike the READ-only
+  // recoverStuckOrders path (which just polls VCC status), reconcile
+  // retries payCtxOrder — a real outbound treasury money movement.
+  // The freeze flag is an emergency stop that also halts scheduleRefund
+  // (via the freeze check I added earlier), so leaving reconcile
+  // unconditional would let the retry path keep spending treasury
+  // balance on every 5-minute tick while the refund path is blocked.
+  // Stuck orders stay in 'ordering' until ops unfreezes, which is the
+  // correct emergency-stop semantic.
+  const { isFrozen } = require('./fulfillment');
+  if (isFrozen()) {
+    log('reconcileOrderingFulfillment skipped — system frozen');
+    return;
+  }
+
   const cutoff = new Date(Date.now() - STUCK_RETRY_AFTER_MS).toISOString();
   const stuck = /** @type {any[]} */ (
     db
@@ -173,6 +188,23 @@ async function reconcileOrderingFulfillment() {
         }
         if (vccStatus && VCC_IN_PROGRESS_STATUSES.has(vccStatus)) {
           log(`  ${shortId} → vcc reports ${vccStatus}; postponing hard-fail (letting vcc finish)`);
+          // F1-reconcile: emit the same stuck_delivered bizEvent that
+          // recoverStuckOrders emits, so ops see the signal regardless
+          // of which reconciler path processed the order first. Without
+          // this, a "vcc has delivered but we never got the callback"
+          // case could sit silently in reconcile's postpone loop
+          // forever, bumping updated_at on every tick, while
+          // recoverStuckOrders is being starved out because the
+          // updated_at gets bumped before its 10-min cutoff kicks in.
+          if (vccStatus === 'delivered') {
+            const { event: bizEvent } = require('./lib/logger');
+            bizEvent('order.stuck_delivered', {
+              order_id: order.id,
+              vcc_job_id: order.vcc_job_id,
+              age_minutes: Math.round((Date.now() - Date.parse(order.updated_at)) / 60000),
+              via: 'reconcile',
+            });
+          }
           // Reset the clock so we give vcc another full FAIL_AFTER window
           // to land the card via its normal callback path.
           db.prepare(`UPDATE orders SET updated_at = ? WHERE id = ?`).run(
@@ -346,10 +378,14 @@ async function recoverStuckOrders() {
         // re-alert on every 5-minute tick.
         log(`  STUCK DELIVERED ${order.id.slice(0, 8)} — vcc has card, callback lost`);
         const { event: bizEvent } = require('./lib/logger');
+        // `via` tags which reconciler surfaced the signal so ops can
+        // tell whether reconcile's postpone branch or recoverStuckOrders
+        // saw it first. Both paths now emit with identical shape.
         bizEvent('order.stuck_delivered', {
           order_id: order.id,
           vcc_job_id: order.vcc_job_id,
           age_minutes: Math.round((Date.now() - Date.parse(order.updated_at)) / 60000),
+          via: 'recover',
         });
         db.prepare(`UPDATE orders SET updated_at = ? WHERE id = ?`).run(now, order.id);
       } else if (vccJob.status === 'failed') {

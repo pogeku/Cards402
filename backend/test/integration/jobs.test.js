@@ -3,7 +3,12 @@ require('../helpers/env');
 const { describe, it, before, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const { v4: uuidv4 } = require('uuid');
-const { recoverStuckOrders, expireStaleOrders, pruneIdempotencyKeys } = require('../../src/jobs');
+const {
+  recoverStuckOrders,
+  expireStaleOrders,
+  pruneIdempotencyKeys,
+  reconcileOrderingFulfillment,
+} = require('../../src/jobs');
 const vccClient = require('../../src/vcc-client');
 const { createTestKey, resetDb, db } = require('../helpers/app');
 
@@ -207,6 +212,68 @@ describe('pruneIdempotencyKeys', () => {
 
     const after = db.prepare(`SELECT * FROM idempotency_keys WHERE key = ?`).get(iKey);
     assert.ok(after, 'fresh row should still exist after pruning');
+  });
+});
+
+// ── reconcileOrderingFulfillment — F2-reconcile freeze short-circuit ─────
+//
+// Before this fix, reconcile would keep retrying payCtxOrder (outbound
+// treasury money movement) on every 5-minute tick even while the
+// system-wide freeze flag was set — which is the emergency-stop signal
+// that's supposed to halt all automatic money movement. scheduleRefund
+// already had a freeze guard from an earlier audit cycle; reconcile
+// didn't, creating a split where refunds were blocked but retries
+// weren't. Stuck orders now wait until ops unfreezes.
+
+describe('reconcileOrderingFulfillment — freeze short-circuit (F2)', () => {
+  beforeEach(() => resetDb());
+
+  it('skips all stuck-order processing while the system is frozen', async () => {
+    // Flip the freeze flag on directly. A real incident-response
+    // unfreeze would go through POST /dashboard/platform/unfreeze
+    // after ops investigated, but we want to exercise the reconcile
+    // short-circuit without running the whole platform router.
+    db.prepare(`UPDATE system_state SET value = '1' WHERE key = 'frozen'`).run();
+
+    const { id: keyId } = await createTestKey({ label: 'frozen-reconcile-key' });
+    const orderId = uuidv4();
+    // Seed an order that WOULD normally be picked up: status='ordering',
+    // missing xlm_sent_at, stale updated_at.
+    db.prepare(
+      `
+      INSERT INTO orders (id, status, amount_usdc, payment_asset, sender_address,
+                          api_key_id, vcc_job_id, fulfillment_attempt,
+                          created_at, updated_at)
+      VALUES (?, 'ordering', '10.00', 'usdc_soroban', 'GTESTSENDER', ?, 'vcc-job-frozen',
+              0, datetime('now', '-1 hour'), datetime('now', '-30 minutes'))
+      `,
+    ).run(orderId, keyId);
+
+    // Spy on vccClient.getVccJobStatus — if reconcile short-circuits
+    // correctly, this should NEVER be called (the function returns
+    // before even reading the stuck-order list).
+    let vccCalled = false;
+    const originalGetVcc = vccClient.getVccJobStatus;
+    vccClient.getVccJobStatus = async () => {
+      vccCalled = true;
+      return { status: 'queued' };
+    };
+
+    try {
+      await reconcileOrderingFulfillment();
+    } finally {
+      vccClient.getVccJobStatus = originalGetVcc;
+      db.prepare(`UPDATE system_state SET value = '0' WHERE key = 'frozen'`).run();
+    }
+
+    assert.equal(vccCalled, false, 'vccClient must NOT be called while frozen');
+
+    // Order is untouched — no fulfillment_attempt bump, no status flip.
+    const order = /** @type {any} */ (
+      db.prepare(`SELECT status, fulfillment_attempt FROM orders WHERE id = ?`).get(orderId)
+    );
+    assert.equal(order.status, 'ordering');
+    assert.equal(order.fulfillment_attempt, 0);
   });
 });
 
