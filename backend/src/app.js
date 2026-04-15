@@ -25,12 +25,83 @@ const { MAX_WEBHOOK_ATTEMPTS: MAX_WEBHOOK_ATTEMPTS_FOR_STATUS } = require('./ful
 const app = express();
 
 // B-13: Attach a unique request ID to every request for log correlation.
+//
+// F1-app (2026-04-16): validate client-supplied X-Request-ID shape
+// before accepting it. Pre-fix, `String(req.headers['x-request-id'])`
+// accepted anything the client sent. Three real problems:
+//
+//   1. Header injection self-DoS: a client sending
+//      `X-Request-ID: foo\r\nBcc: attacker` would hit the
+//      `res.setHeader('X-Request-ID', req.id)` call below and trigger
+//      Node's ERR_INVALID_CHAR → the middleware throws before any
+//      route handler runs. Every request from that client 500s.
+//
+//   2. Outbound header corruption: req.id is persisted to
+//      `orders.request_id` and later passed to vcc-client.getInvoice,
+//      which sets it as the `X-Request-ID` header on outbound fetches
+//      to vcc.ctx.com. A garbage-shaped id breaks those fetches with
+//      cryptic errors that have nothing to do with the real failure.
+//
+//   3. Forensics trust: log entries with attacker-controlled correlation
+//      ids look indistinguishable from server-generated ones. Ops grepping
+//      for a real incident can't tell which rows are trustworthy.
+//
+// Fix: accept a narrow charset (alphanumeric + dash + underscore + dot
+// + colon) up to 64 chars. This is permissive enough for UUIDs, RFC 3986
+// token characters, OpenTelemetry trace IDs (32 hex), Sentry event IDs,
+// and common SDK formats — but rejects every header-breaking character
+// (CR, LF, NUL, space, etc.) and bounds the length.
+//
+// Invalid or missing client header → fall back to a server-generated
+// UUID and emit a bizEvent (one per offending IP, dedup'd) so ops
+// sees systematic misuse without log spam.
+const REQ_ID_SHAPE = /^[A-Za-z0-9._:-]{1,64}$/;
+const _reqIdWarnedIps = new Set();
+
+function validateRequestId(raw) {
+  // Node joins duplicate headers with ', ' by default for most header
+  // names, but defensively handle both string[] and string.
+  if (Array.isArray(raw)) raw = raw[0];
+  if (typeof raw !== 'string') return null;
+  if (!REQ_ID_SHAPE.test(raw)) return null;
+  return raw;
+}
+
 app.use((req, res, next) => {
-  req.id = String(req.headers['x-request-id'] || crypto.randomUUID()).slice(0, 36);
+  const rawHeader = req.headers['x-request-id'];
+  const validated = validateRequestId(rawHeader);
+  if (rawHeader !== undefined && validated === null) {
+    // Client supplied something but it didn't match the shape. Dedup
+    // the warn per remote address so a repeat offender doesn't spam
+    // the log. Scoped to req.ip which Express resolves via trust proxy.
+    const ip = req.ip || 'unknown';
+    if (!_reqIdWarnedIps.has(ip)) {
+      _reqIdWarnedIps.add(ip);
+      // Lazy-require so the logger cycle is safe; log-module caches
+      // its own state.
+      try {
+        const { event: bizEvent } = require('./lib/logger');
+        bizEvent('request.invalid_request_id', {
+          ip,
+          raw_preview: String(rawHeader).slice(0, 48),
+        });
+      } catch {
+        /* observability must not block the request */
+      }
+    }
+  }
+  req.id = validated || crypto.randomUUID();
   res.setHeader('X-Request-ID', req.id);
   log('info', 'request', { req_id: req.id, method: req.method, path: req.path });
   next();
 });
+
+// Test-only: reset the invalid-request-id dedup cache so unit tests
+// can observe the first-offender warn path independently. Not part of
+// the public contract.
+function _resetReqIdWarnState() {
+  _reqIdWarnedIps.clear();
+}
 
 /** @type {any} */ const helmetMiddleware = helmet;
 // helmet defaults are fine for everything except the HSTS header — the
@@ -816,3 +887,9 @@ app.use((err, req, res, _next) => {
 });
 
 module.exports = app;
+// Test-only exports for the 2026-04-16 audit hardening. Not part of
+// the production surface — consumers should `require('./app')` and
+// get the Express app.
+module.exports._validateRequestId = validateRequestId;
+module.exports._resetReqIdWarnState = _resetReqIdWarnState;
+module.exports._REQ_ID_SHAPE = REQ_ID_SHAPE;

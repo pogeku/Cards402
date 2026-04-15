@@ -158,6 +158,25 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a typeof guard to `decryptToken` so a non-string
   `system_state.value` can't wedge the token path with an opaque
   TypeError. Audit F1/F2/F3-vcc-client.
+- **Client-supplied X-Request-ID validated** — the request-id
+  middleware at the top of src/app.js previously accepted any
+  client-supplied `X-Request-ID` header, `.slice()`'d to 36 chars, and
+  stamped it onto `req.id`, the response header, the `orders.request_id`
+  DB column, and the outbound VCC `X-Request-ID` header. Three real
+  problems: (1) a client sending `X-Request-ID: foo\r\nBcc: attacker`
+  would trip `res.setHeader`'s `ERR_INVALID_CHAR` check and 500 every
+  one of their own requests before any route handler ran. (2) Garbage-
+  shaped ids persisted to the DB and later fed to vcc-client's outbound
+  fetch would crash those fetches with cryptic header errors unrelated
+  to the real failure. (3) Attacker-controlled correlation ids in ops
+  logs looked indistinguishable from server-generated ones — forensics
+  couldn't tell which rows to trust. Fix validates the header against
+  a narrow charset (alphanumeric + dash + underscore + dot + colon,
+  length 1-64) that still accepts UUIDs, OpenTelemetry 32-char hex
+  trace ids, Sentry event ids, and common SDK formats. Invalid or
+  missing headers fall back to a server-generated UUID and emit a
+  dedup'd `request.invalid_request_id` bizEvent per offending IP so
+  ops sees systematic misuse without log spam. Audit F1-app.
 - **Environment schema hardening** — five fixes in src/env.js, the
   boot-time validator. (1) **Stellar strkey shape** —
   `STELLAR_USDC_ISSUER`, `STELLAR_XLM_SECRET`, and `RECEIVER_CONTRACT_ID`
