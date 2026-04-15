@@ -50,12 +50,33 @@ blockList.addSubnet('240.0.0.0', 4);
 // fe80::/10           link-local — covers fe80:: through febf::
 // ff00::/8            multicast
 // 2001:db8::/32       documentation prefix (RFC 3849)
+//
+// Translation / tunneling prefixes (F1 adversarial audit). Each of these
+// encodes or routes to an IPv4 address that would bypass our IPv4
+// blocklist if left unchecked, because the check runs on the IPv6 form:
+//
+// 2002::/16           6to4 tunneling (RFC 3056). 2002:<IPv4-hex>::/48
+//                     encapsulates the embedded IPv4 via 6to4 relays.
+//                     Example: 2002:7f00:0001:: → routes to 127.0.0.1.
+//                     Deprecated by RFC 7526 (2015) but still routable
+//                     on older stacks.
+// 2001::/32           Teredo tunneling (RFC 4380). Bytes 10-13 encode
+//                     a NAT-obfuscated IPv4. Legacy, mostly dead on
+//                     modern Linux, but block defensively.
+// 64:ff9b::/96        NAT64 well-known prefix (RFC 6052). Last 32 bits
+//                     are an IPv4 that the NAT64 translator will
+//                     route to. Example: 64:ff9b::7f00:1 → 127.0.0.1.
+//                     Not deployed on most hosts but present on
+//                     dual-stack networks running NAT64/DNS64.
 blockList.addAddress('::', 'ipv6');
 blockList.addAddress('::1', 'ipv6');
 blockList.addSubnet('fc00::', 7, 'ipv6');
 blockList.addSubnet('fe80::', 10, 'ipv6');
 blockList.addSubnet('ff00::', 8, 'ipv6');
 blockList.addSubnet('2001:db8::', 32, 'ipv6');
+blockList.addSubnet('2002::', 16, 'ipv6');
+blockList.addSubnet('2001::', 32, 'ipv6');
+blockList.addSubnet('64:ff9b::', 96, 'ipv6');
 
 /**
  * Check whether an IP string (v4 or v6) falls inside any blocked range.

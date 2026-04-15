@@ -107,6 +107,40 @@ describe('assertSafeUrl — SSRF protection', () => {
     await assert.rejects(() => assertSafeUrl('http://[::ffff:10.0.0.1]/payload'), /private IP/);
   });
 
+  // ── IPv6 translation / tunneling prefixes (2026-04-15 audit) ──────────────
+  //
+  // Each of these encodes or routes to an IPv4 address. A naive block-
+  // list that only covered IPv4 private ranges + fc00::/fe80::/ff00::
+  // would pass the IPv6 form through unchecked, and the kernel-level
+  // tunneling / NAT64 path would deliver the packet to the embedded
+  // IPv4. Regression guards for F1 of the ssrf.js audit.
+
+  it('blocks 6to4 tunnel 2002::/16 (encodes IPv4 at bytes 2-5)', async () => {
+    // 2002:7f00:0001::1 → encodes 127.0.0.1 via 6to4 tunneling (RFC 3056)
+    await assert.rejects(() => assertSafeUrl('http://[2002:7f00:0001::1]/payload'), /private IP/);
+  });
+
+  it('blocks 6to4 tunnel 2002::/16 targeting AWS metadata', async () => {
+    // 2002:a9fe:a9fe::1 → encodes 169.254.169.254
+    await assert.rejects(() => assertSafeUrl('http://[2002:a9fe:a9fe::1]/payload'), /private IP/);
+  });
+
+  it('blocks Teredo tunnel 2001::/32', async () => {
+    await assert.rejects(
+      () => assertSafeUrl('http://[2001:0:53aa:64c:0:0:0:1]/payload'),
+      /private IP/,
+    );
+  });
+
+  it('blocks NAT64 well-known prefix 64:ff9b::/96', async () => {
+    // 64:ff9b::7f00:1 → NAT64-routes to 127.0.0.1
+    await assert.rejects(() => assertSafeUrl('http://[64:ff9b::7f00:1]/payload'), /private IP/);
+  });
+
+  it('blocks NAT64 well-known prefix targeting 10.0.0.1', async () => {
+    await assert.rejects(() => assertSafeUrl('http://[64:ff9b::a00:1]/payload'), /private IP/);
+  });
+
   // ── IPv4 missing-range regression guards ──────────────────────────────────
 
   it('blocks multicast 224.0.0.1', async () => {
