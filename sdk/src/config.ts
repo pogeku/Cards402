@@ -10,6 +10,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import * as crypto from 'crypto';
+
+// Adversarial audit F5-config: config files should be tiny. A 16 KB
+// cap leaves plenty of room for a fat api_key + url + wallet_name
+// while refusing a maliciously-enlarged file that would otherwise be
+// parsed in full and flowed into request headers downstream.
+const MAX_CONFIG_BYTES = 16 * 1024;
 
 export interface Cards402Config {
   api_key: string;
@@ -53,27 +60,62 @@ function defaultConfigPath(): string {
 export function loadCards402Config(configPath?: string): Cards402Config | null {
   const p = configPath || defaultConfigPath();
   try {
-    // Check permissions before the read so we can fail fast on obvious
-    // tampering and warn on merely-loose files. On Windows, file mode
-    // bits are simulated and may not be meaningful — skip the check
-    // there to avoid spurious warnings.
+    // F1-config: use lstatSync so a symlinked config file is detected
+    // and refused. If ~/.cards402/config.json is a symlink to
+    // /etc/passwd or another user-writable file, subsequent stat/chmod
+    // /readFileSync calls would follow the link and operate on the
+    // target — so an attacker who can plant a symlink in ~/.cards402
+    // could both trick us into chmoding the target AND load the target
+    // as a "config", which in turn flows into request Authorization
+    // headers downstream.
+    //
+    // Skip the symlink + mode checks on Windows — mode bits are
+    // simulated and lstatSync semantics differ, so the defense
+    // doesn't apply the same way and warnings would be spurious.
     if (process.platform !== 'win32') {
+      let stat: fs.Stats;
       try {
-        const stat = fs.statSync(p);
-        // World- or group-readable bits set → tighten and warn
-        if ((stat.mode & 0o077) !== 0) {
-          try {
-            fs.chmodSync(p, 0o600);
-            process.stderr.write(
-              `⚠ cards402 config at ${p} had loose permissions (${(stat.mode & 0o777).toString(8)}) — tightened to 600.\n` +
-                '   If this is unexpected, rotate your api key via the dashboard.\n',
-            );
-          } catch {
-            /* non-fatal — we at least tried */
-          }
+        stat = fs.lstatSync(p);
+      } catch (statErr: unknown) {
+        if ((statErr as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw statErr;
+      }
+      if (stat.isSymbolicLink()) {
+        throw new Error(
+          `cards402 config at ${p} is a symbolic link. Refusing to load. ` +
+            `Remove the link and re-run 'cards402 onboard --claim <code>' to create a real file.`,
+        );
+      }
+      if (!stat.isFile()) {
+        throw new Error(
+          `cards402 config at ${p} is not a regular file. ` +
+            `Remove it and re-run 'cards402 onboard --claim <code>'.`,
+        );
+      }
+      // F5-config: enforce a size cap BEFORE reading the file into
+      // memory or doing any further work on it. Config files are
+      // tiny; anything bigger than MAX_CONFIG_BYTES is either
+      // corruption or an attempt to flood request headers.
+      if (stat.size > MAX_CONFIG_BYTES) {
+        throw new Error(
+          `cards402 config at ${p} is ${stat.size} bytes (max ${MAX_CONFIG_BYTES}). ` +
+            `Refusing to load — the file is either corrupted or has been tampered with. ` +
+            `Rotate your api key via the dashboard and re-run 'cards402 onboard'.`,
+        );
+      }
+      // World- or group-readable bits set → tighten and warn. chmod
+      // on a regular file (we verified above that it's not a symlink)
+      // is safe and only affects this file.
+      if ((stat.mode & 0o077) !== 0) {
+        try {
+          fs.chmodSync(p, 0o600);
+          process.stderr.write(
+            `⚠ cards402 config at ${p} had loose permissions (${(stat.mode & 0o777).toString(8)}) — tightened to 600.\n` +
+              '   If this is unexpected, rotate your api key via the dashboard.\n',
+          );
+        } catch {
+          /* non-fatal — we at least tried */
         }
-      } catch {
-        /* stat failed for some reason — fall through to the read */
       }
     }
     const raw = fs.readFileSync(p, 'utf8');
@@ -106,6 +148,20 @@ export function assertSafeBaseUrl(url: string, opts: { context?: string } = {}):
   } catch {
     throw new Error(`Invalid base URL: ${url}`);
   }
+  // F4-config: reject embedded userinfo. `https://api.cards402.com/v1@evil.com/`
+  // parses as username='api.cards402.com/v1', password='', hostname='evil.com'
+  // — the whole string looks plausibly cards402-ish in log output, but every
+  // request would go to evil.com carrying the user's api_key in the
+  // Authorization header. There's no legitimate reason for a cards402 base
+  // URL to include credentials, so refuse any URL with a non-empty username
+  // or password.
+  if (parsed.username !== '' || parsed.password !== '') {
+    throw new Error(
+      `Refusing base URL ${JSON.stringify(url)} with embedded credentials. ` +
+        `Use a bare https://host/path form — the api key is sent via the ` +
+        `Authorization header, never in the URL.`,
+    );
+  }
   if (parsed.protocol !== 'https:') {
     if (process.env.CARDS402_ALLOW_INSECURE_BASE_URL === '1') {
       return parsed.toString();
@@ -137,20 +193,58 @@ export function saveCards402Config(config: Cards402Config, configPath?: string):
   const p = configPath || defaultConfigPath();
   const dir = path.dirname(p);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-
-  const tmp = `${p}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
-  const body = JSON.stringify(config, null, 2);
-  const fd = fs.openSync(tmp, 'w', 0o600);
-  try {
-    fs.writeFileSync(fd, body);
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
+  // F2-config: mkdirSync's mode option only applies to directories
+  // it actually CREATES. An existing ~/.cards402 directory at 0755
+  // (from an older buggy SDK version, a package install, or a
+  // manual mkdir) silently stays loose, and the config file sits
+  // inside a world-traversable parent. Explicit chmod after mkdir
+  // guarantees the directory ends up at 0700 regardless of its
+  // pre-existing state. Skip on Windows — mode bits are simulated
+  // and the chmod can fail or no-op unpredictably.
+  if (process.platform !== 'win32') {
+    try {
+      fs.chmodSync(dir, 0o700);
+    } catch {
+      /* non-fatal — best effort */
+    }
   }
-  // Atomic rename. POSIX guarantees this replaces an existing file
-  // with the same semantics; on Windows rename-over-existing also
-  // works from Node 10+.
-  fs.renameSync(tmp, p);
+
+  // F3-config: crypto.randomBytes is strictly safer than Math.random
+  // for a temp-file suffix. Collision is already near-zero in
+  // practice but Math.random is seeded from the clock — two
+  // containers starting in the same millisecond could in principle
+  // produce the same sequence. Crypto random adds no meaningful
+  // cost and eliminates the class of concern.
+  const tmp = `${p}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+  const body = JSON.stringify(config, null, 2);
+  let committed = false;
+  try {
+    const fd = fs.openSync(tmp, 'w', 0o600);
+    try {
+      fs.writeFileSync(fd, body);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    // Atomic rename. POSIX guarantees this replaces an existing file
+    // with the same semantics; on Windows rename-over-existing also
+    // works from Node 10+.
+    fs.renameSync(tmp, p);
+    committed = true;
+  } finally {
+    // F3-config: clean up the temp file on any failure before the
+    // rename commits. A leaked ~/.cards402/config.json.tmp-* file
+    // holding a fresh api_key would otherwise linger on disk with
+    // the same 0600 permissions as the target but under a path no
+    // one checks — easy to miss during credential rotation.
+    if (!committed) {
+      try {
+        fs.unlinkSync(tmp);
+      } catch {
+        /* temp already gone or never created — fine */
+      }
+    }
+  }
   // Belt-and-braces: some filesystems (FAT on USB sticks) drop the
   // mode on rename. Force-tighten after.
   try {
