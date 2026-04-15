@@ -174,6 +174,49 @@ describe('sanitize — internal vocabulary is scrubbed', () => {
     });
   }
 
+  // ── F1-sanitize regression guards ────────────────────────────────────────
+  //
+  // Rule ordering: the internal-vocab catchall must run BEFORE the
+  // insufficient / policy / timeout rules, so that an upstream error
+  // containing one of those words doesn't false-match and misdirect
+  // the agent. Pre-fix, "VCC treasury insufficient USDC" was routed to
+  // insufficient_funds and told the agent to top up their wallet —
+  // which is both wrong and a subtle leak of internal state.
+
+  it('VCC error containing "insufficient" does NOT route to insufficient_funds', () => {
+    const out = sanitize('vcc invoice failed: treasury insufficient USDC balance');
+    assert.equal(out.code, 'fulfillment_unavailable');
+    // And the public message must not say "top up" or "wallet balance".
+    assert.ok(!out.message.toLowerCase().includes('wallet'));
+    assert.ok(!out.message.toLowerCase().includes('top up'));
+  });
+
+  it('CTX merchant error containing "insufficient_funds" does NOT leak "insufficient"', () => {
+    const out = sanitize('CTX merchant 4567 returned insufficient_funds');
+    assert.equal(out.code, 'fulfillment_unavailable');
+    assert.ok(!out.message.toLowerCase().includes('wallet'));
+  });
+
+  it('scraper error containing "spend_limit_exceeded" does NOT route to policy_blocked', () => {
+    // A scraper-side quota string should scrub, not look like an
+    // agent-side spend policy hit.
+    const out = sanitize('yourrewardcard scraper: merchant daily spend_limit_exceeded');
+    assert.equal(out.code, 'fulfillment_unavailable');
+  });
+
+  it('VCC network timeout still scrubs to fulfillment_unavailable, not upstream_timeout', () => {
+    // Before the reorder this was also fulfillment_unavailable because
+    // the vocab rule was below timeout — keep the behaviour consistent.
+    const out = sanitize('VCC stage2 browser ETIMEDOUT during playwright launch');
+    assert.equal(out.code, 'fulfillment_unavailable');
+  });
+
+  it('genuine Stellar-submit insufficient error still routes to insufficient_funds', () => {
+    // Post-reorder, the agent-wallet path must still surface.
+    const out = sanitize('tx_failed: op_underfunded — insufficient balance on source account');
+    assert.equal(out.code, 'insufficient_funds');
+  });
+
   it('unknown errors fall through to GENERIC (fulfillment_unavailable) with no leak', () => {
     const out = sanitize('some completely new internal error: /var/lib/secret-path.txt');
     assert.equal(out.code, 'fulfillment_unavailable');
