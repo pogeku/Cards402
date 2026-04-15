@@ -536,6 +536,7 @@ const agentStatusLimiter = rateLimit({
 });
 app.post('/v1/agent/status', agentStatusLimiter, (req, res) => {
   const { emit: emitBusEvent } = require('./lib/event-bus');
+  const { StrKey } = require('@stellar/stellar-sdk');
   const ALLOWED_STATES = new Set(['initializing', 'awaiting_funding', 'funded']);
   const { state, wallet_public_key, detail } = req.body || {};
 
@@ -545,24 +546,44 @@ app.post('/v1/agent/status', agentStatusLimiter, (req, res) => {
       message: `state must be one of: ${[...ALLOWED_STATES].join(', ')} (the 'minted' and 'active' states are derived automatically from activity)`,
     });
   }
+  // F2-agent-status: StrKey.isValidEd25519PublicKey enforces the
+  // Stellar Ed25519 checksum — the previous regex only checked the
+  // shape (56 chars, base32 charset) and would accept a typo'd address
+  // with a wrong checksum. That stored silently and later blew up in
+  // the xlm-sender path (which now uses StrKey itself) or Horizon's
+  // account loader. Fail at the write boundary so the bad value never
+  // enters the DB.
   if (wallet_public_key !== undefined && wallet_public_key !== null) {
-    if (!/^G[A-Z2-7]{55}$/.test(wallet_public_key)) {
+    if (
+      typeof wallet_public_key !== 'string' ||
+      !StrKey.isValidEd25519PublicKey(wallet_public_key)
+    ) {
       return res.status(400).json({
         error: 'invalid_wallet_public_key',
-        message: 'wallet_public_key must be a valid Stellar G-address (56 chars, starts with G)',
+        message: 'wallet_public_key must be a valid Stellar G-address (base32 + checksum)',
       });
     }
   }
 
   const fields = [];
   const params = { id: req.apiKey.id, at: new Date().toISOString() };
+  // F1-agent-status: build the fanout event payload alongside the
+  // UPDATE so the broadcast mirrors the actually-updated set. The
+  // previous version null-padded every field the caller didn't
+  // provide, so a detail-only POST emitted {state: null, ...} over
+  // the bus and dashboard SSE subscribers that treated null as
+  // "cleared" visually regressed the onboarding pill.
+  /** @type {Record<string, any>} */
+  const eventPayload = { api_key_id: req.apiKey.id };
   if (state !== undefined) {
     fields.push('agent_state = @state', 'agent_state_at = @at');
     params.state = state;
+    eventPayload.state = state;
   }
   if (wallet_public_key !== undefined) {
     fields.push('wallet_public_key = @wallet_public_key');
     params.wallet_public_key = wallet_public_key || null;
+    eventPayload.wallet_public_key = wallet_public_key || null;
   }
   if (detail !== undefined) {
     // Reject non-string detail — without the typeof guard an object
@@ -576,6 +597,7 @@ app.post('/v1/agent/status', agentStatusLimiter, (req, res) => {
     }
     fields.push('agent_state_detail = @detail');
     params.detail = detail ? detail.slice(0, 500) : null;
+    eventPayload.detail = params.detail;
   }
   if (fields.length === 0) {
     return res.status(400).json({
@@ -586,12 +608,7 @@ app.post('/v1/agent/status', agentStatusLimiter, (req, res) => {
 
   db.prepare(`UPDATE api_keys SET ${fields.join(', ')} WHERE id = @id`).run(params);
 
-  emitBusEvent('agent_state', {
-    api_key_id: req.apiKey.id,
-    state: state ?? null,
-    wallet_public_key: wallet_public_key ?? null,
-    detail: detail ?? null,
-  });
+  emitBusEvent('agent_state', eventPayload);
 
   res.json({ ok: true });
 });
