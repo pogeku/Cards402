@@ -837,45 +837,86 @@ router.get('/:id/stream', (req, res) => {
     return;
   }
 
-  // Close-and-cleanup helper. Called from both terminal-state branches
-  // inside the tick and idempotent with the req.on('close') handler —
-  // releasing the stream slot twice would under-count the per-key
-  // total, so we use the `closed` flag as the single source of truth.
+  // Close-and-cleanup helper. Single source of truth for stream
+  // teardown — both the terminal-state branch inside the tick, the
+  // req.on('close') handler, and any error path inside the interval
+  // callbacks route through here. Idempotent via the `closed` flag
+  // so a double-call (e.g., tick hits terminal and then req.on('close')
+  // fires right after) doesn't under-count the per-key slot total.
+  //
+  // res.end() is safe to call on an already-closed response: Node's
+  // HTTP module treats it as a no-op / ERR_STREAM_WRITE_AFTER_END
+  // (non-fatal) so we can invoke it unconditionally.
   function closeStream() {
     if (closed) return;
     closed = true;
     clearInterval(tick);
     clearInterval(keepalive);
     releaseStreamSlot(keyId);
-    res.end();
+    try {
+      res.end();
+    } catch {
+      /* socket already dead */
+    }
   }
 
+  // F1-sse-stream: wrap the tick in try/catch. Previously a SQLite
+  // throw (transient lock, disk error, corrupt row) or a res.write()
+  // throw (socket closed before Node emits the 'close' event — e.g.,
+  // abrupt TCP reset) escaped the setInterval callback as an
+  // uncaught exception, landed in the index.js global handler, and
+  // kicked a graceful shutdown — taking the whole process down from
+  // a single bad row or racy disconnect. Now we log the error to
+  // stderr, close just this stream, and let the other ~999
+  // concurrent streams and every background job keep running.
   const tick = setInterval(() => {
     if (closed) return;
-    const row = /** @type {any} */ (
-      db.prepare(`SELECT * FROM orders WHERE id = ? AND api_key_id = ?`).get(orderId, keyId)
-    );
-    if (!row) {
+    try {
+      const row = /** @type {any} */ (
+        db.prepare(`SELECT * FROM orders WHERE id = ? AND api_key_id = ?`).get(orderId, keyId)
+      );
+      if (!row) {
+        closeStream();
+        return;
+      }
+      if (row.updated_at !== lastUpdated) {
+        lastUpdated = row.updated_at;
+        if (emit(row)) closeStream();
+      }
+    } catch (err) {
+      console.error(
+        `[orders.stream] tick error for ${orderId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
       closeStream();
-      return;
-    }
-    if (row.updated_at !== lastUpdated) {
-      lastUpdated = row.updated_at;
-      if (emit(row)) closeStream();
     }
   }, 500);
 
   // SSE comment ping every 15s so intermediate proxies don't idle-kill.
+  // Same catch-and-close discipline as the tick — a dead socket can
+  // surface as a res.write() throw between Node's 'close' event and
+  // our handler running. Don't take the process down for it.
   const keepalive = setInterval(() => {
-    if (!closed) res.write(': keepalive\n\n');
+    if (closed) return;
+    try {
+      res.write(': keepalive\n\n');
+    } catch (err) {
+      console.error(
+        `[orders.stream] keepalive error for ${orderId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      closeStream();
+    }
   }, 15000);
 
+  // F2-sse-stream: the close handler now delegates to closeStream()
+  // instead of duplicating its cleanup logic. Any future cleanup
+  // step added to closeStream is automatically picked up by the
+  // disconnect path.
   req.on('close', () => {
-    if (closed) return; // idempotent — 'close' can fire twice on some clients
-    closed = true;
-    clearInterval(tick);
-    clearInterval(keepalive);
-    releaseStreamSlot(keyId);
+    closeStream();
   });
 });
 
