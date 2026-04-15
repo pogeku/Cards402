@@ -120,3 +120,11 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   TRUE and granted platform-owner to anyone with an empty email). Added
   first-time test coverage for `requirePlatformOwner` and `requireOwner`
   middleware — both had zero direct tests. Audit F1-platform / F2-platform.
+- **Card-brand normaliser observability** — `lib/normalize-card.js` now
+  returns `null` for whitespace-only upstream input (pre-fix, `'   '` was
+  silently rendered as `'USD Prepaid Card'`, hiding upstream data
+  corruption behind a plausible-looking label). Added dedup'd warn +
+  `normalize_card.unknown_brand` bizEvent on the unknown-scheme fallback
+  path so ops get a push signal the first time CTX introduces a new
+  product SKU — previously the fallback was completely silent despite
+  an inline comment claiming ops visibility. Audit F1/F2-normalize-card.
