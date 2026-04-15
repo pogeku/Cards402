@@ -16,9 +16,34 @@ if (!process.env.VCC_TOKEN_KEY && process.env.NODE_ENV !== 'test') {
 // unhealthy (3+ consecutive errors in the last 60s), trip the breaker for
 // 30s so the watcher doesn't hammer a known-down vcc and stall every
 // payment event. Restarts reset state; this is intentionally in-memory.
-let _vccCircuit = { failures: 0, openedUntil: 0 };
+//
+// Adversarial audit 2026-04-15:
+//
+//   F1-vcc-client: recordVccSuccess no longer unconditionally clears
+//     openedUntil. Pre-fix, a call that was already in flight when the
+//     breaker opened (because 3 other concurrent calls tripped it)
+//     could complete successfully, call recordVccSuccess, and wipe
+//     openedUntil to 0 — reopening the gate for subsequent callers
+//     even though VCC was still broken. Now recordVccSuccess leaves
+//     openedUntil intact if the breaker is actively in cooldown; only
+//     the in-window success case clears the timestamp.
+//
+//   F2-vcc-client: recordVccFailure now enforces the 60s window that
+//     the spec promised. Pre-fix, `failures++` had no time bound —
+//     failures accumulated forever until either a success or a
+//     threshold trip. A low-traffic caller (e.g. a watcher that hits
+//     VCC once per hour) would trip the breaker after N hours with
+//     no intervening success, which is the opposite of "rate-bounded
+//     failure detection". Now a failure more than VCC_CIRCUIT_WINDOW_MS
+//     after the previous one resets the counter to 1 (this one).
+
 const VCC_CIRCUIT_THRESHOLD = 3;
 const VCC_CIRCUIT_COOLDOWN_MS = 30_000;
+// F2-vcc-client: time window for "N failures in a row" — beyond this,
+// a stale failure no longer counts toward the threshold.
+const VCC_CIRCUIT_WINDOW_MS = 60_000;
+
+let _vccCircuit = { failures: 0, openedUntil: 0, lastFailureAt: 0 };
 
 function vccCircuitGuard() {
   if (Date.now() < _vccCircuit.openedUntil) {
@@ -26,15 +51,46 @@ function vccCircuitGuard() {
   }
 }
 function recordVccFailure() {
-  _vccCircuit.failures++;
+  const now = Date.now();
+  // F2-vcc-client: reset counter if the previous failure was too long
+  // ago to count as "consecutive" in a 60s window.
+  if (now - _vccCircuit.lastFailureAt > VCC_CIRCUIT_WINDOW_MS) {
+    _vccCircuit.failures = 1;
+  } else {
+    _vccCircuit.failures++;
+  }
+  _vccCircuit.lastFailureAt = now;
   if (_vccCircuit.failures >= VCC_CIRCUIT_THRESHOLD) {
-    _vccCircuit.openedUntil = Date.now() + VCC_CIRCUIT_COOLDOWN_MS;
+    _vccCircuit.openedUntil = now + VCC_CIRCUIT_COOLDOWN_MS;
     _vccCircuit.failures = 0;
     bizEvent('vcc.circuit_opened', { reopen_at: new Date(_vccCircuit.openedUntil).toISOString() });
   }
 }
 function recordVccSuccess() {
-  _vccCircuit = { failures: 0, openedUntil: 0 };
+  // F1-vcc-client: during active cooldown, an in-flight success must
+  // NOT reopen the gate. The breaker is tripped for a reason; one
+  // lucky pre-trip call completing should not invalidate the trip.
+  // Zero `failures` unconditionally (the counter is per-window) but
+  // leave `openedUntil` alone until the cooldown expires naturally.
+  _vccCircuit.failures = 0;
+  if (Date.now() >= _vccCircuit.openedUntil) {
+    _vccCircuit.openedUntil = 0;
+    _vccCircuit.lastFailureAt = 0;
+  }
+}
+
+/**
+ * Test-only: reset the circuit breaker state.
+ */
+function _resetVccCircuit() {
+  _vccCircuit = { failures: 0, openedUntil: 0, lastFailureAt: 0 };
+}
+
+/**
+ * Test-only: peek at current breaker state.
+ */
+function _getVccCircuitState() {
+  return { ..._vccCircuit };
 }
 
 // ── Token encryption (B-7) ────────────────────────────────────────────────────
@@ -59,6 +115,16 @@ function encryptToken(plaintext) {
 }
 
 function decryptToken(stored) {
+  // F3-vcc-client (2026-04-15): defensive typeof check. Pre-fix, if the
+  // system_state.value column ever held a non-string (legacy migration,
+  // ops manual UPDATE, schema drift), `stored.startsWith` threw
+  // TypeError and the token path wedged with a crypto error message
+  // flowing into orders.error columns downstream. Fail closed with a
+  // labelled error so getVccToken's catch drops the row and falls
+  // through to re-registration.
+  if (typeof stored !== 'string') {
+    throw new Error(`vcc_token_decrypt_failed: non_string_stored type=${typeof stored}`);
+  }
   if (!stored.startsWith('enc:')) return stored; // plaintext (pre-encryption or no key)
   const key = getEncryptionKey();
   if (!key) return stored; // can't decrypt without key — let caller handle the error
@@ -369,4 +435,16 @@ function verifyVccSignature(
   });
 }
 
-module.exports = { getInvoice, notifyPaid, getVccJobStatus, verifyVccSignature };
+module.exports = {
+  getInvoice,
+  notifyPaid,
+  getVccJobStatus,
+  verifyVccSignature,
+  // Test-only exports for the circuit-breaker hardening audit.
+  _resetVccCircuit,
+  _getVccCircuitState,
+  _recordVccFailure: recordVccFailure,
+  _recordVccSuccess: recordVccSuccess,
+  _vccCircuitGuard: vccCircuitGuard,
+  _decryptToken: decryptToken,
+};

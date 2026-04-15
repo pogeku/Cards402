@@ -128,3 +128,17 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   path so ops get a push signal the first time CTX introduces a new
   product SKU — previously the fallback was completely silent despite
   an inline comment claiming ops visibility. Audit F1/F2-normalize-card.
+- **VCC client circuit breaker correctness** — two semantic bugs in the
+  cards402 → vcc circuit breaker: (1) `recordVccSuccess` unconditionally
+  cleared `openedUntil`, so a call that was in flight when the breaker
+  tripped could complete successfully and reopen the gate for every
+  subsequent caller even though VCC was still broken; now the cooldown
+  is respected and success only clears the timestamp after it has
+  expired naturally. (2) The documented "3+ errors in the last 60s"
+  trip rule had no time window — `failures` accumulated forever until
+  a success or trip, so a low-traffic caller hitting VCC once per hour
+  would trip after N stale failures across N days; now a failure more
+  than 60s after the previous one resets the counter to 1. Also added
+  a typeof guard to `decryptToken` so a non-string
+  `system_state.value` can't wedge the token path with an opaque
+  TypeError. Audit F1/F2/F3-vcc-client.
