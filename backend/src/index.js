@@ -5,6 +5,8 @@ const app = require('./app');
 const { startJobs, stopJobs } = require('./jobs');
 const { startWatcher } = require('./payments/stellar');
 const { handlePayment } = require('./payment-handler');
+const { event: bizEvent } = require('./lib/logger');
+const { formatRejection } = require('./lib/process-handlers');
 
 startJobs();
 
@@ -69,9 +71,24 @@ function gracefulShutdown(signal) {
     process.exit(1);
   }, 15_000).unref();
 }
+// F1-index (2026-04-16): SIGHUP was previously unhandled, so a pm2
+// reload / systemd HUP / Docker stop would terminate the process via
+// Node's default SIGHUP behaviour without draining in-flight orders,
+// SSE streams, or webhook deliveries. Route it through the same
+// graceful-shutdown path as SIGINT/SIGTERM.
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGHUP', () => gracefulShutdown('SIGHUP'));
 
+// F2-index (2026-04-16): the process-level error handlers emit a
+// structured payload via src/lib/process-handlers.js::formatRejection
+// rather than relying on Node's default stringification (which
+// produces `[object Promise]` for the promise arg of
+// unhandledRejection — nearly useless). The formatter is in its own
+// module so it can be unit-tested without loading index.js, which
+// runs production side effects (startJobs, startWatcher, app.listen,
+// signal registration) at module load.
+//
 // Crash handlers. Unhandled exceptions in a setInterval callback or
 // an unhandled promise rejection in a background task would otherwise
 // crash the process silently via Node's default behaviour — by then
@@ -81,12 +98,38 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 // complete.
 process.on('uncaughtException', (err, origin) => {
   console.error(`[cards402] uncaughtException at ${origin}:`, err);
+  try {
+    bizEvent('process.uncaught_exception', {
+      origin,
+      ...formatRejection(err),
+    });
+  } catch {
+    /* observability must never re-crash the handler */
+  }
   gracefulShutdown('uncaughtException');
 });
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('[cards402] unhandledRejection at', promise, 'reason:', reason);
+process.on('unhandledRejection', (reason) => {
+  const payload = formatRejection(reason);
+  // Keep the stderr line so it shows up in operator consoles even if
+  // the logger module itself is broken, but make the message useful
+  // now — pre-fix this stringified the Promise as `[object Promise]`.
+  console.error(
+    `[cards402] unhandledRejection: ${payload.name}: ${payload.message}${
+      payload.stack ? `\n${payload.stack}` : ''
+    }`,
+  );
+  try {
+    bizEvent('process.unhandled_rejection', payload);
+  } catch {
+    /* see above */
+  }
   // Don't shut down on every unhandled rejection — Node 22 still
   // logs a warning and continues by default, and the app has many
   // fire-and-forget .catch(() => {}) branches where a late reject
   // isn't fatal. Log and let the request finish.
 });
+
+// Note: this file has no module.exports. It's the production
+// entrypoint — consumers that want a testable surface should import
+// from the individual modules (./app, ./jobs, ./payments/stellar,
+// ./lib/process-handlers, etc.) directly.

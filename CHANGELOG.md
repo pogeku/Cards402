@@ -158,6 +158,27 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a typeof guard to `decryptToken` so a non-string
   `system_state.value` can't wedge the token path with an opaque
   TypeError. Audit F1/F2/F3-vcc-client.
+- **Process-level handlers hardened** — two fixes in src/index.js
+  (the production entrypoint). (1) **SIGHUP is now handled** — SIGINT
+  and SIGTERM were routed to the graceful-shutdown path but SIGHUP
+  was unhandled, so a pm2 reload / systemd HUP / Docker stop would
+  invoke Node's default SIGHUP behaviour and terminate the process
+  without draining in-flight orders, SSE streams, or webhook
+  deliveries. (2) **unhandledRejection now emits a structured
+  `process.unhandled_rejection` bizEvent** — the old handler did
+  only `console.error('... at', promise, 'reason:', reason)`, which
+  stringified the Promise arg as `[object Promise]` and left the log
+  line nearly useless. Ops alerting pipelines that scrape bizEvents
+  had no push signal for a class of error that's almost always a
+  real programming bug. Extracted the payload builder to
+  src/lib/process-handlers.js::formatRejection so it can be
+  unit-tested in isolation (index.js has production side effects at
+  module load and can't be required by tests). The formatter handles
+  every pathological reason shape the retry.js / sanitize-error.js
+  audits taught us to expect: null, undefined, strings, Errors with
+  getter-thrown .message or .stack, non-Error objects, revoked
+  Proxies (where even `instanceof Error` throws), Symbols, BigInts.
+  Audit F1/F2-index.
 - **Client-supplied X-Request-ID validated** — the request-id
   middleware at the top of src/app.js previously accepted any
   client-supplied `X-Request-ID` header, `.slice()`'d to 36 chars, and
