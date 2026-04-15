@@ -300,6 +300,143 @@ describe('sanitize — edge case inputs', () => {
   });
 });
 
+// ── F1-sanitize: frozen public-error constants ─────────────────────────────
+//
+// GENERIC and every rule.out are shared references. Without freeze, a
+// caller doing `sanitize(err).message = '...'` would corrupt every
+// subsequent sanitize call process-wide. The freeze is belt-and-braces:
+// strict-mode mutation throws; sloppy-mode silently noops. Either way,
+// the module-level constants are invariant for the life of the process.
+
+describe('F1-sanitize: frozen PublicError objects', () => {
+  const { sanitize: s } = require('../../src/lib/sanitize-error');
+
+  it('the GENERIC bucket is frozen', () => {
+    const out = s(null);
+    assert.equal(Object.isFrozen(out), true);
+  });
+
+  it('every recognised rule.out is frozen', () => {
+    const cases = [
+      'ctx_payment_ambiguous',
+      'VCC stage2 captcha timeout',
+      'insufficient balance on source account',
+      'spend_limit_exceeded',
+      'service_temporarily_unavailable',
+      'ETIMEDOUT',
+      'payment window expired',
+    ];
+    for (const c of cases) {
+      const out = s(c);
+      assert.equal(Object.isFrozen(out), true, `not frozen for ${c}: ${out.code}`);
+    }
+  });
+
+  it('mutation of the returned object does not leak to subsequent calls', () => {
+    const first = s('ETIMEDOUT');
+    const originalMessage = first.message;
+    // Sloppy-mode Object.freeze silently noops the assignment; strict-mode
+    // throws. Either way, the GENERIC/rule.out reference must still hold
+    // the original message on the next call — that's what we verify.
+    try {
+      first.message = 'TAMPERED: attacker controlled string';
+    } catch {
+      // strict-mode throw — fine.
+    }
+    const second = s('ETIMEDOUT');
+    assert.equal(
+      second.message,
+      originalMessage,
+      'rule.out was mutated through a returned reference — freeze is not protecting shared state',
+    );
+  });
+
+  it('mutation of GENERIC does not leak to subsequent calls', () => {
+    const first = s(null);
+    const originalCode = first.code;
+    try {
+      first.code = 'TAMPERED';
+    } catch {
+      /* strict-mode */
+    }
+    const second = s(undefined);
+    assert.equal(second.code, originalCode);
+  });
+});
+
+// ── F2-sanitize: defensive coercion ─────────────────────────────────────────
+//
+// sanitize() is on the error-handling path. A second-order crash here
+// (Error with a thrown getter, Proxy with a thrown toString, Symbol
+// without a description, …) must not bubble up and swallow the
+// original error signal.
+
+describe('F2-sanitize: defensive coercion', () => {
+  it('Error whose .message getter throws falls through to GENERIC (no crash)', () => {
+    const err = new Error('ignored');
+    Object.defineProperty(err, 'message', {
+      get() {
+        throw new Error('nested explosion');
+      },
+    });
+    // Pre-fix this would throw out of sanitize(), taking the fulfillment
+    // worker's outer try/catch.
+    const out = sanitize(err);
+    assert.equal(out.code, 'fulfillment_unavailable');
+  });
+
+  it('value whose toString throws falls through to GENERIC', () => {
+    const weird = {
+      toString() {
+        throw new Error('nope');
+      },
+    };
+    // Pre-fix: String(weird) throws → sanitize() throws.
+    const out = sanitize(weird);
+    assert.equal(out.code, 'fulfillment_unavailable');
+  });
+
+  it('value whose Symbol.toPrimitive throws falls through to GENERIC', () => {
+    const weird = {
+      [Symbol.toPrimitive]() {
+        throw new Error('toPrimitive explosion');
+      },
+    };
+    const out = sanitize(weird);
+    assert.equal(out.code, 'fulfillment_unavailable');
+  });
+
+  it('Symbol raw input does not crash (String(Symbol) is OK but worth pinning)', () => {
+    const out = sanitize(Symbol('insufficient balance'));
+    // String(Symbol('x')) → 'Symbol(x)' which does contain "insufficient
+    // balance" — so it matches insufficient_funds. Whatever the routing,
+    // the important thing is it does not throw.
+    assert.ok(typeof out.code === 'string');
+  });
+
+  it('Error subclass with non-string .message does not crash', () => {
+    class BadError extends Error {
+      constructor() {
+        super();
+        /** @type {any} */ (this).message = { toString: () => 'insufficient balance' };
+      }
+    }
+    const out = sanitize(new BadError());
+    // Result is implementation-defined, but the critical property is
+    // that sanitize() returns SOMETHING rather than throwing.
+    assert.ok(typeof out.code === 'string');
+  });
+
+  it('revoked Proxy falls through to GENERIC', () => {
+    const { proxy, revoke } = Proxy.revocable({ toString: () => 'ETIMEDOUT' }, {});
+    revoke();
+    const out = sanitize(proxy);
+    // Pre-fix: touching any property of a revoked Proxy throws a
+    // TypeError, and String(proxy) crashes sanitize. Post-fix: GENERIC.
+    assert.equal(out.code, 'fulfillment_unavailable');
+  });
+});
+
 // ── publicMessage / publicCode wrappers ────────────────────────────────────
 
 describe('publicMessage / publicCode', () => {

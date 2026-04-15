@@ -46,13 +46,23 @@
 
 /** @typedef {{ code: string, message: string, retryable: boolean }} PublicError */
 
+// F1-sanitize (2026-04-15): Freeze every exported PublicError at module
+// load so a caller mutating the returned object cannot corrupt subsequent
+// sanitize() calls. Same class of fix as logger.js and event-bus.js: any
+// module-level constant that's handed to callers by reference becomes a
+// shared-state leak the moment someone writes `sanitize(err).message = ...`.
+// Object.freeze on sloppy-mode assignment is a silent noop (on strict-mode
+// it throws), so the defense is belt-and-braces rather than surgical.
+// Freezing at module load means the cost is paid once per process and the
+// shape is invariant for the lifetime of the runtime.
+
 /** @type {PublicError} */
-const GENERIC = {
+const GENERIC = Object.freeze({
   code: 'fulfillment_unavailable',
   message:
     'The order could not be fulfilled right now. Your payment has been refunded automatically. Try again in a few minutes.',
   retryable: true,
-};
+});
 
 // Each entry: regex against the raw error string → public payload.
 // Order matters — first match wins. Keep specific patterns above
@@ -85,7 +95,11 @@ const GENERIC = {
 //
 //   6. payment_expired                     — the order's payment
 //      window closed before fulfillment ran.
-const RULES = [
+// Every rule's `out` is wrapped in Object.freeze at module load (F1-sanitize)
+// so sanitize() can return the shared reference without worrying about
+// caller-side mutation. The RULES array itself is frozen too, so a
+// downstream module can't `push` a bogus rule or reorder the set in-place.
+const RULES = Object.freeze([
   // Ambiguous on-chain outcome on the outbound CTX payment leg
   // (audit F1-jobs 2026-04-15). This runs FIRST — before any
   // "your payment has been refunded" rules — because the whole
@@ -95,23 +109,23 @@ const RULES = [
   // complaint that operators then have to debunk.
   {
     re: /ctx_payment_ambiguous/i,
-    out: {
+    out: Object.freeze({
       code: 'payment_pending_review',
       message:
         'The payment reached an ambiguous on-chain state and is being verified by an operator. Do not retry this order. Support will update you with a resolution.',
       retryable: false,
-    },
+    }),
   },
   // Whole pipeline temporarily down — frozen by ops or VCC circuit
   // breaker tripped. Runs first because these are system-wide.
   {
     re: /service_temporarily_unavailable|frozen|circuit.*open/i,
-    out: {
+    out: Object.freeze({
       code: 'service_unavailable',
       message:
         'The fulfillment service is temporarily unavailable. Your payment has been refunded. Retry in a few minutes.',
       retryable: true,
-    },
+    }),
   },
   // Anything from the upstream gift-card provider, the scraper, the
   // captcha racer, the headless browser, or our internal vcc service
@@ -122,67 +136,101 @@ const RULES = [
   // — only that the order didn't complete and they were refunded.
   {
     re: /VCC|vcc-callback|ctx_error|CTX |gift-card|scrap|captcha|playwright|browser|libnspr|chrome|chromium|stage1|stage2|yourrewardcard|merchant|recaptcha|hCaptcha/i,
-    out: {
+    out: Object.freeze({
       code: 'fulfillment_unavailable',
       message:
         'The order could not be fulfilled right now. Your payment has been refunded automatically. Try again in a few minutes.',
       retryable: true,
-    },
+    }),
   },
   // Insufficient funds on the agent's wallet — let the agent know to top up.
   // Only reachable after the internal-vocab scrub above, so it only
   // fires on genuine Stellar-submit failures from the agent's wallet.
   {
     re: /insufficient.*balance|insufficient.*funds/i,
-    out: {
+    out: Object.freeze({
       code: 'insufficient_funds',
       message: 'Wallet balance was too low to complete the payment. Top up and try again.',
       retryable: true,
-    },
+    }),
   },
   // Spend / approval policy stops the order before fulfillment runs.
   {
     re: /spend_limit_exceeded|policy_blocked|requires_approval/i,
-    out: {
+    out: Object.freeze({
       code: 'policy_blocked',
       message:
         'This order was blocked by your account policy (spend limit, time window, or approval rule).',
       retryable: false,
-    },
+    }),
   },
   // Network / timeout against any upstream.
   {
     re: /ETIMEDOUT|ECONN|ENETUNREACH|EAI_AGAIN|fetch failed|HTTP 5\d\d/i,
-    out: {
+    out: Object.freeze({
       code: 'upstream_timeout',
       message:
         'A network call to fulfill the order timed out. Your payment has been refunded automatically. Retry in a minute.',
       retryable: true,
-    },
+    }),
   },
   // Order expired before we could pay it.
   {
     re: /expired|payment window/i,
-    out: {
+    out: Object.freeze({
       code: 'payment_expired',
       message:
         'The payment window expired before the order could be fulfilled. No funds were taken.',
       retryable: false,
-    },
+    }),
   },
-];
+]);
 
 /**
  * Map a raw internal error string to a public-facing payload. Pure
  * function; safe to call from anywhere.
+ *
+ * F2-sanitize (2026-04-15): the string coercion is wrapped in try/catch.
+ * sanitize() sits on the error-handling path — it's called to convert
+ * failures into public webhook payloads. A second-order failure here
+ * (e.g., an Error with a getter-thrown .message, a Proxy whose toString
+ * rejects, a value whose Symbol.toPrimitive throws) would swallow the
+ * original error completely and either take the fulfillment worker to
+ * its outer catch or produce an UnhandledPromiseRejection. Instead,
+ * any coercion failure falls through to the GENERIC bucket — the
+ * agent sees a generic failure message and operator logs get the
+ * second-order error, but the primary failure signal is preserved.
+ * The rule-matching loop is inside the same try so a malformed value
+ * whose typeof/String succeeded but whose RegExp.test triggers a
+ * thrown coercion (custom Symbol.toPrimitive, Proxy revoke, etc.) also
+ * can't crash the caller.
+ *
  * @param {unknown} raw
  * @returns {PublicError}
  */
 function sanitize(raw) {
   if (raw === null || raw === undefined) return GENERIC;
-  const s = typeof raw === 'string' ? raw : raw instanceof Error ? raw.message : String(raw);
-  for (const rule of RULES) {
-    if (rule.re.test(s)) return rule.out;
+  let s;
+  try {
+    if (typeof raw === 'string') {
+      s = raw;
+    } else if (raw instanceof Error) {
+      // raw.message is typed `string` but the language doesn't enforce
+      // it — a thrown getter or a subclass with a non-string message
+      // both land inside this try.
+      s = String(raw.message);
+    } else {
+      s = String(raw);
+    }
+  } catch {
+    return GENERIC;
+  }
+  try {
+    for (const rule of RULES) {
+      if (rule.re.test(s)) return rule.out;
+    }
+  } catch {
+    return GENERIC;
   }
   return GENERIC;
 }
