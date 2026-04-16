@@ -158,6 +158,19 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a typeof guard to `decryptToken` so a non-string
   `system_state.value` can't wedge the token path with an opaque
   TypeError. Audit F1/F2/F3-vcc-client.
+- **SDK onboard command — claim timeout + api_key shape check** —
+  two fixes in `sdk/src/commands/onboard.ts`. (1) **Claim fetch had no
+  timeout**. A slow or hanging backend would block the onboard command
+  forever. Unattended onboard scripts (container startup, CI
+  provisioning) would stall indefinitely with no signal. Added
+  `AbortSignal.timeout(30_000)`. (2) **api_key from the claim response
+  was persisted without control-char validation**. A MITM or
+  compromised backend returning an api_key with CRLF / NUL would have
+  the corrupt key written to `~/.cards402/config.json`. The load-time
+  check (F3-config) catches it on next run, but the current onboard
+  session's `reportStatus` calls also use the key and would crash via
+  `ERR_INVALID_CHAR`. Validate at persist time so the corrupt key never
+  touches disk. Audit F1/F2-onboard.
 - **SDK client constructor — HTTPS enforcement on all code paths** —
   `Cards402Client`'s constructor only validated the base URL via
   `assertSafeBaseUrl` when it was loaded through `resolveCredentials`

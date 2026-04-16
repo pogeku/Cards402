@@ -179,10 +179,16 @@ export async function onboardCommand(argv: string[]): Promise<number> {
     api_url: string;
   };
   try {
+    // F1-onboard (2026-04-16): 30s timeout. Pre-fix, a slow or hanging
+    // backend would block the onboard command forever. Unattended
+    // onboard scripts (container startup, CI provisioning) would stall
+    // with no signal. 30s is generous for a single POST; if the backend
+    // can't respond in that window it's almost certainly down.
     const res = await fetch(`${apiBase}/agent/claim`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code: claim }),
+      signal: AbortSignal.timeout(30_000),
     });
     const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     if (!res.ok) {
@@ -204,6 +210,22 @@ export async function onboardCommand(argv: string[]): Promise<number> {
       process.stderr.write(
         'error: claim succeeded but the response is missing api_key — aborting.\n' +
           'This is a backend bug. Report it to api@cards402.com with the response.\n',
+      );
+      return 1;
+    }
+    // F2-onboard (2026-04-16): validate the api_key for header-safe
+    // printable ASCII before persisting to config. A MITM or compromised
+    // backend that returns an api_key containing CRLF would be written
+    // to ~/.cards402/config.json and then crash every subsequent SDK
+    // call via Node's ERR_INVALID_CHAR on the X-Api-Key header. The
+    // load-time check in config.ts::loadCards402Config catches it on
+    // next run, but the current onboard session's reportStatus calls
+    // would also crash. Catch it here at persist time so the corrupt
+    // key never touches disk.
+    if (!/^[\x20-\x7e]+$/.test(data.api_key as string)) {
+      process.stderr.write(
+        'error: claim response contains an api_key with non-printable characters.\n' +
+          'This may indicate a man-in-the-middle or a corrupted backend response. Aborting.\n',
       );
       return 1;
     }
