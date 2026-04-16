@@ -31,6 +31,16 @@ const REGISTRY_URL = 'https://registry.npmjs.org/cards402/latest';
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const FETCH_TIMEOUT_MS = 2_000;
 const STATE_FILE = path.join(os.homedir(), '.cards402', 'version-check.json');
+// F1-version-check (2026-04-16): cap on local state file. Matches the
+// 16 KB pattern from config.ts and purchase.ts. The state file is
+// normally <200 bytes; anything larger is corruption or tampering.
+const MAX_STATE_BYTES = 16 * 1024;
+// F2-version-check (2026-04-16): cap on the npm registry response body.
+// The /latest endpoint returns a package manifest — normally ~2 KB for
+// cards402. A hostile server (DNS hijack, MITM, compromised CDN) could
+// push megabytes within the 2s abort window. 64 KB is generous for any
+// legitimate manifest and bounds memory consumption.
+const MAX_REGISTRY_BODY_BYTES = 64 * 1024;
 
 interface CheckState {
   last_checked_at: string; // ISO
@@ -49,6 +59,11 @@ function readLocalVersion(): string | null {
 
 function readState(): CheckState | null {
   try {
+    // F1-version-check: size cap before readFileSync. A multi-GB state
+    // file (corruption, symlink) would OOM the process on every CLI
+    // invocation since checkForUpdates fires at startup for every command.
+    const stat = fs.statSync(STATE_FILE);
+    if (stat.size > MAX_STATE_BYTES) return null;
     const raw = fs.readFileSync(STATE_FILE, 'utf8');
     return JSON.parse(raw) as CheckState;
   } catch {
@@ -132,7 +147,16 @@ export function checkForUpdates(): void {
       const res = await fetch(REGISTRY_URL, { signal: ctrl.signal });
       clearTimeout(timer);
       if (!res.ok) return;
-      const body = (await res.json()) as { version?: string };
+      // F2-version-check: read the body as text with a length cap
+      // before JSON.parse. The 2s abort limits wall time but NOT data
+      // volume — a fast hostile server can push ~200 MB through a
+      // gigabit link in 2 seconds. res.json() loads the entire body
+      // into a string before parsing, so a multi-MB response fills
+      // memory. Cap at MAX_REGISTRY_BODY_BYTES and discard anything
+      // larger — a legitimate npm /latest manifest is ~2 KB.
+      const text = await res.text();
+      if (text.length > MAX_REGISTRY_BODY_BYTES) return;
+      const body = JSON.parse(text) as { version?: string };
       const latest = body?.version;
       if (!latest) return;
       writeState({ last_checked_at: new Date().toISOString(), latest_seen: latest });

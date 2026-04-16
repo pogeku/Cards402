@@ -158,6 +158,18 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a typeof guard to `decryptToken` so a non-string
   `system_state.value` can't wedge the token path with an opaque
   TypeError. Audit F1/F2/F3-vcc-client.
+- **SDK version-check — state file + registry response body caps** —
+  two fixes in `sdk/src/version-check.ts`. (1) `readState` had no
+  file-size cap — a multi-GB `~/.cards402/version-check.json` would
+  OOM the process on every CLI invocation since `checkForUpdates`
+  fires at startup. Added 16 KB cap matching config.ts/purchase.ts.
+  (2) The npm registry `fetch` had no response body cap. The 2s
+  `AbortController` timeout limits wall time but NOT data volume — a
+  hostile server (DNS hijack, MITM, compromised CDN edge) can push
+  ~200 MB in 2s over gigabit. `res.json()` loads the entire body
+  before parsing, so memory fills before the abort fires. Now reads
+  `res.text()` first and checks `.length` against a 64 KB cap before
+  parsing. Audit F1/F2-version-check.
 - **SDK purchase command — last-order size cap + save warning +
   temp suffix** — three fixes in `sdk/src/commands/purchase.ts`.
   (1) `loadLastOrder` had no size cap. A multi-GB `~/.cards402/last-order`
