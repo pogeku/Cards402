@@ -158,6 +158,27 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a typeof guard to `decryptToken` so a non-string
   `system_state.value` can't wedge the token path with an opaque
   TypeError. Audit F1/F2/F3-vcc-client.
+- **Background job loop hardened** — two fixes in src/jobs.js. (1)
+  **Validated interval env vars**. `FUNDING_CHECK_INTERVAL_MS` and
+  `ALERT_INTERVAL_MS` were previously parsed with
+  `parseInt(process.env.X || default, 10)` which silently produced
+  `NaN` for any non-numeric value. Per the Node docs,
+  `setInterval(fn, NaN)` clamps to **1 ms** — so a single env-var
+  typo like `FUNDING_CHECK_INTERVAL_MS=abc` would fire the
+  funding-check callback ~1000 times per second, saturating CPU and
+  hammering Horizon. Added a `parsePositiveMs()` helper that clamps
+  to `[1s, 24h]`, falls back to the caller default on any invalid
+  value, and emits a dedup'd one-shot `console.warn` per offending
+  env var. (2) **Isolated sub-job failures**. `runJobs()` used to
+  wrap its 12 sub-jobs in one outer try/catch — so the first job to
+  throw (corrupt row, DB lock, transient VCC error) would exit the
+  function and skip every subsequent job for the entire life of the
+  process. One bad row in `expireStaleOrders` could wedge webhook
+  retries, pruning, card expiry, and everything else. Added a
+  `_runSubJob(name, fn)` helper that wraps each sub-job in its own
+  try/catch + `jobs.subjob_failed` bizEvent. Every sub-job now runs
+  independently; a failure logs + alerts and the chain continues.
+  Audit F1/F2-jobs.
 - **Process-level handlers hardened** — two fixes in src/index.js
   (the production entrypoint). (1) **SIGHUP is now handled** — SIGINT
   and SIGTERM were routed to the graceful-shutdown path but SIGHUP

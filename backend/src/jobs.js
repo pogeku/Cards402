@@ -46,6 +46,47 @@ function log(msg) {
   console.log(`[jobs] ${msg}`);
 }
 
+// F1-jobs (2026-04-16): validate env-configurable setInterval delays.
+// Pre-fix, `parseInt(process.env.FUNDING_CHECK_INTERVAL_MS || '15000', 10)`
+// silently produced NaN on any non-numeric value. Per Node docs,
+// setInterval(fn, NaN) clamps the delay to 1ms — meaning a single
+// env-var typo like `FUNDING_CHECK_INTERVAL_MS=abc` would fire the
+// funding-check callback ~1000 times per second, saturating CPU and
+// hammering Horizon. Real DoS from a deploy mistake.
+//
+// This helper validates the parsed value is a finite integer within
+// [minMs, maxMs]; falls back to defaultMs on anything else, with a
+// one-shot console.warn so ops sees the bad config.
+const _warnedEnvVars = new Set();
+/**
+ * @param {string} envVarName
+ * @param {number} defaultMs
+ * @param {number} [minMs]  clamp floor; default 1000 (1s)
+ * @param {number} [maxMs]  clamp ceiling; default 24h
+ */
+function parsePositiveMs(envVarName, defaultMs, minMs = 1000, maxMs = 24 * 60 * 60 * 1000) {
+  const raw = process.env[envVarName];
+  if (raw === undefined || raw === '') return defaultMs;
+  const parsed = parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < minMs || parsed > maxMs) {
+    if (!_warnedEnvVars.has(envVarName)) {
+      _warnedEnvVars.add(envVarName);
+      console.warn(
+        `[jobs] ${envVarName}=${JSON.stringify(raw)} is not a valid integer in ` +
+          `[${minMs}, ${maxMs}] ms — falling back to default ${defaultMs}ms.`,
+      );
+    }
+    return defaultMs;
+  }
+  return parsed;
+}
+
+// Test-only: reset the env-warn dedup cache. Not part of the public
+// contract.
+function _resetParsePositiveMsState() {
+  _warnedEnvVars.clear();
+}
+
 // Sentinel return from callPayCtxOrderWithAmbiguousPark — signals to the
 // caller that the ambiguous-outcome branch ran, the row was parked, and
 // the caller MUST NOT proceed to mark xlm_sent_at (which would unpark
@@ -915,6 +956,34 @@ async function checkAgentFundingStatus() {
 // manual testing. Simple in-memory boolean guard closes the window.
 let jobsRunning = false;
 
+// F2-jobs (2026-04-16): run a single sub-job inside an isolating
+// try/catch + bizEvent + console.error. Pre-fix, runJobs wrapped the
+// entire chain of 12 sub-jobs in one try/catch — so the FIRST job to
+// throw (corrupt row, DB lock, transient VCC error) exited the
+// function and silently skipped every subsequent job in the chain.
+// One broken row in expireStaleOrders could wedge webhook retries,
+// pruning, card expiry, etc. for the entire process lifetime. Now
+// every sub-job runs under its own guard and an emitted
+// `jobs.subjob_failed` bizEvent so ops alerting pipelines see the
+// pattern before it becomes a midnight outage.
+async function _runSubJob(name, fn) {
+  try {
+    await fn();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[jobs] ${name} failed: ${msg}`);
+    try {
+      const { event: bizEvent } = require('./lib/logger');
+      bizEvent('jobs.subjob_failed', {
+        subjob: name,
+        error: msg,
+      });
+    } catch {
+      /* observability must never crash the job loop */
+    }
+  }
+}
+
 async function runJobs() {
   if (jobsRunning) {
     log('previous tick still in flight — skipping');
@@ -922,20 +991,22 @@ async function runJobs() {
   }
   jobsRunning = true;
   try {
-    await expireStaleOrders();
-    expireApprovalRequests();
-    await reconcileOrderingFulfillment();
-    await recoverStuckOrders();
-    await retryWebhooks();
-    pruneIdempotencyKeys();
-    pruneExpiredSessions();
-    pruneExpiredAuthCodes();
-    pruneExpiredAgentClaims();
-    pruneWebhookDeliveries();
-    prunePolicyDecisions();
-    purgeOldCards();
-  } catch (err) {
-    console.error(`[jobs] unhandled error: ${err.message}`);
+    // F2-jobs: each sub-job runs independently so one failure can't
+    // block the rest of the chain. Intentionally sequential (not
+    // parallel) because several of these hold brief write locks and
+    // we don't want them racing each other for BEGIN IMMEDIATE.
+    await _runSubJob('expireStaleOrders', expireStaleOrders);
+    await _runSubJob('expireApprovalRequests', async () => expireApprovalRequests());
+    await _runSubJob('reconcileOrderingFulfillment', reconcileOrderingFulfillment);
+    await _runSubJob('recoverStuckOrders', recoverStuckOrders);
+    await _runSubJob('retryWebhooks', retryWebhooks);
+    await _runSubJob('pruneIdempotencyKeys', async () => pruneIdempotencyKeys());
+    await _runSubJob('pruneExpiredSessions', async () => pruneExpiredSessions());
+    await _runSubJob('pruneExpiredAuthCodes', async () => pruneExpiredAuthCodes());
+    await _runSubJob('pruneExpiredAgentClaims', async () => pruneExpiredAgentClaims());
+    await _runSubJob('pruneWebhookDeliveries', async () => pruneWebhookDeliveries());
+    await _runSubJob('prunePolicyDecisions', async () => prunePolicyDecisions());
+    await _runSubJob('purgeOldCards', async () => purgeOldCards());
   } finally {
     jobsRunning = false;
   }
@@ -977,15 +1048,20 @@ function startJobs() {
   // actively waiting for the dashboard pill to flip after depositing.
   // Horizon is cheap, the query is bounded (only awaiting_funding rows),
   // and the emitted SSE event pushes to any open dashboard immediately.
-  const FUNDING_INTERVAL_MS = parseInt(process.env.FUNDING_CHECK_INTERVAL_MS || '15000', 10);
+  //
+  // F1-jobs: parsePositiveMs clamps to [1s, 24h] and falls back to the
+  // default on any invalid value with a one-shot ops warn. Pre-fix,
+  // a typo like `FUNDING_CHECK_INTERVAL_MS=abc` gave NaN → setInterval
+  // treated it as 1ms → CPU spin on Horizon fetches.
+  const FUNDING_INTERVAL_MS = parsePositiveMs('FUNDING_CHECK_INTERVAL_MS', 15_000);
   checkAgentFundingStatusGuarded();
   _jobIntervals.push(setInterval(checkAgentFundingStatusGuarded, FUNDING_INTERVAL_MS));
 
   // Alert evaluator — walks every enabled rule once a minute, fires
   // Discord on new firings, persists history. Cheap + bounded, runs in
   // the same process as everything else.
-  const ALERT_INTERVAL_MS = parseInt(process.env.ALERT_INTERVAL_MS || '60000', 10);
-  evaluateAlertsForAllDashboards().catch(() => {});
+  const ALERT_INTERVAL_MS = parsePositiveMs('ALERT_INTERVAL_MS', 60_000);
+  evaluateAlertsForAllDashboards().catch((err) => log(`alerts startup error: ${err.message}`));
   _jobIntervals.push(
     setInterval(
       () => evaluateAlertsForAllDashboards().catch((err) => log(`alerts error: ${err.message}`)),
@@ -1039,4 +1115,9 @@ module.exports = {
   pruneWebhookDeliveries,
   prunePolicyDecisions,
   purgeOldCards,
+  // Test-only exports for the 2026-04-16 audit hardening.
+  _parsePositiveMs: parsePositiveMs,
+  _resetParsePositiveMsState,
+  _runSubJob,
+  runJobs,
 };
