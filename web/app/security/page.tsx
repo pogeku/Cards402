@@ -33,7 +33,7 @@ const PILLARS = [
   {
     eyebrow: 'Onboarding',
     title: 'Claim codes instead of raw keys.',
-    body: "The cards402 CLI mints single-use claim codes so operators never paste API keys into LLM context. The claim is exchanged for a key on the agent's machine, over TLS, and invalidated after use. No credential lives in the transcript.",
+    body: 'The cards402 dashboard mints single-use claim codes so operators never paste API keys into LLM context. The agent redeems the code for a key on its own machine, over TLS, and the code is invalidated after use. No credential lives in the transcript.',
   },
   {
     eyebrow: 'Webhooks',

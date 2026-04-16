@@ -53,7 +53,7 @@ backend; older drafts of this doc said otherwise (see audit F14).
     "contract_id": "C...",                      ← Cards402 receiver contract ID
     "order_id": "uuid",                         ← pass this to the contract call
     "usdc": {
-      "amount": "25.00",                        ← USDC amount (7-decimal string)
+      "amount": "25.00",                        ← USDC amount (decimal string)
       "asset": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
     },
     "xlm": { "amount": "161.2903226" }          ← XLM quote, always present
@@ -265,7 +265,7 @@ Cards402 agents use OWS (Open Wallet Standard) — keys are stored encrypted in 
 4. **Run `setup_wallet` again** — the USDC trustline is added automatically once the account has XLM. No manual trustline step needed.
 5. **Fund with USDC** (if paying with USDC) — or just top up XLM to pay with native XLM. The asset choice happens at payment time (`pay_usdc` vs `pay_xlm` on the receiver contract), not at order creation.
 
-The vault file lives at `~/.ows/vault` by default. Set `OWS_VAULT_PATH` to override.
+The vault file lives at `~/.ows/wallets/<name>.vault` by default. Set `OWS_VAULT_PATH` to override.
 
 ## MCP server
 

@@ -238,7 +238,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         `  OWS_WALLET_PASSPHRASE — encryption passphrase (${OWS_WALLET_PASSPHRASE ? 'set' : 'not set'})`,
       );
       lines.push(
-        `  OWS_VAULT_PATH        — vault file path (${OWS_VAULT_PATH ?? 'default: ~/.ows/vault'})`,
+        `  OWS_VAULT_PATH        — vault file path (${OWS_VAULT_PATH ?? 'default: ~/.ows/wallets/'})`,
       );
       lines.push('  CARDS402_API_KEY      — your cards402 API key');
 

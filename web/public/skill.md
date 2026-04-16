@@ -51,9 +51,9 @@ Your agent still needs to fund the wallet. The exact sequence matters:
 **Step 1 — fund with XLM.** Ask the operator to send **at least 2 XLM**
 to the public key the command printed. The breakdown:
 
-- 1 XLM — Stellar base account reserve (required to activate the account)
+- 1 XLM — Stellar minimum account balance (2 × 0.5 XLM base reserve)
 - 0.5 XLM — reserve for the USDC trustline subentry (added in step 2)
-- ~1 XLM — headroom for Stellar fees + any future operations
+- ~0.5 XLM — headroom for Stellar fees + any future operations
 
 Check the balance any time with:
 
@@ -194,12 +194,13 @@ Cards402 is designed to run without a human, but you should escalate if:
 
 ## A note on trust
 
-Cards402 does not store API keys in plaintext — they're hashed with a random
-salt before they touch the database. The backend cannot recover a key; only
-you hold the usable bearer token. Treat it like a wallet private key.
-Similarly, the Stellar wallet you bind during onboarding lives in an
-encrypted OWS vault on the machine running the SDK. Cards402 never sees or
-touches the secret.
+Cards402 does not store API keys in plaintext — they are hashed (bcrypt)
+before they touch the database. The raw key is never returned to the
+dashboard or logged; it is delivered to the agent exactly once during
+claim-code redemption over TLS, then the sealed payload is wiped.
+Treat your key like a wallet private key. Similarly, the Stellar wallet
+you bind during onboarding lives in an encrypted OWS vault on the machine
+running the SDK. Cards402 never sees or touches the secret.
 
 If you ever need to revoke an agent's access, open
 <https://cards402.com/dashboard>, go to the **Agents** tab, and click
