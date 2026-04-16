@@ -34,6 +34,14 @@ type Post = {
 
 const PUBLISHED: Post[] = [
   {
+    date: '2026-04-16',
+    slug: 'what-we-found-auditing-our-own-code',
+    title: 'What we found auditing our own code',
+    excerpt:
+      '~95 commits in two days: treasury-loss races, silent auth bypasses, circuit breaker defeats, and 550 new tests. A walkthrough of the worst bugs, the three recurring patterns behind them, and what the audit did not cover.',
+    tags: ['security', 'engineering'],
+  },
+  {
     date: '2026-04-14',
     slug: 'claim-codes-credentials-that-never-touch-the-transcript',
     title: 'Claim codes: credentials that never touch the transcript',
