@@ -7,6 +7,18 @@ const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'cards402.db')
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+// F1-db (2026-04-16): busy_timeout gives concurrent writers time to wait
+// for the lock instead of failing immediately with SQLITE_BUSY. WAL mode
+// (set above) helps reads-during-writes but does NOT help writer-vs-writer
+// contention. better-sqlite3's default is 0ms — meaning any concurrent
+// write (a background job holding the lock while a route handler tries to
+// INSERT, or vice versa) throws SQLITE_BUSY immediately and cascades to
+// a 500. 5 seconds is generous for a single-node deployment where write
+// transactions are sub-millisecond; it only matters under sustained
+// concurrency (webhook retry + reconcile + order creation all in the
+// same tick). The alternative — letting every transient lock contention
+// surface as a user-visible 500 — is worse by a large margin.
+db.pragma('busy_timeout = 5000');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS orders (
@@ -118,10 +130,32 @@ function getSchemaVersion() {
   return row?.v ?? 0;
 }
 
+// F2-db (2026-04-16): wrap the migration body + the schema_migrations
+// INSERT in a single transaction. Pre-fix, `fn()` ran outside a
+// transaction; if it threw partway through (corrupt data, disk full,
+// a future non-idempotent transform), the INSERT into schema_migrations
+// never ran but the DDL changes (CREATE TABLE, ALTER TABLE) had already
+// committed to SQLite's autocommit. On restart, getSchemaVersion()
+// still returned the previous version and the migration re-ran,
+// potentially applying the non-idempotent transform a second time.
+//
+// All current migrations are idempotent (IF NOT EXISTS, caught ALTER
+// TABLE), so partial-run is benign today. But any future migration
+// with a DELETE + re-INSERT, a data-type conversion, or a backfill
+// computation would not be safe. The transaction makes the guarantee
+// explicit: either the migration AND the version marker both commit,
+// or neither does and the restart re-runs the migration cleanly.
+//
+// Note: SQLite DDL statements (CREATE TABLE, ALTER TABLE) are
+// transactional in SQLite (unlike most other databases), so the
+// transaction correctly covers both the schema changes and the data
+// changes in one atomic unit.
 function applyMigration(version, fn) {
   if (getSchemaVersion() >= version) return;
-  fn();
-  db.prepare(`INSERT INTO schema_migrations (version) VALUES (?)`).run(version);
+  db.transaction(() => {
+    fn();
+    db.prepare(`INSERT INTO schema_migrations (version) VALUES (?)`).run(version);
+  })();
 }
 
 // Migration 1: columns added to initial schema

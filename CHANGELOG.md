@@ -158,6 +158,23 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a typeof guard to `decryptToken` so a non-string
   `system_state.value` can't wedge the token path with an opaque
   TypeError. Audit F1/F2/F3-vcc-client.
+- **SQLite busy_timeout + transactional migrations** — two fixes in
+  `src/db.js`. (1) Added `PRAGMA busy_timeout = 5000`. better-sqlite3's
+  default is 0ms — any concurrent writer that tried to acquire the
+  write lock while it was held got `SQLITE_BUSY` immediately and
+  threw through Express as a 500. WAL mode (already set) helps
+  reads-during-writes but does NOT help writer-vs-writer contention.
+  5 seconds gives concurrent writes (background job + route handler
+  racing for the lock) time to wait instead of failing. (2) Wrapped
+  `applyMigration(version, fn)` in a `db.transaction()`. Pre-fix,
+  a migration that threw partway through would leave the DDL changes
+  committed (SQLite autocommit) but the `schema_migrations` INSERT
+  never ran — so on restart the migration re-ran, potentially
+  re-applying a non-idempotent data transform. All current migrations
+  are idempotent (IF NOT EXISTS + caught ALTER TABLE), but wrapping
+  in a transaction makes the guarantee explicit for future migrations:
+  either the migration AND the version marker both commit, or neither
+  does. Audit F1/F2-db.
 - **Auth routes token extraction hardened** — `/auth/logout` and
   `/auth/me` extract the Bearer token themselves (they bypass the
   `requireAuth` middleware). Pre-fix they had the same two bugs that
