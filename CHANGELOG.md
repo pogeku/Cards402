@@ -158,6 +158,17 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a typeof guard to `decryptToken` so a non-string
   `system_state.value` can't wedge the token path with an opaque
   TypeError. Audit F1/F2/F3-vcc-client.
+- **SDK client constructor — HTTPS enforcement on all code paths** —
+  `Cards402Client`'s constructor only validated the base URL via
+  `assertSafeBaseUrl` when it was loaded through `resolveCredentials`
+  (config file / env var path). When `baseUrl` was passed **explicitly**
+  — which is what `mcp.ts`, `stellar.ts`, `ows.ts`, and every example
+  in the docs do — the validation was completely skipped. An `http://`
+  or `ftp://` URL was used as-is and the agent's API key was sent over
+  plaintext on every request. Fix validates `baseUrl` unconditionally
+  in the constructor, with a try/catch fallthrough for browser bundles
+  where `config.ts` (which exports `assertSafeBaseUrl`) may not be
+  available. Audit F1-client-constructor / F1-mcp.
 - **SDK config loader — Windows size cap + api_key shape validation** —
   two fixes in `sdk/src/config.ts`. (1) **Windows agents skipped the
   size cap**. Pre-fix, the entire security-check block (symlink,

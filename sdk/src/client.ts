@@ -185,7 +185,33 @@ export class Cards402Client {
       }
     }
     if (!resolvedKey || !resolvedKey.trim()) throw new AuthErrorCtor();
-    this.baseUrl = (resolvedBase || 'https://api.cards402.com/v1').replace(/\/$/, '');
+    // F1-client-constructor (2026-04-16): validate baseUrl unconditionally.
+    // Pre-fix, assertSafeBaseUrl only ran inside resolveCredentials —
+    // which is skipped entirely when both apiKey and baseUrl are passed
+    // explicitly (the common case for MCP, CLI purchase, and OWS callers).
+    // An http:// or ftp:// URL would be used as-is, sending the agent's
+    // API key over plaintext. Now every code path is covered.
+    const finalBase = resolvedBase || 'https://api.cards402.com/v1';
+    try {
+      // Lazy-require to avoid circular deps in the browser-bundle path
+      // where config.ts isn't available. If assertSafeBaseUrl isn't
+      // loadable (browser, bundler that tree-shook config.ts), fall
+      // through to the bare URL — the same behaviour as before the fix,
+      // which is correct for environments without a filesystem.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { assertSafeBaseUrl } = require('./config') as {
+        assertSafeBaseUrl: (url: string, opts?: { context?: string }) => string;
+      };
+      assertSafeBaseUrl(finalBase, { context: 'Cards402Client constructor' });
+    } catch (err) {
+      // Re-throw URL-safety rejections (non-HTTPS, userinfo, etc.)
+      // but swallow "module not found" errors from environments where
+      // config.ts isn't bundled.
+      if (err instanceof Error && !err.message.includes('Cannot find module')) {
+        throw err;
+      }
+    }
+    this.baseUrl = finalBase.replace(/\/$/, '');
     this.apiKey = resolvedKey;
     // Audit A-23: default to retry on transient errors so every agent doesn't
     // reimplement its own backoff loop. 2 retries with 500ms base + 5s cap
