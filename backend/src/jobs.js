@@ -3,6 +3,7 @@
 // Handles order expiry, stuck-order recovery, and unmatched payment refunds.
 
 const db = require('./db');
+const logger = require('./lib/logger');
 const {
   fireWebhook,
   WEBHOOK_RETRY_DELAYS_MS,
@@ -122,7 +123,7 @@ async function callPayCtxOrderWithAmbiguousPark(paymentUrl, opts, orderId, short
     const txHash = /** @type {any} */ (err)?.txHash;
     if ((status === 'unknown' || status === 'applied_failed') && txHash) {
       const { publicMessage } = require('./lib/sanitize-error');
-      const { event: bizEvent } = require('./lib/logger');
+
       db.prepare(
         `UPDATE orders
          SET status = 'failed',
@@ -131,7 +132,7 @@ async function callPayCtxOrderWithAmbiguousPark(paymentUrl, opts, orderId, short
              updated_at = ?
          WHERE id = ?`,
       ).run(publicMessage('ctx_payment_ambiguous'), txHash, new Date().toISOString(), orderId);
-      bizEvent('ctx.payment_ambiguous', {
+      logger.event('ctx.payment_ambiguous', {
         order_id: orderId,
         stellar_status: status,
         tx_hash: txHash,
@@ -310,8 +311,7 @@ async function reconcileOrderingFulfillment() {
           // recoverStuckOrders is being starved out because the
           // updated_at gets bumped before its 10-min cutoff kicks in.
           if (vccStatus === 'delivered') {
-            const { event: bizEvent } = require('./lib/logger');
-            bizEvent('order.stuck_delivered', {
+            logger.event('order.stuck_delivered', {
               order_id: order.id,
               vcc_job_id: order.vcc_job_id,
               age_minutes: Math.round((Date.now() - Date.parse(order.updated_at)) / 60000),
@@ -355,11 +355,11 @@ async function reconcileOrderingFulfillment() {
         // Another path won the race — most commonly vcc-callback
         // flipping to 'delivered'. Log loudly so ops can correlate
         // the near-miss with the delivery callback.
-        const { event: bizEvent } = require('./lib/logger');
+
         log(
           `  ${shortId} → hard-fail aborted: row left 'ordering' concurrently; refund NOT queued`,
         );
-        bizEvent('reconcile.hard_fail_raced', {
+        logger.event('reconcile.hard_fail_raced', {
           order_id: order.id,
           vcc_job_id: order.vcc_job_id,
           reason,
@@ -528,11 +528,11 @@ async function recoverStuckOrders() {
         // from vcc admin or manually recover. Nudge updated_at so we don't
         // re-alert on every 5-minute tick.
         log(`  STUCK DELIVERED ${order.id.slice(0, 8)} — vcc has card, callback lost`);
-        const { event: bizEvent } = require('./lib/logger');
+
         // `via` tags which reconciler surfaced the signal so ops can
         // tell whether reconcile's postpone branch or recoverStuckOrders
         // saw it first. Both paths now emit with identical shape.
-        bizEvent('order.stuck_delivered', {
+        logger.event('order.stuck_delivered', {
           order_id: order.id,
           vcc_job_id: order.vcc_job_id,
           age_minutes: Math.round((Date.now() - Date.parse(order.updated_at)) / 60000),
@@ -558,11 +558,10 @@ async function recoverStuckOrders() {
           )
           .run(publicMessage(vccJob.error || 'vcc_failed'), now, order.id);
         if (claimed.changes === 0) {
-          const { event: bizEvent } = require('./lib/logger');
           log(
             `  ${order.id.slice(0, 8)} → recover hard-fail aborted: row concurrently terminal; refund NOT queued`,
           );
-          bizEvent('recover.hard_fail_raced', {
+          logger.event('recover.hard_fail_raced', {
             order_id: order.id,
             vcc_job_id: order.vcc_job_id,
           });
@@ -648,10 +647,9 @@ async function retryWebhooks() {
             try {
               payload.card = openCard(orderRow);
             } catch (vaultErr) {
-              const { event: bizEvent } = require('./lib/logger');
               const vaultMsg = vaultErr instanceof Error ? vaultErr.message : String(vaultErr);
               log(`  webhook ${row.id.slice(0, 8)} abandoned: vault open failed — ${vaultMsg}`);
-              bizEvent('webhook.vault_open_failed', {
+              logger.event('webhook.vault_open_failed', {
                 id: row.id,
                 order_id: payload.order_id,
                 url: row.url,
@@ -687,8 +685,8 @@ async function retryWebhooks() {
           // querying webhook_queue directly — which is how we found the
           // outbound-TLS bug the hard way. Now ops see the count on the
           // public status endpoint and can alert on it.
-          const { event: bizEvent } = require('./lib/logger');
-          bizEvent('webhook.failed_permanently', {
+
+          logger.event('webhook.failed_permanently', {
             id: row.id,
             url: row.url,
             attempts: nextAttempts,
@@ -969,7 +967,6 @@ async function checkAgentFundingStatus() {
   if (awaiting.length === 0) return;
 
   const { emit: emitBusEvent } = require('./lib/event-bus');
-  const { event: bizEvent } = require('./lib/logger');
   const base = horizonBase();
   for (const row of awaiting) {
     try {
@@ -997,7 +994,7 @@ async function checkAgentFundingStatus() {
         // Horizon problem without spam on every awaiting row.
         if (!_horizonOutageAlerted) {
           _horizonOutageAlerted = true;
-          bizEvent('funding.horizon_error', {
+          logger.event('funding.horizon_error', {
             status: res.status,
             wallet_preview: row.wallet_public_key?.slice(0, 8) ?? null,
             awaiting_count: awaiting.length,
@@ -1012,7 +1009,7 @@ async function checkAgentFundingStatus() {
       // Success resets the outage flag so a future outage re-alerts.
       if (_horizonOutageAlerted) {
         _horizonOutageAlerted = false;
-        bizEvent('funding.horizon_recovered', {});
+        logger.event('funding.horizon_recovered', {});
       }
       const data = /** @type {any} */ (await res.json());
       const balances = Array.isArray(data.balances) ? data.balances : [];
@@ -1058,7 +1055,7 @@ async function checkAgentFundingStatus() {
       // dedup so a persistent DNS failure doesn't spam.
       if (!_horizonOutageAlerted) {
         _horizonOutageAlerted = true;
-        bizEvent('funding.horizon_error', {
+        logger.event('funding.horizon_error', {
           status: 'exception',
           error: err instanceof Error ? err.message : String(err),
           awaiting_count: awaiting.length,
@@ -1104,8 +1101,7 @@ async function _runSubJob(name, fn) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[jobs] ${name} failed: ${msg}`);
     try {
-      const { event: bizEvent } = require('./lib/logger');
-      bizEvent('jobs.subjob_failed', {
+      logger.event('jobs.subjob_failed', {
         subjob: name,
         error: msg,
       });

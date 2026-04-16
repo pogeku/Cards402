@@ -40,8 +40,8 @@ const MAX_LIST_OFFSET = 10_000;
  * @property {string} [resourceType] e.g. 'agent'
  * @property {string} [resourceId]   e.g. the agent id
  * @property {Record<string, unknown>} [details]
- * @property {string} [ip]
- * @property {string} [userAgent]
+ * @property {string | string[] | null} [ip]
+ * @property {string | string[] | null} [userAgent]
  */
 
 const insertStmt = db.prepare(`

@@ -8,6 +8,8 @@ description = "Test fixtures, obvious placeholders, and acknowledged historic le
 
 paths = [
   '''backend/test/helpers/env\.js''',
+  '''backend/test/unit/env\.test\.js''',
+  '''sdk/src/__tests__/pay-retry\.test\.ts''',
   '''\.github/workflows/e2e-cross-repo\.yml''',
 ]
 

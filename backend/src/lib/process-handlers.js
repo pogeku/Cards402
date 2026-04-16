@@ -46,21 +46,25 @@ function formatRejection(reason) {
     isError = false;
   }
   if (isError) {
+    // TS can't narrow `reason` from `unknown` to `Error` because the
+    // instanceof is wrapped in a try/catch above. The cast is safe —
+    // isError is only true when instanceof succeeded.
+    const err = /** @type {Error} */ (reason);
     let message;
     try {
-      message = typeof reason.message === 'string' ? reason.message.slice(0, 512) : '';
+      message = typeof err.message === 'string' ? err.message.slice(0, 512) : '';
     } catch {
       message = '<unstringifiable message>';
     }
     let stack = null;
     try {
-      if (typeof reason.stack === 'string') stack = reason.stack.slice(0, 2048);
+      if (typeof err.stack === 'string') stack = err.stack.slice(0, 2048);
     } catch {
       /* ignored — stack getter may throw on exotic subclasses */
     }
     return {
       type: 'error',
-      name: reason.name || 'Error',
+      name: err.name || 'Error',
       message,
       stack,
     };
