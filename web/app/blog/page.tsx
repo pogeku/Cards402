@@ -82,7 +82,7 @@ export default function BlogIndexPage() {
     <>
       <PageHero
         eyebrow="Blog"
-        title="Engineering honest writing from the"
+        title="Honest writing directly from our engineering"
         accent="team"
         intro="We don’t do content marketing. When we publish, it’s because we built something interesting or shipped something worth understanding. Every post cross-posts to the changelog RSS."
       />
