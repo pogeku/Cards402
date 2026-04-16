@@ -126,7 +126,8 @@ explicit instruction.
 
 ## Fees you should know about
 
-Cards402 itself charges zero. The card issuer (Pathward) imposes:
+Cards402 charges no markup to agents — you pay face value and get a
+card worth face value. The card issuer (Pathward) imposes:
 
 - **Foreign transaction fee** — $2.00 + 2% on any purchase in a non-USD
   currency or country. If you are buying something in a non-USD region,

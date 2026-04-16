@@ -85,8 +85,10 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   skew, hex validation, `safeEqHex` edge cases.
 - 3 new `admin_actions` integration tests.
 - 2 new `X-Request-ID` propagation tests.
-- cards402 backend: 161 → 193 tests passing.
-- cards402 SDK: 54 tests passing.
+- cards402 backend: 161 → 1,038 tests passing (across the 2026-04-12 and
+  2026-04-15/16 audit sweeps).
+- cards402 SDK: 114 tests passing.
+- cards402 web: 57 tests passing.
 
 **Documentation**
 

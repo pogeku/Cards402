@@ -34,18 +34,17 @@ npm run dev               # starts on :5000
 
 ## Running tests
 
-| Scope                      | Command                     |
-| -------------------------- | --------------------------- |
-| Backend unit + integration | `cd backend && npm test`    |
-| SDK (vitest)               | `cd sdk && npm test`        |
-| Contract (cargo)           | `cd contract && cargo test` |
-| Web (vitest + playwright)  | `cd web && npm test`        |
-| All workspaces             | `npm test` (from repo root) |
+| Scope                      | Command                     | Count  |
+| -------------------------- | --------------------------- | ------ |
+| Backend unit + integration | `cd backend && npm test`    | 1,038  |
+| SDK (vitest)               | `cd sdk && npm test`        | 114    |
+| Web (vitest)               | `cd web && npm test`        | 57     |
+| Contract (cargo)           | `cd contract && cargo test` | —      |
+| All workspaces             | `npm test` (from repo root) | ~1,209 |
 
-Tests should be fast (whole backend suite < 1s) and never hit real
-Stellar / CTX. End-to-end "real money, real Stellar, real scraper" tests
-live in `backend/test-batch-e2e.js` — run manually for release validation,
-never in CI.
+Tests should be fast (whole backend suite ~1.5s, in-memory SQLite) and
+never hit real Stellar / CTX. End-to-end "real money, real Stellar, real
+scraper" tests are run manually for release validation, never in CI.
 
 ## Style
 

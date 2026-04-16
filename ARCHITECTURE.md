@@ -6,18 +6,20 @@ cards402 is an agentic virtual-card service. AI agents pay USDC or XLM to a
 Soroban receiver contract on Stellar; cards402 detects the on-chain payment,
 orchestrates card procurement through a separate fulfillment service
 (**vcc**), and returns the Visa prepaid card details (PAN, CVV, expiry) to
-the agent. No fees. 1:1 USDC → card value.
+the agent. Agents pay face value (1:1 USDC → card value, zero markup).
+The operator retains any surplus from CTX's merchant discount on the
+upstream card procurement.
 
-The system is **two cooperating services plus an open-source SDK**:
+The system is **two cooperating services plus an open-source SDK** —
+everything in this repo is open source:
 
-| Component                                           | Repo / Directory                         | Role                                                                                              |
-| --------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| **cards402 backend** (closed source)                | `backend/` in this repo — ignored by git | Agent-facing HTTP API, Soroban event watcher, order state machine, admin/dashboard, policy engine |
-| **cards402 web** (open source)                      | `web/`                                   | Marketing site, docs, admin dashboard                                                             |
-| **cards402 SDK** (open source)                      | `sdk/`                                   | TypeScript client, OWS-wallet helpers, MCP server                                                 |
-| **cards402 contract** (open source)                 | `contract/`                              | Soroban receiver contract (Rust) — agents pay this                                                |
-| **vcc api** (separate repo at `~/code/vcc/api`)     | —                                        | Fulfillment engine: CTX gift-card ordering + claim scraping + HMAC callback to cards402           |
-| **vcc admin** (separate repo at `~/code/vcc/admin`) | —                                        | Ops dashboard for vcc                                                                             |
+| Component             | Directory     | Role                                                                                        |
+| --------------------- | ------------- | ------------------------------------------------------------------------------------------- |
+| **cards402 backend**  | `backend/`    | Agent-facing HTTP API, Soroban event watcher, order state machine, dashboard, policy engine |
+| **cards402 web**      | `web/`        | Next.js marketing site, docs, operator dashboard                                            |
+| **cards402 SDK**      | `sdk/`        | TypeScript client, CLI, OWS-wallet helpers, MCP server                                      |
+| **cards402 contract** | `contract/`   | Soroban receiver contract (Rust) — agents pay this                                          |
+| **vcc** (private)     | separate repo | Fulfillment engine: CTX gift-card ordering + claim scraping + HMAC callback to cards402     |
 
 ---
 
@@ -46,7 +48,7 @@ cards402/
 │   ├── app/admin/             operator dashboard
 │   ├── app/dashboard/         per-tenant dashboard
 │   └── middleware.ts
-└── backend/                 ← closed source, not committed
+└── backend/                 ← Node.js/Express API server
     └── src/
         ├── index.js             entry point — boots Soroban watcher + jobs + Express
         ├── app.js               Express app, CORS, rate limiting, route mounting
