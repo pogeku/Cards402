@@ -130,7 +130,7 @@ export async function payViaContract(opts: PayOpts): Promise<string> {
   });
 
   tx.sign(keypair);
-  return submitSorobanTx(tx, server);
+  return submitSorobanTx(tx, server, getHorizonUrl(networkPassphrase));
 }
 
 /**

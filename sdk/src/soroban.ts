@@ -18,9 +18,20 @@ import {
 
 const MAINNET_RPC = 'https://mainnet.sorobanrpc.com';
 const TESTNET_RPC = 'https://soroban-testnet.stellar.org';
+const MAINNET_HORIZON = 'https://horizon.stellar.org';
+const TESTNET_HORIZON = 'https://horizon-testnet.stellar.org';
 
 export function getSorobanRpcUrl(networkPassphrase: string): string {
   return networkPassphrase === Networks.TESTNET ? TESTNET_RPC : MAINNET_RPC;
+}
+
+// F3-soroban (2026-04-16): network-aware Horizon URL. Pre-fix, every
+// Horizon fallback in submitSorobanTx was hardcoded to mainnet.
+// Testnet agents got 404s from mainnet Horizon for their testnet txs,
+// which the SDK interpreted as "tx never applied" with `dropped: true`
+// — triggering the retry loop and risking a double-payment.
+export function getHorizonUrl(networkPassphrase?: string): string {
+  return networkPassphrase === Networks.TESTNET ? TESTNET_HORIZON : MAINNET_HORIZON;
 }
 
 /**
@@ -38,7 +49,16 @@ export function decimalToStroops(decimal: string): bigint {
     throw new Error(`Amount has more than 7 decimal places: ${decimal}`);
   }
   const padded = frac.padEnd(7, '0');
-  return BigInt(whole) * 10_000_000n + BigInt(padded || '0');
+  const stroops = BigInt(whole) * 10_000_000n + BigInt(padded || '0');
+  // F1-soroban (2026-04-16): reject zero amounts early. A pay_usdc(0)
+  // or pay_xlm(0) invocation costs gas, clutters the ledger with a
+  // zero-value event, and the backend watcher dead-letters it (the
+  // F4-stellar audit rejects non-positive i128 at parse time). Catching
+  // it here saves the agent gas and avoids a confusing dead-letter row.
+  if (stroops <= 0n) {
+    throw new Error(`Amount must be positive: ${decimal}`);
+  }
+  return stroops;
 }
 
 export type PaymentFn = 'pay_usdc' | 'pay_xlm';
@@ -127,7 +147,16 @@ export async function buildContractPaymentTx(
  * this function gives up before finalization, the watcher still has a
  * chance to credit the order if the tx eventually lands.
  */
-export async function submitSorobanTx(tx: Transaction, server: rpc.Server): Promise<string> {
+export async function submitSorobanTx(
+  tx: Transaction,
+  server: rpc.Server,
+  // F3-soroban (2026-04-16): callers pass the network-aware Horizon URL
+  // so the fallback checks hit the correct network. Pre-fix, all three
+  // fetch sites below were hardcoded to mainnet. Default to mainnet for
+  // backward compat — callers that don't pass this parameter get the
+  // same behaviour as before.
+  horizonUrl: string = MAINNET_HORIZON,
+): Promise<string> {
   // sendTransaction is idempotent for the same envelope. Three cases we
   // retry explicitly:
   //   - TRY_AGAIN_LATER: RPC is congested, re-send after a short wait
@@ -229,7 +258,7 @@ export async function submitSorobanTx(tx: Transaction, server: rpc.Server): Prom
       // The TX was accepted by sendTransaction; confirm via Horizon instead.
       if (String((pollErr as Error)?.message || '').includes('Bad union switch')) {
         try {
-          const horizonResp = await fetch(`https://horizon.stellar.org/transactions/${send.hash}`);
+          const horizonResp = await fetch(`${horizonUrl}/transactions/${send.hash}`);
           if (horizonResp.ok) {
             const horizonData = (await horizonResp.json()) as { successful: boolean };
             if (horizonData.successful) return send.hash;
@@ -256,7 +285,7 @@ export async function submitSorobanTx(tx: Transaction, server: rpc.Server): Prom
   // Horizon what actually happened to the tx — it's the authoritative
   // record of what hit a ledger, independent of Soroban RPC's state.
   try {
-    const horizonResp = await fetch(`https://horizon.stellar.org/transactions/${send.hash}`);
+    const horizonResp = await fetch(`${horizonUrl}/transactions/${send.hash}`);
     if (horizonResp.ok) {
       const horizonData = (await horizonResp.json()) as { successful: boolean };
       if (horizonData.successful) return send.hash;

@@ -158,6 +158,22 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a typeof guard to `decryptToken` so a non-string
   `system_state.value` can't wedge the token path with an opaque
   TypeError. Audit F1/F2/F3-vcc-client.
+- **SDK Soroban helpers — zero-amount guard + testnet Horizon fix** —
+  two fixes in `sdk/src/soroban.ts`. (1) `decimalToStroops` now rejects
+  zero amounts. Pre-fix, `'0'` and `'0.0000000'` both produced `0n`
+  and passed validation — a `pay_usdc(0)` invocation would cost gas,
+  clutter the ledger, and the backend watcher would dead-letter it.
+  (2) **Testnet double-submit risk**: `submitSorobanTx` had three
+  Horizon fallback fetches all hardcoded to `horizon.stellar.org`
+  (mainnet). On testnet, Horizon returned 404 for testnet txs → the
+  SDK set `dropped: true` → the retry loop resubmitted → potential
+  double-payment because the original tx actually landed on testnet.
+  Added a `horizonUrl` parameter (default mainnet for backward compat)
+  and wired both callers (`stellar.ts::payViaContract` and
+  `ows.ts::payViaContractOWS`) to pass the network-aware URL. Also
+  exported `getHorizonUrl(networkPassphrase)` from soroban.ts for
+  callers that need to pick the right Horizon instance.
+  Audit F1/F3-soroban.
 - **SDK client SSE parser + retry jitter** — three fixes in
   `sdk/src/client.ts` (the `Cards402Client` HTTP client every agent
   imports). (1) **SSE CRLF normalization**. The stream parser split on

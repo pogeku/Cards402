@@ -37,6 +37,7 @@ import {
   submitSorobanTx,
   decimalToStroops,
   selectContractCall,
+  getHorizonUrl,
 } from './soroban';
 
 const USDC_ISSUER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
@@ -474,7 +475,7 @@ export async function payViaContractOWS(
     signTx(tx, walletName, publicKey, passphrase, vaultPath);
 
     try {
-      return await submitTx(tx, server);
+      return await submitTx(tx, server, getHorizonUrl(networkPassphrase));
     } catch (err) {
       lastErr = err;
       const dropped = (err as Error & { dropped?: boolean })?.dropped === true;
