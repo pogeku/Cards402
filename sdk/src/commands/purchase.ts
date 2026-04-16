@@ -275,11 +275,11 @@ export async function purchaseCommand(argv: string[]): Promise<number> {
   }
   if (args.amount) {
     // Bounds mirror backend/src/api/orders.js and the MCP tool: decimal
-    // string with ≤7 fractional digits, min $0.01, max $10,000. Fail
+    // string with ≤2 fractional digits, min $0.01, max $10,000. Fail
     // locally so the CLI gives a specific error instead of a backend 400.
-    if (!/^\d+(\.\d{1,7})?$/.test(args.amount)) {
+    if (!/^\d+(\.\d{1,2})?$/.test(args.amount)) {
       process.stderr.write(
-        `error: --amount must be a decimal string with up to 7 decimal places (got: ${args.amount})\n`,
+        `error: --amount must be a decimal string with up to 2 decimal places (got: ${args.amount})\n`,
       );
       return 2;
     }

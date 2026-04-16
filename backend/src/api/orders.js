@@ -745,6 +745,7 @@ function buildOrderResponse(order) {
     status: order.status,
     phase: PHASE[order.status] ?? 'processing',
     amount_usdc: order.amount_usdc,
+    payment_asset: order.payment_asset,
     created_at: order.created_at,
     updated_at: order.updated_at,
   };
@@ -1148,7 +1149,9 @@ async function checkSpendAlert(apiKeyId, newAmount) {
         )
         .get(apiKeyId)
     );
-    const spentToday = parseFloat(row.total) + parseFloat(newAmount);
+    // The SUM already includes the just-inserted order, so don't add
+    // newAmount again — that would double-count the current order.
+    const spentToday = parseFloat(row.total);
     const pct = Math.floor((spentToday / limit) * 100);
     const today = new Date().toISOString().slice(0, 10);
     for (const threshold of THRESHOLDS) {

@@ -271,18 +271,26 @@ async function getInvoice(orderId, amountUsdc, requestId = null, callbackNonce =
   };
   if (requestId) headers['X-Request-ID'] = requestId;
 
-  const res = await fetch(`${VCC_API_BASE}/api/jobs/invoice`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      order_id: orderId,
-      amount_usdc: amountUsdc,
-      callback_url: callbackUrl,
-      callback_secret: callbackSecret,
-      callback_nonce: nonce,
-    }),
-    signal: AbortSignal.timeout(20000),
-  });
+  let res;
+  try {
+    res = await fetch(`${VCC_API_BASE}/api/jobs/invoice`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        order_id: orderId,
+        amount_usdc: amountUsdc,
+        callback_url: callbackUrl,
+        callback_secret: callbackSecret,
+        callback_nonce: nonce,
+      }),
+      signal: AbortSignal.timeout(20000),
+    });
+  } catch (err) {
+    // Network-level failure (timeout, DNS, ECONNREFUSED). Count it against
+    // the breaker so a black-holed vcc doesn't soak up the watcher budget.
+    recordVccFailure();
+    throw err;
+  }
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -342,11 +350,19 @@ async function notifyPaid(vccJobId) {
   vccCircuitGuard();
   const token = await getVccToken();
 
-  const res = await fetch(`${VCC_API_BASE}/api/jobs/${vccJobId}/paid`, {
-    method: 'POST',
-    headers: { 'X-VCC-Token': token },
-    signal: AbortSignal.timeout(10000),
-  });
+  let res;
+  try {
+    res = await fetch(`${VCC_API_BASE}/api/jobs/${vccJobId}/paid`, {
+      method: 'POST',
+      headers: { 'X-VCC-Token': token },
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch (err) {
+    // Network-level failure (timeout, DNS, ECONNREFUSED). Count it against
+    // the breaker so a black-holed vcc doesn't soak up the watcher budget.
+    recordVccFailure();
+    throw err;
+  }
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -373,10 +389,18 @@ async function getVccJobStatus(vccJobId) {
   vccCircuitGuard();
   const token = await getVccToken();
 
-  const res = await fetch(`${VCC_API_BASE}/api/jobs/${vccJobId}`, {
-    headers: { 'X-VCC-Token': token },
-    signal: AbortSignal.timeout(10000),
-  });
+  let res;
+  try {
+    res = await fetch(`${VCC_API_BASE}/api/jobs/${vccJobId}`, {
+      headers: { 'X-VCC-Token': token },
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch (err) {
+    // Network-level failure (timeout, DNS, ECONNREFUSED). Count it against
+    // the breaker so a black-holed vcc doesn't soak up the watcher budget.
+    recordVccFailure();
+    throw err;
+  }
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');

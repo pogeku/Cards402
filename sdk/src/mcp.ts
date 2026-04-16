@@ -51,7 +51,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             // Matches backend/src/api/orders.js — positive decimal string
             // between 0.01 and 10000 inclusive.
-            pattern: '^\\d+(\\.\\d{1,7})?$',
+            pattern: '^\\d+(\\.\\d{1,2})?$',
             description:
               "Card value in USD as a decimal string, e.g. '10.00'. Minimum '0.01', maximum '10000.00'.",
           },
@@ -361,8 +361,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     // Amount validation — mirrors backend/src/api/orders.js bounds so the
     // agent gets a specific error here instead of a generic 400 from the
-    // backend. Min $0.01, max $10,000, decimal string, ≤7 decimal places.
-    if (!/^\d+(\.\d{1,7})?$/.test(amount_usdc)) {
+    // backend. Min $0.01, max $10,000, decimal string, ≤2 decimal places.
+    if (!/^\d+(\.\d{1,2})?$/.test(amount_usdc)) {
       return {
         content: [
           {

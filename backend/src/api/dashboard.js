@@ -93,21 +93,66 @@ router.get('/stream', (req, res) => {
   );
   const ownedKeys = new Set(keyRows.map((r) => r.id));
 
-  res.set({
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache, no-transform',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no',
+  // F1-dashboard-stream: forward-declare state and wire req.on('close')
+  // IMMEDIATELY after acquiring the slot — before flushHeaders — so a
+  // client disconnect during the write doesn't leak the slot.
+  let closed = false;
+  /** @type {NodeJS.Timeout | null} */
+  let keepalive = null;
+  /** @type {(() => void) | null} */
+  let unsubscribe = null;
+
+  function closeStream() {
+    if (closed) return;
+    closed = true;
+    if (keepalive) clearInterval(keepalive);
+    if (unsubscribe) unsubscribe();
+    releaseStreamSlot(slotKey);
+    try {
+      res.end();
+    } catch {
+      /* socket already dead */
+    }
+  }
+
+  req.on('close', () => {
+    closeStream();
   });
-  res.flushHeaders?.();
-  res.write(': connected\n\n');
+
+  // Wrap flushHeaders + initial write in try/catch. On throw, release
+  // the slot via closeStream and return — the req.on('close') handler
+  // is already registered so it's safe either way.
+  try {
+    res.set({
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.flushHeaders?.();
+    res.write(': connected\n\n');
+  } catch (err) {
+    console.error(
+      `[dashboard.stream] header flush error for dashboard ${dashboardId}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    closeStream();
+    return;
+  }
 
   function send(type, payload) {
-    res.write(`event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`);
+    try {
+      res.write(`event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`);
+    } catch {
+      // Write to closed connection — close the stream cleanly.
+      closeStream();
+    }
   }
   send('ready', { at: new Date().toISOString() });
 
-  const unsubscribe = subscribe((evt) => {
+  unsubscribe = subscribe((evt) => {
+    if (closed) return;
     // First check: a new key was just created for this dashboard. Grow the
     // ownedKeys set on the fly so subsequent agent_state events for that
     // key aren't dropped by the filter below. The createAgent handler in
@@ -136,18 +181,14 @@ router.get('/stream', (req, res) => {
     send(evt.type, evt);
   });
 
-  const keepalive = setInterval(() => {
-    res.write(': keepalive\n\n');
+  keepalive = setInterval(() => {
+    try {
+      res.write(': keepalive\n\n');
+    } catch {
+      // Write to closed connection — close the stream cleanly.
+      closeStream();
+    }
   }, 15000);
-
-  let closed = false;
-  req.on('close', () => {
-    if (closed) return;
-    closed = true;
-    clearInterval(keepalive);
-    unsubscribe();
-    releaseStreamSlot(slotKey);
-  });
 });
 
 // ── Dashboard info ────────────────────────────────────────────────────────────
@@ -302,10 +343,11 @@ function validateApiKeyFields({
     }
   }
   if (wallet_public_key !== undefined && wallet_public_key !== null && wallet_public_key !== '') {
-    if (!/^G[A-Z2-7]{55}$/.test(wallet_public_key)) {
+    const { StrKey } = require('@stellar/stellar-sdk');
+    if (!StrKey.isValidEd25519PublicKey(wallet_public_key)) {
       return {
         error: 'invalid_wallet_public_key',
-        message: 'wallet_public_key must be a valid Stellar G-address (56 chars, starts with G)',
+        message: 'wallet_public_key must be a valid Stellar G-address (56 chars, valid checksum)',
       };
     }
   }
@@ -803,40 +845,57 @@ router.post(
     // already flipped to 'rejected'. If either guard fails we bail
     // out with 410 Gone — the caller should refresh the approval
     // list.
-    const approvalChanged = db
-      .prepare(
-        `UPDATE approval_requests
-         SET status = 'approved', decided_at = ?, decided_by = ?, decision_note = ?
-         WHERE id = ? AND status = 'pending' AND datetime(expires_at) >= datetime('now')`,
-      )
-      .run(now, req.user.email, decisionNote, req.params.id);
-    if (approvalChanged.changes === 0) {
+    // Wrap both UPDATEs in a transaction so they commit atomically.
+    // If the orders UPDATE fails (changes === 0), the throw rolls back
+    // the approval_requests change — no more orphaned 'approved' rows
+    // when the order has already drifted to a different state.
+    let approvalResult;
+    try {
+      approvalResult = db.transaction(() => {
+        const approvalChanged = db
+          .prepare(
+            `UPDATE approval_requests
+             SET status = 'approved', decided_at = ?, decided_by = ?, decision_note = ?
+             WHERE id = ? AND status = 'pending' AND datetime(expires_at) >= datetime('now')`,
+          )
+          .run(now, req.user.email, decisionNote, req.params.id);
+        if (approvalChanged.changes === 0) {
+          return { code: 410 };
+        }
+        const orderChanged = db
+          .prepare(
+            `UPDATE orders
+             SET status = 'pending_payment',
+                 vcc_payment_json = ?,
+                 updated_at = ?
+             WHERE id = ? AND status = 'awaiting_approval'`,
+          )
+          .run(JSON.stringify(contractPayment), now, approval.order_id);
+        if (orderChanged.changes === 0) {
+          // Throw inside the transaction to trigger a rollback — the
+          // approval_requests UPDATE is rolled back too.
+          throw new Error('order_state_drift');
+        }
+        return { code: 200 };
+      })();
+    } catch (err) {
+      if (err.message === 'order_state_drift') {
+        bizEvent('approval.order_state_drift', {
+          approval_id: req.params.id,
+          order_id: approval.order_id,
+        });
+        return res.status(409).json({
+          error: 'order_state_drift',
+          message: 'Approval approved but order is no longer in awaiting_approval state.',
+        });
+      }
+      throw err;
+    }
+    if (approvalResult.code === 410) {
       return res.status(410).json({
         error: 'approval_expired_or_decided',
         message:
           'Approval could not be finalised — it may have just expired or been decided by another operator.',
-      });
-    }
-    const orderChanged = db
-      .prepare(
-        `UPDATE orders
-         SET status = 'pending_payment',
-             vcc_payment_json = ?,
-             updated_at = ?
-         WHERE id = ? AND status = 'awaiting_approval'`,
-      )
-      .run(JSON.stringify(contractPayment), now, approval.order_id);
-    if (orderChanged.changes === 0) {
-      // Approval row moved to 'approved' but the order is no longer
-      // 'awaiting_approval' — shouldn't happen under normal flows,
-      // but log it and return a 409 so the operator can investigate.
-      bizEvent('approval.order_state_drift', {
-        approval_id: req.params.id,
-        order_id: approval.order_id,
-      });
-      return res.status(409).json({
-        error: 'order_state_drift',
-        message: 'Approval approved but order is no longer in awaiting_approval state.',
       });
     }
     recordDecision(

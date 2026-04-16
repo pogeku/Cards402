@@ -533,7 +533,7 @@ export default function DocsPage() {
                   <td style={{ color: 'var(--fg-muted)' }}>Yes</td>
                   <td style={{ color: 'var(--fg-muted)' }}>
                     Card value in USD, as a positive decimal string (e.g.{' '}
-                    <Code>&quot;25.00&quot;</Code>). Maximum <Code>&quot;1000.00&quot;</Code> per
+                    <Code>&quot;25.00&quot;</Code>). Maximum <Code>&quot;10000.00&quot;</Code> per
                     order.
                   </td>
                 </tr>

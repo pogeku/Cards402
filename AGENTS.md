@@ -196,7 +196,7 @@ Webhooks include `X-Cards402-Signature: sha256=<hmac>` and `X-Cards402-Timestamp
 **Delivery guarantees.** Webhook delivery is best-effort but retried. Each
 event is attempted immediately; on any non-2xx response or network error,
 cards402 queues a retry on an exponential backoff (~30s, ~5m, ~30m) for up to
-three total attempts (about 35 minutes end-to-end). After the final failure,
+four total deliveries (one initial + three retries, about 35 minutes end-to-end). After the final failure,
 the event is marked abandoned and not retried. **Your handler must be
 idempotent** — the same event may arrive more than once, and the signature
 plus `order_id` + terminal `status` let you dedupe safely.
@@ -231,16 +231,16 @@ Use `client.getUsage()` in the SDK or call the `check_budget` MCP tool.
 
 All errors return `{ "error": "error_code", "message": "..." }`.
 
-| HTTP | error                             | Meaning                                         |
-| ---- | --------------------------------- | ----------------------------------------------- |
-| 400  | `invalid_amount`                  | `amount_usdc` must be a positive number ≤ $1000 |
-| 400  | `invalid_webhook_url`             | webhook URL failed SSRF validation              |
-| 401  | `missing_api_key`                 | No `X-Api-Key` header                           |
-| 401  | `invalid_api_key`                 | Key not found or disabled                       |
-| 403  | `spend_limit_exceeded`            | Would exceed the key's spend limit              |
-| 404  | `order_not_found`                 | Order doesn't exist or belongs to another key   |
-| 429  | `rate_limit_exceeded`             | 60 orders/hour or 600 polls/min exceeded        |
-| 503  | `service_temporarily_unavailable` | System frozen after repeated failures           |
+| HTTP | error                             | Meaning                                           |
+| ---- | --------------------------------- | ------------------------------------------------- |
+| 400  | `invalid_amount`                  | `amount_usdc` must be a positive number ≤ $10,000 |
+| 400  | `invalid_webhook_url`             | webhook URL failed SSRF validation                |
+| 401  | `missing_api_key`                 | No `X-Api-Key` header                             |
+| 401  | `invalid_api_key`                 | Key not found or disabled                         |
+| 403  | `spend_limit_exceeded`            | Would exceed the key's spend limit                |
+| 404  | `order_not_found`                 | Order doesn't exist or belongs to another key     |
+| 429  | `rate_limit_exceeded`             | 60 orders/hour or 600 polls/min exceeded          |
+| 503  | `service_temporarily_unavailable` | System frozen after repeated failures             |
 
 ## Idempotency
 
