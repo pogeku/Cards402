@@ -54,13 +54,14 @@ jobs:
           - VCC callback handler (vcc-callback.js): HMAC signature verification, status transition guards
           - Payment watcher (payments/stellar.js): double-credit, replay, or skipped payment detection
           - Spend alert debouncing (system_state table): threshold logic that could suppress or double-fire alerts
-          - Key rotation (admin.js): key material exposure in logs, timing-safe comparison
+          - Auth middleware (middleware/auth.js, middleware/requireAuth.js): expiry check, key suspension, timing-safe comparison
           - Time-limited keys (middleware/auth.js): expiry check placement, clock skew edge cases
           - Webhook queue (fulfillment.js): SSRF via unvalidated webhook URLs, secret exposure
           - Order metadata: unvalidated or unbounded JSON payloads reaching the database
-          - Approval flow (dashboard.js): expired approval bypass, missing decided_by audit trail
+          - Approval flow (dashboard.js): expired approval bypass, missing decided_by audit trail, atomic transactions
           - SQL column allowlist (ALLOWED_COLUMNS): any dynamic SQL that bypasses the allowlist
-          - Admin API (admin.js): missing requireOwner on sensitive endpoints
+          - Platform API (platform.js): requirePlatformOwner on all routes, unfreeze reason validation
+          - Treasury payments (xlm-sender.js, payment-handler.js): amount validation, destination allowlist
 
           General checks:
           - Hardcoded secrets, API keys, or credentials

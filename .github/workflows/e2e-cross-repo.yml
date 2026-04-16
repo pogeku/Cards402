@@ -98,7 +98,7 @@ jobs:
       - name: Boot cards402 in background
         working-directory: cards402/backend
         run: |
-          nohup node --env-file=.env.test src/index.js > /tmp/cards402.log 2>&1 &
+          nohup node src/index.js > /tmp/cards402.log 2>&1 &
           echo "CARDS402_PID=$!" >> $GITHUB_ENV
           sleep 3
           curl -sf http://localhost:$PORT/status || { cat /tmp/cards402.log; exit 1; }
