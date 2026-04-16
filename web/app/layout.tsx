@@ -83,7 +83,7 @@ export const metadata: Metadata = {
     siteName: SITE_NAME,
     title: `${SITE_NAME} — Virtual Visa cards for AI agents`,
     description:
-      'One Stellar transaction in, one real Visa card out. ~60 seconds from pay to PAN. No custody, no signup.',
+      'One transaction in, one real Visa card out. ~60 seconds from payment to card. Upgrade your agents to have real purchasing power today.',
     // og:image comes from app/opengraph-image.tsx (file convention).
     // Don't set it here or child pages that override openGraph lose
     // the image reference.
@@ -91,7 +91,8 @@ export const metadata: Metadata = {
   twitter: {
     card: 'summary_large_image',
     title: `${SITE_NAME} — Virtual Visa cards for AI agents`,
-    description: 'One Stellar transaction in, one real Visa card out. ~60 seconds from pay to PAN.',
+    description:
+      'One transaction in, one real Visa card out. ~60 seconds from payment to card. Upgrade your agents to have real purchasing power today.',
     site: '@cards402',
     creator: '@cards402',
   },
