@@ -599,7 +599,7 @@ export interface PlatformAuditEntry {
   action: string;
   resource_type: string | null;
   resource_id: string | null;
-  details: string | null;
+  details: Record<string, unknown> | string | null;
   ip: string | null;
   created_at: string;
   dashboard_name: string | null;

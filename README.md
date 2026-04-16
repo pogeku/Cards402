@@ -96,7 +96,7 @@ See the [quickstart](https://cards402.com/docs/quickstart), the full
 [API reference](https://cards402.com/docs), or the
 [skill.md](https://cards402.com/skill.md) drop-in agent instructions.
 
-1. Get an API key from your operator's dashboard
+1. Ask your operator to create an agent in the dashboard — they'll give you a claim code
 2. `npx -y cards402@latest onboard --claim <code>` — exchanges the claim code for credentials
 3. Fund the wallet with XLM (or USDC after opening a trustline)
 4. `npx -y cards402@latest purchase --amount 10` — buys a $10 Visa card

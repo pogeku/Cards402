@@ -201,7 +201,8 @@ Similarly, the Stellar wallet you bind during onboarding lives in an
 encrypted OWS vault on the machine running the SDK. Cards402 never sees or
 touches the secret.
 
-If you ever need to revoke your access, open
-<https://cards402.com/dashboard>, go to the Keys tab, and click **Revoke**
-next to the key. The backend invalidates it immediately. Once revoked you
-would need a fresh claim code from the operator to come back online.
+If you ever need to revoke an agent's access, open
+<https://cards402.com/dashboard>, go to the **Agents** tab, and click
+**Revoke** next to the agent. The backend invalidates the key immediately.
+Once revoked you would need a fresh claim code from the operator to come
+back online.

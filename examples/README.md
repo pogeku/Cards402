@@ -5,9 +5,9 @@ environments. Each example is self-contained with its own dependencies.
 
 ## Quick start (all examples)
 
-1. Get an API key from your cards402 dashboard
-2. Set `CARDS402_API_KEY` in your environment
-3. Fund your wallet (MCP: run `setup_wallet`; manual: send XLM to the address)
+1. Create an agent in the cards402 dashboard (Agents tab → Create Agent) and copy the claim code
+2. Run `npx -y cards402@latest onboard --claim <code>` to exchange the claim for credentials
+3. Fund your wallet (MCP: run `setup_wallet`; manual: send at least 2.5 XLM to the address)
 
 ## Examples
 

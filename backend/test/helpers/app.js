@@ -117,6 +117,21 @@ function resetDb() {
   db.prepare(`DELETE FROM alert_rules`).run();
   db.prepare(`DELETE FROM alert_firings`).run();
   db.prepare(`DELETE FROM webhook_deliveries`).run();
+  // Tables added in later migrations — wrapped in try/catch in case a test
+  // configuration hasn't run the migration yet.
+  for (const tbl of [
+    'policy_decisions',
+    'approval_requests',
+    'agent_claims',
+    'stellar_dead_letter',
+    'unmatched_payments',
+  ]) {
+    try {
+      db.prepare(`DELETE FROM ${tbl}`).run();
+    } catch (_) {
+      /* table may not exist in all test configurations */
+    }
+  }
   db.prepare(`UPDATE system_state SET value = '0' WHERE key = 'frozen'`).run();
   db.prepare(`UPDATE system_state SET value = '0' WHERE key = 'consecutive_failures'`).run();
   db.prepare(`DELETE FROM system_state WHERE key = 'vcc_token'`).run();

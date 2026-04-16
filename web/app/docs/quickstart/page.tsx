@@ -144,15 +144,14 @@ const STEPS = [
   },
   {
     n: '02',
-    title: 'Claim your first API key',
+    title: 'Create an agent and claim its key',
     body: (
       <>
         <p>
           Sign in to the <Link href="/dashboard">dashboard</Link> with any email (you&apos;ll get a
-          6-digit login code by return) and open the <strong>Keys</strong> tab. Click{' '}
-          <strong>New key</strong>, name it, and copy the token — it&apos;s only shown once.
+          6-digit login code by return) and open the <strong>Agents</strong> tab. Click{' '}
+          <strong>Create Agent</strong>, copy the claim code, and give it to the agent to run:
         </p>
-        <p>Prefer not to paste the raw key into agent context? Use a claim code instead:</p>
         <CodeBlock label="Shell">{`npx -y cards402@latest onboard --claim c402_abc123...`}</CodeBlock>
         <p>
           Claim codes are single-use. The agent exchanges one for a real API key on first run and

@@ -480,13 +480,15 @@ export default function DocsPage() {
             <Code>cards402_</Code> and scoped to a spend limit in USDC.
           </Para>
           <Para>
-            Create a key: sign in at{' '}
+            Create an agent: sign in at{' '}
             <Link href="/dashboard" style={{ color: 'var(--green)', textDecoration: 'none' }}>
               /dashboard
             </Link>{' '}
-            with any email (you&apos;ll get a 6-digit login code), open the <strong>Keys</strong>{' '}
-            tab, and click <strong>New key</strong>. The raw token is shown once in a copy modal,
-            then stored as a salted hash — keep it in your password manager.
+            with any email (you&apos;ll get a 6-digit login code), open the <strong>Agents</strong>{' '}
+            tab, and click <strong>Create Agent</strong>. Copy the claim code and give it to the
+            agent to run <Code>cards402 onboard --claim &lt;code&gt;</Code>. The agent exchanges the
+            claim for a real API key — the raw token is never shown in the dashboard, only stored as
+            a salted hash.
           </Para>
           <CodeBlock label="Header">{`X-Api-Key: cards402_a1b2c3d4e5f6...`}</CodeBlock>
           <Para>
