@@ -873,8 +873,37 @@ function parseRetentionDays(envVarName, defaultDays) {
 // on-chain reality without requiring the agent's CLI to keep
 // reporting — the CLI disconnects after onboarding, so this is the
 // only way the dashboard finds out funds landed.
+// F1-funding (2026-04-16): read the USDC issuer from env.js's
+// canonical STELLAR_USDC_ISSUER variable instead of hardcoding the
+// mainnet issuer. Pre-fix, this function used the mainnet Circle
+// issuer directly — so on a testnet deploy (STELLAR_NETWORK=testnet),
+// the balance check never matched any entry in the `balances` array
+// and agents who funded with USDC only (no XLM) got stuck in
+// `awaiting_funding` forever. xlm-sender.js already reads from the
+// same env var for signing; this function now matches that contract.
+// The default value is still the mainnet Circle issuer so any
+// deployment with the env var unset is unchanged.
+const MAINNET_USDC_ISSUER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
+
+// F2-funding (2026-04-16): track whether we've already emitted a
+// horizon-down alert this process lifetime so a persistent outage
+// doesn't spam the bizEvent stream with one signal per awaiting
+// wallet per 15-second tick. Cleared automatically on the next
+// successful fetch — see recordHorizonResult below.
+let _horizonOutageAlerted = false;
+
+// Horizon base URL picked by STELLAR_NETWORK. Testnet deployments
+// point at horizon-testnet.stellar.org; mainnet at horizon.stellar.org.
+// Pre-fix the mainnet URL was hardcoded too, which broke every testnet
+// deploy at the same point the USDC issuer bug did.
+function horizonBase() {
+  return process.env.STELLAR_NETWORK === 'testnet'
+    ? 'https://horizon-testnet.stellar.org'
+    : 'https://horizon.stellar.org';
+}
+
 async function checkAgentFundingStatus() {
-  const USDC_ISSUER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
+  const usdcIssuer = process.env.STELLAR_USDC_ISSUER || MAINNET_USDC_ISSUER;
   const awaiting = /** @type {any[]} */ (
     db
       .prepare(
@@ -888,6 +917,8 @@ async function checkAgentFundingStatus() {
   if (awaiting.length === 0) return;
 
   const { emit: emitBusEvent } = require('./lib/event-bus');
+  const { event: bizEvent } = require('./lib/logger');
+  const base = horizonBase();
   for (const row of awaiting) {
     try {
       // 5-second per-wallet timeout. Without this, a single slow /
@@ -897,10 +928,40 @@ async function checkAgentFundingStatus() {
       // only stretch one funding refresh tick by (num_awaiting × 5s)
       // worst case, and the guarded wrapper above won't stack
       // executions if the tick runs long.
-      const res = await fetch(`https://horizon.stellar.org/accounts/${row.wallet_public_key}`, {
+      const res = await fetch(`${base}/accounts/${row.wallet_public_key}`, {
         signal: AbortSignal.timeout(5000),
       });
-      if (!res.ok) continue; // 404 = unactivated, try again next tick
+      if (!res.ok) {
+        // F2-funding: differentiate 404 (expected "wallet unactivated")
+        // from server-side failures (429/500/503). Pre-fix, every
+        // non-2xx was silently `continue`d with zero ops signal — a
+        // Horizon outage made funding detection silently break for
+        // every awaiting agent with no alerting pipeline visibility.
+        if (res.status === 404) {
+          // Quiet path: unactivated wallet, retry next tick.
+          continue;
+        }
+        // Noisy path: alert once per outage window so ops sees a
+        // Horizon problem without spam on every awaiting row.
+        if (!_horizonOutageAlerted) {
+          _horizonOutageAlerted = true;
+          bizEvent('funding.horizon_error', {
+            status: res.status,
+            wallet_preview: row.wallet_public_key?.slice(0, 8) ?? null,
+            awaiting_count: awaiting.length,
+          });
+          console.error(
+            `[jobs] funding check: Horizon returned HTTP ${res.status} ` +
+              `(first seen this outage; subsequent errors suppressed until recovery)`,
+          );
+        }
+        continue;
+      }
+      // Success resets the outage flag so a future outage re-alerts.
+      if (_horizonOutageAlerted) {
+        _horizonOutageAlerted = false;
+        bizEvent('funding.horizon_recovered', {});
+      }
       const data = /** @type {any} */ (await res.json());
       const balances = Array.isArray(data.balances) ? data.balances : [];
       const xlmStr = balances.find((b) => b.asset_type === 'native')?.balance ?? '0';
@@ -909,13 +970,16 @@ async function checkAgentFundingStatus() {
           (b) =>
             b.asset_type === 'credit_alphanum4' &&
             b.asset_code === 'USDC' &&
-            b.asset_issuer === USDC_ISSUER,
+            b.asset_issuer === usdcIssuer,
         )?.balance ?? '0';
       const xlm = parseFloat(xlmStr);
       const usdc = parseFloat(usdcStr);
       // Funded = at least 1 XLM past the Stellar base reserve, OR any
       // spendable USDC. Both cases mean the wallet can actually
-      // attempt a purchase.
+      // attempt a purchase. NaN from a malformed balance string is
+      // fail-safe here because `NaN >= 2` and `NaN > 0` are both
+      // false — a corrupt Horizon response leaves the wallet as
+      // awaiting, not mis-flipped to funded.
       const funded = xlm >= 2 || usdc > 0;
       if (!funded) continue;
 
@@ -937,7 +1001,17 @@ async function checkAgentFundingStatus() {
         detail: `xlm=${xlm.toFixed(4)} usdc=${usdc.toFixed(2)}`,
       });
     } catch (err) {
-      // Transient Horizon failure — retry next tick.
+      // Transient Horizon failure (network, timeout, JSON parse) —
+      // retry next tick. These also participate in the outage alert
+      // dedup so a persistent DNS failure doesn't spam.
+      if (!_horizonOutageAlerted) {
+        _horizonOutageAlerted = true;
+        bizEvent('funding.horizon_error', {
+          status: 'exception',
+          error: err instanceof Error ? err.message : String(err),
+          awaiting_count: awaiting.length,
+        });
+      }
       console.error(
         `[jobs] funding check failed for ${row.id}: ${
           err instanceof Error ? err.message : String(err)
@@ -945,6 +1019,11 @@ async function checkAgentFundingStatus() {
       );
     }
   }
+}
+
+// Test-only: reset the Horizon outage alert dedup state.
+function _resetFundingHorizonOutageState() {
+  _horizonOutageAlerted = false;
 }
 
 // Mutex guard for runJobs. setInterval does NOT await async callbacks,
@@ -1120,4 +1199,8 @@ module.exports = {
   _resetParsePositiveMsState,
   _runSubJob,
   runJobs,
+  checkAgentFundingStatus,
+  _resetFundingHorizonOutageState,
+  _horizonBase: horizonBase,
+  _MAINNET_USDC_ISSUER: MAINNET_USDC_ISSUER,
 };

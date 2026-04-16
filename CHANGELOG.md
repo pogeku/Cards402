@@ -158,6 +158,32 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a typeof guard to `decryptToken` so a non-string
   `system_state.value` can't wedge the token path with an opaque
   TypeError. Audit F1/F2/F3-vcc-client.
+- **Agent funding check — testnet correctness + Horizon observability** —
+  two fixes in `jobs.js::checkAgentFundingStatus` (the Horizon poller
+  that flips `awaiting_funding → funded` when an agent wallet receives
+  XLM or USDC). (1) **Testnet USDC detection**. The USDC issuer was
+  hardcoded to `GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN`
+  — Circle's **mainnet** issuer. Any testnet deployment
+  (`STELLAR_NETWORK=testnet`) silently failed to match USDC balances
+  because the testnet USDC issuer is different, so agents who funded
+  with USDC only were stuck in `awaiting_funding` forever. `env.js`
+  already exposed `STELLAR_USDC_ISSUER` as the canonical config (and
+  `xlm-sender.js` read from it), but this function ignored it. Also
+  fixed the hardcoded `https://horizon.stellar.org` URL to pick the
+  testnet Horizon URL when `STELLAR_NETWORK=testnet`. Both changes
+  default to the mainnet values when the env is unset, so existing
+  deployments are unaffected. (2) **Horizon HTTP error observability**.
+  Pre-fix, every non-2xx response was silently `continue`d with zero
+  ops signal — a Horizon outage (429/500/503/network exception)
+  broke funding detection for every awaiting agent and nothing in
+  the alerting pipeline saw it. Now 404 stays quiet (expected
+  "wallet unactivated") but every other error emits a dedup'd
+  `funding.horizon_error` bizEvent — once per outage window, not
+  once per awaiting wallet, so a 500-agent dashboard doesn't flood
+  alerting. Recovery emits `funding.horizon_recovered` and clears
+  the dedup so subsequent outages re-alert. Network exceptions
+  (ECONNREFUSED, timeout, DNS) go through the same dedup path.
+  Audit F1/F2-funding.
 - **Background job loop hardened** — two fixes in src/jobs.js. (1)
   **Validated interval env vars**. `FUNDING_CHECK_INTERVAL_MS` and
   `ALERT_INTERVAL_MS` were previously parsed with
