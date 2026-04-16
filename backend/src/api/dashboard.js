@@ -1217,5 +1217,5 @@ router.get('/platform-wallet', requirePlatformOwner, (req, res) => {
 // Attach internal helpers to the router so unit tests can exercise
 // them in isolation. Express routers are functions, so attaching
 // named properties is a standard, app.use-compatible pattern.
-router.shortString = shortString;
+/** @type {any} */ (router).shortString = shortString;
 module.exports = router;
