@@ -176,11 +176,15 @@ export interface components {
             };
         };
         Budget: {
-            /** @description Total spent by this API key */
+            /** @description Total settled spend by this API key */
             spent_usdc: string;
+            /** @description Sum of pending/ordering orders not yet settled */
+            in_flight_usdc: string;
+            /** @description spent_usdc + in_flight_usdc */
+            committed_usdc: string;
             /** @description Spend limit (null = unlimited) */
             limit_usdc?: string | null;
-            /** @description Remaining budget (null = unlimited) */
+            /** @description Remaining budget against committed (null = unlimited) */
             remaining_usdc?: string | null;
         };
         CardDetails: {
@@ -217,6 +221,11 @@ export interface components {
             /** @description Relative URL to poll for status */
             poll_url: string;
             budget: components["schemas"]["Budget"];
+            /**
+             * @description Present and `true` when the order was created by an API key
+             *     in sandbox mode. Omitted for live orders.
+             */
+            sandbox?: boolean;
         };
         OrderAwaitingApprovalResponse: {
             /** Format: uuid */
@@ -240,7 +249,8 @@ export interface components {
             id: string;
             status: string;
             amount_usdc: string;
-            payment_asset: string;
+            /** @enum {string} */
+            payment_asset: "usdc" | "usdc_soroban" | "xlm" | "xlm_soroban";
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -252,7 +262,8 @@ export interface components {
             status: string;
             phase: components["schemas"]["OrderPhase"];
             amount_usdc: string;
-            payment_asset?: string;
+            /** @enum {string} */
+            payment_asset?: "usdc" | "usdc_soroban" | "xlm" | "xlm_soroban";
             payment?: components["schemas"]["PaymentInstructions"];
             card?: components["schemas"]["CardDetails"];
             error?: string | null;
@@ -327,7 +338,7 @@ export interface components {
              *     now payable; `rejected` fires when an approval is denied.
              * @enum {string}
              */
-            status: "delivered" | "failed" | "expired" | "pending_payment" | "rejected";
+            status: "delivered" | "failed" | "expired" | "pending_payment" | "rejected" | "refunded" | "refund_pending";
             /**
              * @description The public phase corresponding to `status`. Present on
              *     every non-delivered/non-failed event (expired, approved,
