@@ -48,7 +48,7 @@ exchanged, it's invalid and your API key is what matters.
 
 Your agent still needs to fund the wallet. The exact sequence matters:
 
-**Step 1 — fund with XLM.** Ask the operator to send **at least 2.5 XLM**
+**Step 1 — fund with XLM.** Ask the operator to send **at least 2 XLM**
 to the public key the command printed. The breakdown:
 
 - 1 XLM — Stellar base account reserve (required to activate the account)

@@ -68,7 +68,7 @@ const howToJsonLd = {
       '@type': 'HowToStep',
       position: 3,
       name: 'Fund a wallet',
-      text: 'Create a Stellar wallet via createOWSWallet() and fund it with at least 2.5 XLM (1 XLM base reserve + 0.5 XLM USDC trustline reserve + fees). Open the USDC trustline via `cards402 wallet trustline` before the operator sends USDC — USDC is an issued asset on Stellar and payments to a wallet without a trustline bounce back to the sender.',
+      text: 'Create a Stellar wallet via createOWSWallet() and fund it with at least 2 XLM (1 XLM minimum balance + 0.5 XLM USDC trustline reserve + headroom). Open the USDC trustline via `cards402 wallet trustline` before the operator sends USDC — USDC is an issued asset on Stellar and payments to a wallet without a trustline bounce back to the sender.',
       url: 'https://cards402.com/docs/quickstart#fund-a-wallet',
     },
     {
@@ -168,15 +168,15 @@ const STEPS = [
       <>
         <p>
           Your agent pays the receiver contract directly, so it needs a Stellar wallet with at least{' '}
-          <strong>2.5 XLM</strong>: 1 XLM for the native account reserve, 0.5 XLM for the USDC
-          trustline subentry, and ~1 XLM of headroom for fees and any future ops. The SDK creates
-          the wallet for you, stored encrypted in an OWS vault:
+          <strong>2 XLM</strong>: 1 XLM minimum account balance (2 × 0.5 XLM base reserve), 0.5 XLM
+          for the USDC trustline subentry, and ~0.5 XLM headroom for fees. The SDK creates the
+          wallet for you, stored encrypted in an OWS vault:
         </p>
         <CodeBlock label="TypeScript">{`import { createOWSWallet, getOWSBalance } from 'cards402';
 
 // Creates or loads a vault entry for 'my-agent'. Idempotent.
 const { walletId, publicKey } = createOWSWallet('my-agent');
-console.log('Send at least 2.5 XLM to', publicKey);
+console.log('Send at least 2 XLM to', publicKey);
 
 // Check the balance whenever you need to.
 const { xlm, usdc } = await getOWSBalance('my-agent');`}</CodeBlock>

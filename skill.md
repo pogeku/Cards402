@@ -155,20 +155,20 @@ the trustline causes any USDC the operator sends to **bounce back**,
 and everyone ends up confused about where the money went.
 
 ```
-Step 1: Operator sends ≥ 2.5 XLM  ──▶  wallet activated
+Step 1: Operator sends ≥ 2 XLM  ──▶  wallet activated
 Step 2: Agent opens USDC trustline ──▶  wallet CAN receive USDC
 Step 3: Operator sends USDC       ──▶  wallet funded
 Step 4: Agent calls purchaseCardOWS
 ```
 
-### Why 2.5 XLM (not 2)?
+### Why 2 XLM?
 
-- **1 XLM** — Stellar base account reserve. The account doesn't exist
-  on mainnet until you send at least this much.
+- **1 XLM** — Stellar minimum account balance (2 × 0.5 XLM base
+  reserve). The account doesn't exist on mainnet until you send at
+  least this much.
 - **0.5 XLM** — additional reserve for the USDC trustline subentry.
   Every trustline on a Stellar account bumps the min reserve by 0.5.
-- **~1 XLM** — headroom for the trustline transaction fee + any
-  future ops (a second trustline, another changeTrust, payments).
+- **~0.5 XLM** — headroom for transaction fees + any future ops.
 
 ### Why the USDC trustline?
 

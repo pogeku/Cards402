@@ -271,7 +271,7 @@ export function CreateAgentDrawer({ open, onClose }: Props) {
             <StepRow
               state={stepState(step, 'awaiting_deposit')}
               title="Awaiting deposit"
-              detail="Send at least 2.5 XLM to activate the wallet and cover reserves. To receive USDC, the agent must first open a trustline (run `cards402 wallet trustline` after funding with XLM)."
+              detail="Send at least 2 XLM to activate the wallet and cover reserves. To receive USDC, the agent must first open a trustline (run `cards402 wallet trustline` after funding with XLM)."
             />
             <StepRow
               state={stepState(step, 'funded')}
@@ -355,8 +355,8 @@ export function CreateAgentDrawer({ open, onClose }: Props) {
                   lineHeight: 1.45,
                 }}
               >
-                Send at least 2.5 XLM (1 XLM base reserve + 0.5 XLM trustline subentry + headroom).
-                To receive USDC, the agent must first open a USDC trustline by running{' '}
+                Send at least 2 XLM (1 XLM account minimum + 0.5 XLM trustline + 0.5 headroom). To
+                receive USDC, the agent must first open a USDC trustline by running{' '}
                 <code>cards402 wallet trustline</code>. The stepper will flip to{' '}
                 <strong>Funded</strong> automatically once Horizon sees the deposit.
               </div>

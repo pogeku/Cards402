@@ -400,8 +400,8 @@ export async function onboardCommand(argv: string[]): Promise<number> {
     process.stdout.write('Next step: fund the wallet.\n');
     process.stdout.write('\n');
     process.stdout.write('  Step 1 — send XLM to the Stellar address above:\n');
-    process.stdout.write('    • At least 2.5 XLM — 1 XLM base reserve + 0.5 XLM trustline\n');
-    process.stdout.write('      subentry + ~1 XLM headroom for fees and future ops.\n');
+    process.stdout.write('    • At least 2 XLM — 1 XLM minimum account balance (2 × 0.5\n');
+    process.stdout.write('      base reserve) + 0.5 XLM trustline subentry + ~0.5 headroom.\n');
     process.stdout.write('\n');
     process.stdout.write('  Step 2 — open the USDC trustline before any USDC payment:\n');
     process.stdout.write('    npx -y cards402@latest wallet trustline\n');

@@ -21,7 +21,7 @@ Subcommands:
 
 Standard onboarding flow:
   1. cards402 onboard --claim <code>
-  2. Operator sends at least 2.5 XLM to the wallet's Stellar address
+  2. Operator sends at least 2 XLM to the wallet's Stellar address
   3. cards402 wallet trustline    (opens the USDC trustline)
   4. Operator sends USDC
   5. cards402 purchase --amount <USD>
@@ -167,7 +167,7 @@ export async function walletCommand(argv: string[]): Promise<number> {
       if (/not found/i.test(msg) || /404/.test(msg)) {
         process.stderr.write(
           `error: wallet is not activated on mainnet yet. Ask your operator to send\n` +
-            `at least 2.5 XLM to the address printed by 'cards402 wallet address',\n` +
+            `at least 2 XLM to the address printed by 'cards402 wallet address',\n` +
             `then re-run 'cards402 wallet trustline'.\n`,
         );
         return 1;
@@ -180,7 +180,7 @@ export async function walletCommand(argv: string[]): Promise<number> {
         process.stderr.write(
           `error: insufficient XLM to open the trustline. A trustline subentry\n` +
             `requires +0.5 XLM of account reserve on top of the 1 XLM base. Ask\n` +
-            `your operator to top up the wallet with at least 2.5 XLM total.\n`,
+            `your operator to top up the wallet with at least 2 XLM total.\n`,
         );
         return 1;
       }
