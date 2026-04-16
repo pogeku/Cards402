@@ -588,7 +588,7 @@ app.get('/status', statusLimiter, (req, res) => {
       db
         .prepare(
           `SELECT COUNT(*) AS n FROM webhook_queue
-           WHERE delivered = 0 AND attempts >= ? AND created_at >= ?`,
+           WHERE delivered = 0 AND attempts > ? AND created_at >= ?`,
         )
         .get(MAX_WEBHOOK_ATTEMPTS_FOR_STATUS, since24h)
     )?.n ?? 0;

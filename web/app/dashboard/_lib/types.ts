@@ -2,7 +2,13 @@
 // /dashboard/* endpoints. Kept separate from the page components so
 // helpers and hooks can import them without pulling in React.
 
-export type AgentStateName = 'minted' | 'initializing' | 'awaiting_funding' | 'funded' | 'active';
+export type AgentStateName =
+  | 'minted'
+  | 'initializing'
+  | 'awaiting_funding'
+  | 'funded'
+  | 'active'
+  | 'unknown';
 
 export interface AgentState {
   state: AgentStateName;

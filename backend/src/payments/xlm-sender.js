@@ -288,7 +288,10 @@ async function probeUsdcToXlmPath(destXlm) {
     `&destination_asset_type=native` +
     `&destination_amount=${encodeURIComponent(String(destXlm))}`;
   try {
-    const res = await fetch(url);
+    // 5s timeout so a hanging Horizon doesn't stall the CTX payment path.
+    // Pre-fix this was a bare fetch() with no timeout — a slow Horizon
+    // could block sendUsdcAsXlm indefinitely.
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) return { ok: false, reason: `http_${res.status}` };
     const body = await res.json();
     const records = body?._embedded?.records || [];

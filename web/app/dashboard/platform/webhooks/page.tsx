@@ -174,14 +174,14 @@ export default function PlatformWebhooksPage() {
                     {q.url}
                   </td>
                   <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>
-                    {q.attempts} / 3
+                    {q.attempts} / 4
                   </td>
                   <td style={{ fontSize: '0.66rem', color: 'var(--fg-dim)' }}>
                     {q.delivered ? '—' : timeAgo(q.next_attempt)}
                   </td>
                   <td>
-                    <Pill tone={q.delivered ? 'green' : q.attempts >= 3 ? 'red' : 'yellow'}>
-                      {q.delivered ? 'yes' : q.attempts >= 3 ? 'abandoned' : 'pending'}
+                    <Pill tone={q.delivered ? 'green' : q.attempts > 3 ? 'red' : 'yellow'}>
+                      {q.delivered ? 'yes' : q.attempts > 3 ? 'abandoned' : 'pending'}
                     </Pill>
                   </td>
                   <td

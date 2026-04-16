@@ -181,14 +181,14 @@ router.get('/overview', async (req, res) => {
       /** @type {any} */ (
         db
           .prepare(
-            `SELECT COUNT(*) AS n FROM webhook_queue WHERE delivered = 0 AND attempts >= 3 AND created_at >= ?`,
+            `SELECT COUNT(*) AS n FROM webhook_queue WHERE delivered = 0 AND attempts > 3 AND created_at >= ?`,
           )
           .get(since24h)
       )?.n ?? 0,
     webhook_queue_pending:
       /** @type {any} */ (
         db
-          .prepare(`SELECT COUNT(*) AS n FROM webhook_queue WHERE delivered = 0 AND attempts < 3`)
+          .prepare(`SELECT COUNT(*) AS n FROM webhook_queue WHERE delivered = 0 AND attempts <= 3`)
           .get()
       )?.n ?? 0,
     unmatched_payments:
@@ -596,7 +596,7 @@ router.get('/health', (req, res) => {
       /** @type {any} */ (
         db
           .prepare(
-            `SELECT COUNT(*) AS n FROM webhook_queue WHERE delivered = 0 AND attempts >= 3 AND created_at >= ?`,
+            `SELECT COUNT(*) AS n FROM webhook_queue WHERE delivered = 0 AND attempts > 3 AND created_at >= ?`,
           )
           .get(since24h)
       )?.n ?? 0,

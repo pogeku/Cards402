@@ -12,6 +12,7 @@ export const AGENT_STATE_TONE: Record<AgentStateName, PillTone> = {
   awaiting_funding: 'yellow',
   funded: 'blue',
   active: 'green',
+  unknown: 'red',
 };
 
 export const AGENT_STATE_LABEL: Record<AgentStateName, string> = {
@@ -20,6 +21,7 @@ export const AGENT_STATE_LABEL: Record<AgentStateName, string> = {
   awaiting_funding: 'Awaiting deposit',
   funded: 'Funded',
   active: 'Active',
+  unknown: 'Unknown',
 };
 
 // Agent states that merit a pulsing dot because they're transient.

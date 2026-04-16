@@ -82,6 +82,7 @@ export default function AgentsPage() {
     awaiting_funding: 0,
     funded: 0,
     active: 0,
+    unknown: 0,
   };
   for (const a of agents) {
     const s = (a.agent?.state ?? 'minted') as AgentStateName;
