@@ -158,6 +158,24 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a typeof guard to `decryptToken` so a non-string
   `system_state.value` can't wedge the token path with an opaque
   TypeError. Audit F1/F2/F3-vcc-client.
+- **SDK config loader — Windows size cap + api_key shape validation** —
+  two fixes in `sdk/src/config.ts`. (1) **Windows agents skipped the
+  size cap**. Pre-fix, the entire security-check block (symlink,
+  regular-file, size, permissions) was gated on
+  `process.platform !== 'win32'`. The symlink and size checks are
+  purely IO-based — `fs.lstatSync` correctly reports NTFS
+  symlinks/junctions, and `stat.size` is valid on all platforms.
+  Only the `chmod` / permission-bit checks need the platform gate.
+  A planted 1 GB config.json (or an NTFS junction to a large file)
+  would have been fully loaded via `readFileSync` and OOM'd the
+  agent. Moved the platform-independent checks outside the gate;
+  only Unix permission tightening stays platform-gated. (2) **No
+  api_key shape validation**. A corrupt or tampered key containing
+  CRLF / NUL / non-printable bytes would flow into the `X-Api-Key`
+  header on every fetch call and trigger Node's `ERR_INVALID_CHAR`
+  — the agent would crash on every API call with no indication that
+  the config file was the problem. Added printable-ASCII validation
+  at load time. Audit F1/F3-config.
 - **SDK Soroban helpers — zero-amount guard + testnet Horizon fix** —
   two fixes in `sdk/src/soroban.ts`. (1) `decimalToStroops` now rejects
   zero amounts. Pre-fix, `'0'` and `'0.0000000'` both produced `0n`

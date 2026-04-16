@@ -57,69 +57,88 @@ function defaultConfigPath(): string {
  * loose config aren't hard-broken, but the mode is normalised
  * immediately.
  */
+// F3-config (2026-04-16): validate the api_key shape before accepting
+// it. A corrupt or tampered key containing CRLF, NUL, or other control
+// chars would flow into the X-Api-Key HTTP header and trigger Node's
+// ERR_INVALID_CHAR on every fetch call — same bug class as the backend's
+// X-Request-ID audit (F1-app). Accept printable ASCII only (the backend
+// mints keys as `cards402_<48 hex>`, which is pure ASCII alnum + underscore).
+const API_KEY_SHAPE = /^[\x20-\x7e]+$/;
+
 export function loadCards402Config(configPath?: string): Cards402Config | null {
   const p = configPath || defaultConfigPath();
   try {
-    // F1-config: use lstatSync so a symlinked config file is detected
-    // and refused. If ~/.cards402/config.json is a symlink to
-    // /etc/passwd or another user-writable file, subsequent stat/chmod
-    // /readFileSync calls would follow the link and operate on the
-    // target — so an attacker who can plant a symlink in ~/.cards402
-    // could both trick us into chmoding the target AND load the target
-    // as a "config", which in turn flows into request Authorization
-    // headers downstream.
-    //
-    // Skip the symlink + mode checks on Windows — mode bits are
-    // simulated and lstatSync semantics differ, so the defense
-    // doesn't apply the same way and warnings would be spurious.
-    if (process.platform !== 'win32') {
-      let stat: fs.Stats;
+    // F1-config (2026-04-16): platform-independent checks (symlink,
+    // regular-file, size cap) are now run on ALL platforms including
+    // Windows. Pre-fix the entire block was gated on
+    // `process.platform !== 'win32'`, which meant Windows agents
+    // skipped the size cap — a planted 1 GB config.json (or an NTFS
+    // junction to a large file) would be fully loaded via readFileSync
+    // and OOM the agent. NTFS supports symlinks and junctions, and
+    // fs.lstatSync correctly reports them, so the symlink defense
+    // is also meaningful on Windows. Only the Unix permission-bit
+    // checks (chmod) are platform-gated now.
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(p);
+    } catch (statErr: unknown) {
+      if ((statErr as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw statErr;
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error(
+        `cards402 config at ${p} is a symbolic link. Refusing to load. ` +
+          `Remove the link and re-run 'cards402 onboard --claim <code>' to create a real file.`,
+      );
+    }
+    if (!stat.isFile()) {
+      throw new Error(
+        `cards402 config at ${p} is not a regular file. ` +
+          `Remove it and re-run 'cards402 onboard --claim <code>'.`,
+      );
+    }
+    // F5-config: enforce a size cap BEFORE reading the file into
+    // memory or doing any further work on it. Config files are
+    // tiny; anything bigger than MAX_CONFIG_BYTES is either
+    // corruption or an attempt to flood request headers.
+    if (stat.size > MAX_CONFIG_BYTES) {
+      throw new Error(
+        `cards402 config at ${p} is ${stat.size} bytes (max ${MAX_CONFIG_BYTES}). ` +
+          `Refusing to load — the file is either corrupted or has been tampered with. ` +
+          `Rotate your api key via the dashboard and re-run 'cards402 onboard'.`,
+      );
+    }
+    // Unix-only: tighten loose permission bits. chmod on a regular
+    // file (we verified above that it's not a symlink) is safe and
+    // only affects this file. Skipped on Windows where mode bits are
+    // simulated and chmod can fail or no-op unpredictably.
+    if (process.platform !== 'win32' && (stat.mode & 0o077) !== 0) {
       try {
-        stat = fs.lstatSync(p);
-      } catch (statErr: unknown) {
-        if ((statErr as NodeJS.ErrnoException).code === 'ENOENT') return null;
-        throw statErr;
-      }
-      if (stat.isSymbolicLink()) {
-        throw new Error(
-          `cards402 config at ${p} is a symbolic link. Refusing to load. ` +
-            `Remove the link and re-run 'cards402 onboard --claim <code>' to create a real file.`,
+        fs.chmodSync(p, 0o600);
+        process.stderr.write(
+          `⚠ cards402 config at ${p} had loose permissions (${(stat.mode & 0o777).toString(8)}) — tightened to 600.\n` +
+            '   If this is unexpected, rotate your api key via the dashboard.\n',
         );
-      }
-      if (!stat.isFile()) {
-        throw new Error(
-          `cards402 config at ${p} is not a regular file. ` +
-            `Remove it and re-run 'cards402 onboard --claim <code>'.`,
-        );
-      }
-      // F5-config: enforce a size cap BEFORE reading the file into
-      // memory or doing any further work on it. Config files are
-      // tiny; anything bigger than MAX_CONFIG_BYTES is either
-      // corruption or an attempt to flood request headers.
-      if (stat.size > MAX_CONFIG_BYTES) {
-        throw new Error(
-          `cards402 config at ${p} is ${stat.size} bytes (max ${MAX_CONFIG_BYTES}). ` +
-            `Refusing to load — the file is either corrupted or has been tampered with. ` +
-            `Rotate your api key via the dashboard and re-run 'cards402 onboard'.`,
-        );
-      }
-      // World- or group-readable bits set → tighten and warn. chmod
-      // on a regular file (we verified above that it's not a symlink)
-      // is safe and only affects this file.
-      if ((stat.mode & 0o077) !== 0) {
-        try {
-          fs.chmodSync(p, 0o600);
-          process.stderr.write(
-            `⚠ cards402 config at ${p} had loose permissions (${(stat.mode & 0o777).toString(8)}) — tightened to 600.\n` +
-              '   If this is unexpected, rotate your api key via the dashboard.\n',
-          );
-        } catch {
-          /* non-fatal — we at least tried */
-        }
+      } catch {
+        /* non-fatal — we at least tried */
       }
     }
+
     const raw = fs.readFileSync(p, 'utf8');
-    return JSON.parse(raw) as Cards402Config;
+    const config = JSON.parse(raw) as Cards402Config;
+
+    // F3-config (2026-04-16): validate api_key shape before accepting.
+    // A corrupt or tampered key with CRLF / NUL / non-printable bytes
+    // would crash every HTTP request downstream via Node's
+    // ERR_INVALID_CHAR header validation.
+    if (typeof config.api_key === 'string' && !API_KEY_SHAPE.test(config.api_key)) {
+      throw new Error(
+        `cards402 config at ${p} contains an api_key with non-printable characters. ` +
+          `The file may be corrupted or tampered with. Rotate your key and re-run 'cards402 onboard'.`,
+      );
+    }
+
+    return config;
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw err;
