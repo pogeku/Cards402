@@ -202,14 +202,17 @@ export default function BlogPost() {
             <code>getTime()</code>, requires <code>Number.isFinite</code>, and fails closed.
           </p>
 
-          <h3 style={s.h3}>4. Testnet USDC silently broken</h3>
+          <h3 style={s.h3}>4. Hardcoded mainnet URLs and issuers</h3>
           <p>
             The funding-check poller, the Soroban <code>submitSorobanTx</code> Horizon fallback, and
-            the <code>getOWSBalance</code> helper all had the Circle mainnet USDC issuer hardcoded.
-            On testnet, USDC has a different issuer &mdash; so agents who funded with USDC were
-            stuck in &ldquo;awaiting funding&rdquo; forever, and the SDK&rsquo;s Horizon fallback
-            returned false &ldquo;dropped&rdquo; signals that could trigger double-submits. Three
-            separate fixes, same root cause.
+            the <code>getOWSBalance</code> helper all had the Circle mainnet USDC issuer and Horizon
+            URL hardcoded instead of reading from the environment. Cards402 runs on mainnet in both
+            production and development, so this wasn&rsquo;t causing live failures &mdash; but the
+            code was fragile: if anyone ever deployed against testnet for integration testing, USDC
+            funding detection would silently break and the SDK&rsquo;s Horizon fallback would return
+            false &ldquo;dropped&rdquo; signals. We made all three env-configurable for consistency
+            with the rest of the codebase (which already reads <code>STELLAR_USDC_ISSUER</code> and{' '}
+            <code>STELLAR_NETWORK</code> from env).
           </p>
 
           <h2 style={s.h2}>Three recurring patterns</h2>
