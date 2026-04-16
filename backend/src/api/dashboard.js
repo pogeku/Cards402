@@ -518,10 +518,14 @@ router.post('/api-keys', requirePermission('agent:create'), async (req, res) => 
     details: { label: label || null },
   });
 
+  // The raw key + webhook_secret are NOT returned to the browser.
+  // The claim-code flow means the agent redeems the code for the key
+  // over HTTPS; the dashboard operator never sees or handles the raw
+  // credentials. Returning them here would put them in devtools
+  // network logs, browser memory, and any response-logging proxy —
+  // defeating the whole point of the claim-code architecture.
   res.status(201).json({
     id,
-    key: rawKey,
-    webhook_secret: webhookSecret,
     label: label || null,
     wallet_public_key: wallet_public_key || null,
     claim: {
@@ -529,7 +533,6 @@ router.post('/api-keys', requirePermission('agent:create'), async (req, res) => 
       expires_at: claimExpiresAt,
       ttl_ms: claimTtlMs,
     },
-    warning: 'Store the key and webhook_secret securely — they will not be shown again.',
   });
 });
 

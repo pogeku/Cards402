@@ -91,10 +91,9 @@ export interface DashboardInfo {
 
 export interface NewKeyData {
   id: string;
-  key: string;
-  webhook_secret: string;
   label: string | null;
-  claim?: { code: string; expires_at: string; ttl_ms: number };
+  wallet_public_key: string | null;
+  claim: { code: string; expires_at: string; ttl_ms: number };
 }
 
 export interface User {

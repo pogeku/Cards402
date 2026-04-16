@@ -68,7 +68,11 @@ async function fetchHorizonBalance(publicKey: string, network?: string): Promise
   try {
     const horizonUrl =
       network === 'testnet' ? 'https://horizon-testnet.stellar.org' : 'https://horizon.stellar.org';
-    const res = await fetch(`${horizonUrl}/accounts/${publicKey}`);
+    // 5s timeout so a hung Horizon lookup doesn't stall the entire
+    // wallet-polling cycle (Promise.all across all agents).
+    const res = await fetch(`${horizonUrl}/accounts/${publicKey}`, {
+      signal: AbortSignal.timeout(5000),
+    });
     if (!res.ok) return { xlm: '0', usdc: '0' };
     const data: HorizonBalanceResponse = await res.json();
     let xlm = '0';
@@ -178,13 +182,22 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         while (!closed) {
           const { value, done } = await reader.read();
           if (done) break;
-          buf += decoder.decode(value, { stream: true });
+          // Normalize CRLF and bare CR to LF before accumulating —
+          // same fix as sdk/src/client.ts SSE parser. A proxy that
+          // rewrites line endings to \r\n would otherwise prevent
+          // '\n\n' from ever matching.
+          buf += decoder
+            .decode(value, { stream: true })
+            .replace(/\r\n/g, '\n')
+            .replace(/\r/g, '\n');
           let idx: number;
           while ((idx = buf.indexOf('\n\n')) !== -1) {
             const event = buf.slice(0, idx);
             buf = buf.slice(idx + 2);
             if (event.includes('data:')) void refresh();
           }
+          // Cap the buffer to prevent unbounded growth on malformed streams.
+          if (buf.length > 1024 * 1024) buf = '';
         }
       } catch {
         /* reconnect */
