@@ -20,6 +20,10 @@ import {
 
 export interface Budget {
   spent_usdc: string;
+  /** In-flight orders (pending_payment, ordering, etc.) not yet settled. */
+  in_flight_usdc: string;
+  /** spent_usdc + in_flight_usdc — the committed total against the limit. */
+  committed_usdc: string;
   limit_usdc: string | null;
   remaining_usdc: string | null;
 }

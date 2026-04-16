@@ -316,11 +316,17 @@ components:
 
     Budget:
       type: object
-      required: [spent_usdc]
+      required: [spent_usdc, in_flight_usdc, committed_usdc]
       properties:
         spent_usdc:
           type: string
-          description: Total spent by this API key
+          description: Total settled spend by this API key
+        in_flight_usdc:
+          type: string
+          description: Sum of pending/ordering orders not yet settled
+        committed_usdc:
+          type: string
+          description: spent_usdc + in_flight_usdc
         limit_usdc:
           type: string
           nullable: true
@@ -328,7 +334,7 @@ components:
         remaining_usdc:
           type: string
           nullable: true
-          description: Remaining budget (null = unlimited)
+          description: Remaining budget against committed (null = unlimited)
 
     CardDetails:
       type: object
@@ -374,6 +380,11 @@ components:
           description: Relative URL to poll for status
         budget:
           $ref: '#/components/schemas/Budget'
+        sandbox:
+          type: boolean
+          description: |
+            Present and `true` when the order was created by an API key
+            in sandbox mode. Omitted for live orders.
 
     OrderAwaitingApprovalResponse:
       type: object
@@ -425,6 +436,7 @@ components:
           type: string
         payment_asset:
           type: string
+          enum: [usdc, usdc_soroban, xlm, xlm_soroban]
         created_at:
           type: string
           format: date-time
@@ -447,6 +459,7 @@ components:
           type: string
         payment_asset:
           type: string
+          enum: [usdc, usdc_soroban, xlm, xlm_soroban]
         payment:
           $ref: '#/components/schemas/PaymentInstructions'
         card:
@@ -565,6 +578,8 @@ components:
             - expired
             - pending_payment
             - rejected
+            - refunded
+            - refund_pending
         phase:
           $ref: '#/components/schemas/OrderPhase'
           description: |
