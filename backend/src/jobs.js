@@ -331,11 +331,41 @@ async function reconcileOrderingFulfillment() {
       log(`  ${shortId} → hard-fail (${reason}, attempt ${order.fulfillment_attempt})`);
       // Sanitise before storing — agents read this column.
       const { publicMessage } = require('./lib/sanitize-error');
-      db.prepare(
-        `
-        UPDATE orders SET status = 'failed', error = ?, updated_at = ? WHERE id = ?
-      `,
-      ).run(publicMessage(reason), new Date().toISOString(), order.id);
+      // F1-reconcile (2026-04-16): atomic claim on the hard-fail
+      // transition. Pre-fix this was an unconditional UPDATE and
+      // raced with vcc-callback's delivered claim: if vcc-callback
+      // won its own atomic flip to 'delivered' between our SELECT
+      // above and this UPDATE, we'd overwrite 'delivered' → 'failed'
+      // here and then call scheduleRefund — meaning the agent got
+      // both the card AND a refund. Treasury loss from a narrow
+      // but reproducible race on every stuck-but-eventually-delivered
+      // order. The guard `AND status = 'ordering'` restricts the
+      // UPDATE to rows that are still in the pre-delivery state;
+      // changes === 0 means the row was concurrently flipped to a
+      // terminal state (delivered/failed/etc.) by another path and
+      // we must NOT call scheduleRefund on it.
+      const claimed = db
+        .prepare(
+          `UPDATE orders
+             SET status = 'failed', error = ?, updated_at = ?
+           WHERE id = ? AND status = 'ordering'`,
+        )
+        .run(publicMessage(reason), new Date().toISOString(), order.id);
+      if (claimed.changes === 0) {
+        // Another path won the race — most commonly vcc-callback
+        // flipping to 'delivered'. Log loudly so ops can correlate
+        // the near-miss with the delivery callback.
+        const { event: bizEvent } = require('./lib/logger');
+        log(
+          `  ${shortId} → hard-fail aborted: row left 'ordering' concurrently; refund NOT queued`,
+        );
+        bizEvent('reconcile.hard_fail_raced', {
+          order_id: order.id,
+          vcc_job_id: order.vcc_job_id,
+          reason,
+        });
+        continue;
+      }
       scheduleRefund(order.id).catch((err) =>
         log(`  ${shortId} refund schedule failed: ${err.message}`),
       );
@@ -511,11 +541,33 @@ async function recoverStuckOrders() {
         db.prepare(`UPDATE orders SET updated_at = ? WHERE id = ?`).run(now, order.id);
       } else if (vccJob.status === 'failed') {
         const { publicMessage } = require('./lib/sanitize-error');
-        db.prepare(
-          `
-          UPDATE orders SET status = 'failed', error = ?, updated_at = ? WHERE id = ?
-        `,
-        ).run(publicMessage(vccJob.error || 'vcc_failed'), now, order.id);
+        // F1-recover (2026-04-16): atomic claim on the transition
+        // to 'failed'. Same race as F1-reconcile — the original
+        // unconditional UPDATE would overwrite a concurrent
+        // 'delivered' flip from vcc-callback, triggering a refund on
+        // an order that successfully delivered. The guard limits
+        // the UPDATE to the pre-terminal states the reconciler is
+        // responsible for (pending_payment, ordering); any concurrent
+        // transition to delivered/failed/refund_pending/refunded
+        // makes changes === 0 and skips the scheduleRefund call.
+        const claimed = db
+          .prepare(
+            `UPDATE orders
+               SET status = 'failed', error = ?, updated_at = ?
+             WHERE id = ? AND status IN ('pending_payment', 'ordering')`,
+          )
+          .run(publicMessage(vccJob.error || 'vcc_failed'), now, order.id);
+        if (claimed.changes === 0) {
+          const { event: bizEvent } = require('./lib/logger');
+          log(
+            `  ${order.id.slice(0, 8)} → recover hard-fail aborted: row concurrently terminal; refund NOT queued`,
+          );
+          bizEvent('recover.hard_fail_raced', {
+            order_id: order.id,
+            vcc_job_id: order.vcc_job_id,
+          });
+          continue;
+        }
         // F10: match the callback path — every terminal failure queues a refund
         scheduleRefund(order.id).catch((err) =>
           log(`  ${order.id.slice(0, 8)} refund schedule failed: ${err.message}`),

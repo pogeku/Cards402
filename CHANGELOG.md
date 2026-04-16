@@ -158,6 +158,26 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a typeof guard to `decryptToken` so a non-string
   `system_state.value` can't wedge the token path with an opaque
   TypeError. Audit F1/F2/F3-vcc-client.
+- **Reconciler hard-fail race — treasury loss on concurrent delivery** —
+  two fixes in `jobs.js`, both closing a narrow but reproducible race
+  that could charge an agent AND send them a refund. In
+  `recoverStuckOrders` and `reconcileOrderingFulfillment`'s hard-fail
+  branches, the UPDATE to `status = 'failed'` was previously
+  unconditional: `UPDATE orders SET status='failed' WHERE id = ?`.
+  Between the reconciler's SELECT and the UPDATE, `vcc-callback` could
+  win its own atomic claim and flip the row to `'delivered'` (storing
+  the card, firing the delivery webhook). The reconciler's
+  unconditional UPDATE would then overwrite `delivered → failed` and
+  call `scheduleRefund`, queueing treasury money to go back to the
+  agent — **who already had the card**. Fix adds
+  `AND status = 'ordering'` / `AND status IN ('pending_payment',
+'ordering')` guards and a `changes === 0` race-detection check. On
+  detected race, log a loud `reconcile.hard_fail_raced` /
+  `recover.hard_fail_raced` bizEvent and skip `scheduleRefund`
+  entirely. The vcc-callback path already had the atomic claim from
+  an earlier audit; this extends the same defense to the two
+  reconciler paths that could still overwrite a terminal state.
+  Audit F1-reconcile / F1-recover.
 - **Agent funding check — testnet correctness + Horizon observability** —
   two fixes in `jobs.js::checkAgentFundingStatus` (the Horizon poller
   that flips `awaiting_funding → funded` when an agent wallet receives

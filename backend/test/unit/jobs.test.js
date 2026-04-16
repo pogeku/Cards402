@@ -222,6 +222,133 @@ describe('recoverStuckOrders', () => {
   });
 });
 
+// ── F1-recover: atomic hard-fail claim (treasury-loss race guard) ─────────
+//
+// Pre-fix, the `vccJob.status === 'failed'` branch did an unconditional
+// UPDATE orders SET status='failed' WHERE id = ?. Between the SELECT
+// that populated the `stuck` list and this UPDATE, vcc-callback could
+// win its own atomic claim and flip the row to 'delivered'. Our
+// unconditional UPDATE would then overwrite delivered → failed and
+// queue a refund — the agent got the card AND a refund. Post-fix the
+// UPDATE has `WHERE status IN ('pending_payment', 'ordering')` so the
+// race results in changes=0 and we skip scheduleRefund entirely.
+
+describe('F1-recover: race with concurrent delivered flip does not double-spend', () => {
+  beforeEach(() => resetDb());
+
+  it('does NOT queue a refund when the row is concurrently flipped to delivered', async () => {
+    const id = seedOrderAt({
+      status: 'pending_payment',
+      minutesAgo: 15,
+      vcc_job_id: 'vcc-job-race',
+    });
+    db.prepare(`UPDATE orders SET sender_address = ? WHERE id = ?`).run('GTESTSENDER', id);
+
+    // Race simulation: between recoverStuckOrders reading the stuck list
+    // and calling the hard-fail UPDATE, the mocked getVccJobStatus acts
+    // as a synchronization point — we flip the row to 'delivered' INSIDE
+    // the mock. When recoverStuckOrders resumes after the await, its
+    // atomic UPDATE will see status='delivered' and the guard
+    // `WHERE status IN ('pending_payment', 'ordering')` makes changes=0.
+    vccClient.getVccJobStatus = async () => {
+      // Concurrent vcc-callback flip happens here.
+      db.prepare(`UPDATE orders SET status = 'delivered' WHERE id = ?`).run(id);
+      return { status: 'failed', error: 'ctx_unavailable' };
+    };
+
+    await recoverStuckOrders();
+
+    const order = db.prepare(`SELECT status FROM orders WHERE id = ?`).get(id);
+    // Critical: status must still be 'delivered', NOT overwritten to 'failed'.
+    assert.equal(order.status, 'delivered', 'delivered row must not be overwritten by hard-fail');
+    // And no refund_pending transition happened — because scheduleRefund
+    // was skipped entirely on the race-detected path.
+    const refundRow = db
+      .prepare(`SELECT status FROM orders WHERE id = ? AND status = 'refund_pending'`)
+      .get(id);
+    assert.equal(
+      refundRow,
+      undefined,
+      'refund must not be queued when the row was already delivered',
+    );
+  });
+
+  it('still hard-fails and queues refund on the happy path (no race)', async () => {
+    // Regression guard: the atomic guard must not break the normal
+    // F10 path where vcc reports failed and we legitimately mark the
+    // order failed + queue a refund.
+    const id = seedOrderAt({
+      status: 'pending_payment',
+      minutesAgo: 15,
+      vcc_job_id: 'vcc-job-happy',
+    });
+    db.prepare(`UPDATE orders SET sender_address = ? WHERE id = ?`).run('GHAPPY', id);
+    vccClient.getVccJobStatus = async () => ({ status: 'failed', error: 'ctx_unavailable' });
+
+    await recoverStuckOrders();
+
+    // Normal flow: failed → scheduleRefund claims → refund_pending.
+    const order = db.prepare(`SELECT status FROM orders WHERE id = ?`).get(id);
+    assert.equal(order.status, 'refund_pending');
+  });
+});
+
+// ── F1-reconcile: atomic hard-fail claim in the timeout/attempt-exhausted branch
+//
+// Same race as F1-recover but in reconcileOrderingFulfillment's
+// hard-fail path (triggered by timedOut || attemptsExhausted). Pre-fix,
+// a row stuck past STUCK_FAIL_AFTER_MS would be unconditionally flipped
+// to 'failed' + refunded even if vcc-callback concurrently won the
+// delivered claim. Post-fix the UPDATE is guarded by
+// `WHERE status = 'ordering'` so a concurrent flip leaves the row
+// delivered and skips the scheduleRefund call.
+
+describe('F1-reconcile: race with concurrent delivered flip in hard-fail branch', () => {
+  const { reconcileOrderingFulfillment } = require('../../src/jobs');
+
+  beforeEach(() => resetDb());
+
+  function seedOrderingPastFailCutoff({ attempt = 0, vcc_job_id = 'vcc-job-reconcile' } = {}) {
+    const id = uuidv4();
+    // Past STUCK_FAIL_AFTER_MS (default 30 min) so the hard-fail branch fires.
+    const ts = new Date(Date.now() - 45 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+    db.prepare(
+      `
+      INSERT INTO orders
+        (id, status, amount_usdc, payment_asset, api_key_id, vcc_job_id, fulfillment_attempt, sender_address, created_at, updated_at)
+      VALUES (?, 'ordering', '10.00', 'usdc_soroban', NULL, ?, ?, 'GRACESENDER', ?, ?)
+    `,
+    ).run(id, vcc_job_id, attempt, ts, ts);
+    return id;
+  }
+
+  it('does NOT overwrite a concurrently-delivered row in the hard-fail branch', async () => {
+    const id = seedOrderingPastFailCutoff();
+
+    // Race happens inside the postpone check: reconcile calls
+    // vccClient.getVccJobStatus to see if vcc is still progressing.
+    // The mock returns a terminal-non-in-progress status (so the
+    // postpone branch is SKIPPED and we fall through to hard-fail)
+    // AND simultaneously flips the row to 'delivered' to simulate
+    // vcc-callback winning the race during the await window.
+    vccClient.getVccJobStatus = async () => {
+      db.prepare(`UPDATE orders SET status = 'delivered' WHERE id = ?`).run(id);
+      // Return a status that is neither in-progress nor 'delivered'
+      // so the postpone branch's `VCC_IN_PROGRESS_STATUSES.has(...)`
+      // check is false and reconcile falls through to hard-fail.
+      return { status: 'error' };
+    };
+
+    await reconcileOrderingFulfillment();
+
+    const order = db.prepare(`SELECT status FROM orders WHERE id = ?`).get(id);
+    // Critical: delivered row preserved. Pre-fix this would have been
+    // 'failed' (from the reconciler's UPDATE) then 'refund_pending'
+    // (from scheduleRefund) — treasury loss.
+    assert.equal(order.status, 'delivered');
+  });
+});
+
 // ── purgeOldCards (audit F1) ──────────────────────────────────────────────────
 
 describe('purgeOldCards', () => {
