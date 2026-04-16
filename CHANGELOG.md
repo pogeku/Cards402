@@ -158,6 +158,24 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a typeof guard to `decryptToken` so a non-string
   `system_state.value` can't wedge the token path with an opaque
   TypeError. Audit F1/F2/F3-vcc-client.
+- **SDK client SSE parser + retry jitter** — three fixes in
+  `sdk/src/client.ts` (the `Cards402Client` HTTP client every agent
+  imports). (1) **SSE CRLF normalization**. The stream parser split on
+  `'\n\n'` only; the SSE spec defines end-of-line as `\r\n`, `\r`,
+  OR `\n`. A transparent HTTP proxy that rewrites line endings to
+  `\r\n` meant `buffer.indexOf('\n\n')` never matched and the buffer
+  grew unbounded until the agent OOM'd. Now normalizes `\r\n` and
+  bare `\r` to `\n` at chunk ingestion. (2) **SSE buffer size cap**.
+  Pre-fix, a misbehaving server or MITM could inject arbitrary data
+  between delimiter pairs and grow the buffer to hundreds of MB
+  before the agent died. Added a 1 MB cap — exceeding it cancels
+  the stream reader and falls through to the polling fallback.
+  (3) **Full-range retry jitter**. The jitter on `fetchWithRetry`
+  was `[0, delay/4]` (always additive), so in a thundering-herd
+  scenario (many agents 429'd simultaneously) they all retried
+  within `[delay, 1.25*delay]`. Standard "full jitter" spreads
+  retries across `[0, delay]` to decorrelate the herd. Audit
+  F1/F2/F3-sdk.
 - **SQLite busy_timeout + transactional migrations** — two fixes in
   `src/db.js`. (1) Added `PRAGMA busy_timeout = 5000`. better-sqlite3's
   default is 0ms — any concurrent writer that tried to acquire the

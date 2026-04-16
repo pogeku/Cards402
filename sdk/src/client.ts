@@ -222,9 +222,15 @@ export class Cards402Client {
         lastErr = err;
         if (i === attempts) throw err;
       }
+      // F3-sdk (2026-04-16): full-range jitter. Pre-fix the jitter was
+      // [0, delay/4] (always additive), so in a thundering-herd scenario
+      // (many agents 429'd simultaneously) they all retried within
+      // [delay, 1.25*delay] — too narrow to decorrelate. Standard "full
+      // jitter" is [0, delay], which spreads retries across the entire
+      // backoff window and avoids the herd re-colliding at each level.
       const delay = Math.min(baseDelayMs * Math.pow(2, i), maxDelayMs);
-      const jitter = Math.floor(Math.random() * (delay / 4));
-      await new Promise((r) => setTimeout(r, delay + jitter));
+      const jitter = Math.floor(Math.random() * delay);
+      await new Promise((r) => setTimeout(r, jitter));
     }
     // Unreachable because we always either return or throw above.
     throw lastErr ?? new Error('fetchWithRetry: exhausted without result');
@@ -321,10 +327,40 @@ export class Cards402Client {
       const decoder = new TextDecoder();
       let buffer = '';
 
+      // F2-sdk (2026-04-16): cap the SSE buffer so a misbehaving server
+      // or MITM can't OOM the agent process by injecting a single
+      // multi-megabyte "event" between delimiters. 1 MB is generous for
+      // any realistic SSE payload (the backend sends <2 KB per phase
+      // change); anything larger is definitionally adversarial or corrupt.
+      const SSE_BUFFER_CAP = 1024 * 1024;
+
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+        // F1-sdk (2026-04-16): normalize CRLF and bare CR to LF before
+        // accumulating into the buffer. The SSE spec (HTML Living
+        // Standard § EventSource) defines end-of-line as \r\n, \r, or
+        // \n. The backend sends \n, but a transparent HTTP proxy
+        // (nginx on Windows, some Cloudflare configs, corporate proxy
+        // appliances) can rewrite line endings to \r\n. Pre-fix, the
+        // parser split on '\n\n' only — a \r\n rewrite meant
+        // buffer.indexOf('\n\n') never matched and the buffer grew
+        // unbounded until OOM. Normalizing at ingestion fixes all
+        // three delimiter variants in one step.
+        const chunk = decoder
+          .decode(value, { stream: true })
+          .replace(/\r\n/g, '\n')
+          .replace(/\r/g, '\n');
+        buffer += chunk;
+
+        // F2-sdk: abort if the buffer exceeds the cap — drop the stream
+        // and fall through to the polling fallback (or re-throw as a
+        // generic error that waitForCard's catch handler routes to
+        // polling).
+        if (buffer.length > SSE_BUFFER_CAP) {
+          reader.cancel();
+          throw new Error('sse buffer exceeded 1 MB — aborting stream');
+        }
 
         // Split on blank lines — each SSE event is terminated by \n\n.
         let idx: number;
