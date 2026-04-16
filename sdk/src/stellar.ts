@@ -17,6 +17,7 @@ import {
   submitSorobanTx,
   decimalToStroops,
   selectContractCall,
+  InsufficientFeeError,
 } from './soroban';
 
 const USDC_ISSUER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
@@ -118,19 +119,35 @@ export async function payViaContract(opts: PayOpts): Promise<string> {
 
   const keypair = Keypair.fromSecret(walletSecret);
   const { fn, amountDecimal } = selectContractCall(payment, paymentAsset);
+  const amountStroops = decimalToStroops(amountDecimal);
 
-  const { tx, server } = await buildContractPaymentTx({
-    contractId: payment.contract_id,
-    fn,
-    fromPublicKey: keypair.publicKey(),
-    amountStroops: decimalToStroops(amountDecimal),
-    orderId: payment.order_id,
-    networkPassphrase,
-    rpcUrl: sorobanRpcUrl,
-  });
-
-  tx.sign(keypair);
-  return submitSorobanTx(tx, server, getHorizonUrl(networkPassphrase));
+  // Fee retry: if the network rejects the fee, rebuild with the
+  // required fee as the floor. At most one retry — the network's
+  // suggested fee should be sufficient on the second attempt.
+  let fee: string | undefined;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { tx, server } = await buildContractPaymentTx({
+      contractId: payment.contract_id,
+      fn,
+      fromPublicKey: keypair.publicKey(),
+      amountStroops,
+      orderId: payment.order_id,
+      networkPassphrase,
+      rpcUrl: sorobanRpcUrl,
+      fee,
+    });
+    tx.sign(keypair);
+    try {
+      return await submitSorobanTx(tx, server, getHorizonUrl(networkPassphrase));
+    } catch (err) {
+      if (err instanceof InsufficientFeeError && attempt === 0) {
+        fee = err.requiredFee;
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error('payViaContract: fee retry exhausted');
 }
 
 /**

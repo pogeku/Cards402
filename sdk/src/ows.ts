@@ -38,6 +38,7 @@ import {
   decimalToStroops,
   selectContractCall,
   getHorizonUrl,
+  InsufficientFeeError,
 } from './soroban';
 
 const USDC_ISSUER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
@@ -451,6 +452,7 @@ export async function payViaContractOWS(
   // attached-but-not-dropped — propagates out unchanged so
   // purchaseCardOWS's caller-side handling stays correct.
   let preservedSequence: string | undefined;
+  let suggestedFee: string | undefined;
   let lastErr: unknown;
   for (let attempt = 0; attempt < PAY_VIA_CONTRACT_MAX_ATTEMPTS; attempt++) {
     const { tx, server } = await buildTx({
@@ -462,6 +464,7 @@ export async function payViaContractOWS(
       networkPassphrase,
       rpcUrl: sorobanRpcUrl,
       preservedSequence,
+      fee: suggestedFee,
     });
     // Capture the sequence this tx uses BEFORE signing / submitting.
     // On retry we'll feed this back in as preservedSequence so the
@@ -474,6 +477,14 @@ export async function payViaContractOWS(
       return await submitTx(tx, server, getHorizonUrl(networkPassphrase));
     } catch (err) {
       lastErr = err;
+      // Fee too low — retry with the network's required fee as floor.
+      // The tx was rejected pre-apply so no sequence was consumed;
+      // grab a fresh one on the next build (don't set preservedSequence).
+      if (err instanceof InsufficientFeeError) {
+        if (attempt >= PAY_VIA_CONTRACT_MAX_ATTEMPTS - 1) throw err;
+        suggestedFee = err.requiredFee;
+        continue;
+      }
       const dropped = (err as Error & { dropped?: boolean })?.dropped === true;
       // Not dropped → propagate. This covers on-chain failures
       // (sequence already consumed, retry would fail tx_bad_seq),

@@ -57,5 +57,7 @@ export {
   ResumableError,
 } from './errors';
 
+export { InsufficientFeeError } from './soroban';
+
 export { loadCards402Config, saveCards402Config, resolveCredentials } from './config';
 export type { Cards402Config } from './config';

@@ -61,6 +61,20 @@ export function decimalToStroops(decimal: string): bigint {
   return stroops;
 }
 
+/**
+ * Thrown when Soroban rejects a transaction because the offered fee was
+ * too low. `requiredFee` is the minimum the network demanded (in stroops),
+ * taken directly from the error response — callers should use it as the
+ * floor when rebuilding the transaction.
+ */
+export class InsufficientFeeError extends Error {
+  requiredFee: string;
+  constructor(requiredFee: string) {
+    super(`Soroban transaction rejected: fee too low (network requires ${requiredFee} stroops)`);
+    this.requiredFee = requiredFee;
+  }
+}
+
 export type PaymentFn = 'pay_usdc' | 'pay_xlm';
 
 export interface BuildContractTxOpts {
@@ -91,6 +105,12 @@ export interface BuildContractTxOpts {
    * incrementSequenceNumber() call lands on exactly this value.
    */
   preservedSequence?: string;
+  /**
+   * Override the fee (stroops). Defaults to BASE_FEE. Set this to the
+   * `requiredFee` from an InsufficientFeeError to retry with the fee
+   * floor the network actually demanded.
+   */
+  fee?: string;
 }
 
 /**
@@ -120,7 +140,7 @@ export async function buildContractPaymentTx(
   );
 
   const raw = new TransactionBuilder(account, {
-    fee: BASE_FEE,
+    fee: opts.fee ?? BASE_FEE,
     networkPassphrase: opts.networkPassphrase,
   })
     .addOperation(op)
@@ -181,6 +201,17 @@ export async function submitSorobanTx(
         );
       }
       if (send.status === 'ERROR') {
+        // txInsufficientFee — the network tells us what fee it needed.
+        // Surface it as InsufficientFeeError so callers can rebuild
+        // with the required fee as the floor and retry immediately.
+        try {
+          if (send.errorResult?.result().switch().name === 'txInsufficientFee') {
+            throw new InsufficientFeeError(send.errorResult.feeCharged().toString());
+          }
+        } catch (feeErr) {
+          if (feeErr instanceof InsufficientFeeError) throw feeErr;
+          // XDR parsing failed — fall through to the generic error.
+        }
         throw new Error(
           `Soroban sendTransaction error: ${JSON.stringify(send.errorResult ?? send)}`,
         );
@@ -194,9 +225,10 @@ export async function submitSorobanTx(
       // propagate directly. Otherwise assume it was a transient network
       // failure and retry.
       if (
-        err instanceof Error &&
-        (err.message.startsWith('Soroban network congested') ||
-          err.message.startsWith('Soroban sendTransaction error'))
+        err instanceof InsufficientFeeError ||
+        (err instanceof Error &&
+          (err.message.startsWith('Soroban network congested') ||
+            err.message.startsWith('Soroban sendTransaction error')))
       ) {
         throw err;
       }
