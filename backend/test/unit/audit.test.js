@@ -6,7 +6,12 @@ require('../helpers/env');
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const { db, resetDb } = require('../helpers/app');
-const { recordAudit, recordAuditFromReq, listAudit } = require('../../src/lib/audit');
+const {
+  recordAudit,
+  recordAuditFromReq,
+  listAudit,
+  _coerceTextColumn,
+} = require('../../src/lib/audit');
 
 describe('audit log', () => {
   const dashboardId = 'test-dashboard-1';
@@ -357,5 +362,138 @@ describe('audit log', () => {
       .get('string.headers');
     assert.equal(row.ip, '10.0.0.1');
     assert.equal(row.user_agent, 'curl/8.0');
+  });
+
+  // ── F7-audit: library-boundary coercion for direct recordAudit callers ──
+  //
+  // recordAuditFromReq (F6-audit) coerced array-valued headers before
+  // calling recordAudit, but direct callers of recordAudit bypass that
+  // helper and historically passed the raw header values through.
+  // vcc-callback.js and internal.js both do this. An array-valued
+  // x-forwarded-for / user-agent caused better-sqlite3 to reject the
+  // bind with a TypeError; the outer try/catch in recordAudit swallowed
+  // the error and the audit row was silently LOST — defeating the
+  // whole point of audit logging.
+  //
+  // Fix moves the coercion into recordAudit() itself via a
+  // coerceTextColumn helper, so every present and future caller is
+  // protected at the library boundary.
+
+  describe('F7-audit: coerceTextColumn helper', () => {
+    it('passes a plain string through unchanged', () => {
+      assert.equal(_coerceTextColumn('10.0.0.1'), '10.0.0.1');
+    });
+
+    it('returns null for null or undefined', () => {
+      assert.equal(_coerceTextColumn(null), null);
+      assert.equal(_coerceTextColumn(undefined), null);
+    });
+
+    it('takes the first non-empty string from an array', () => {
+      assert.equal(_coerceTextColumn(['10.0.0.1', '10.0.0.2']), '10.0.0.1');
+    });
+
+    it('skips empty strings in an array and returns the next non-empty', () => {
+      assert.equal(_coerceTextColumn(['', 'curl/8.0']), 'curl/8.0');
+    });
+
+    it('returns null for an all-empty-string array', () => {
+      assert.equal(_coerceTextColumn(['', '']), null);
+    });
+
+    it('returns null for an empty array', () => {
+      assert.equal(_coerceTextColumn([]), null);
+    });
+
+    it('coerces numbers via String()', () => {
+      assert.equal(_coerceTextColumn(42), '42');
+    });
+
+    it('coerces bigints via String()', () => {
+      assert.equal(_coerceTextColumn(1234567890123456789n), '1234567890123456789');
+    });
+
+    it('coerces objects via String() (fallback)', () => {
+      // Real-world shouldn't happen, but pin the behavior.
+      assert.equal(_coerceTextColumn({ foo: 'bar' }), '[object Object]');
+    });
+
+    it('returns null when String() throws (Proxy with trapped toString)', () => {
+      const weird = /** @type {any} */ ({
+        toString() {
+          throw new Error('nope');
+        },
+      });
+      assert.equal(_coerceTextColumn(weird), null);
+    });
+  });
+
+  describe('F7-audit: recordAudit library-boundary coercion', () => {
+    it('direct recordAudit call with array-valued ip lands the row', () => {
+      // This is the pre-fix bug: vcc-callback passes
+      //   ip: req.ip || req.headers?.['x-forwarded-for'] || null
+      // If x-forwarded-for was an array (duplicate header), the bind
+      // threw and the row was silently lost. Post-fix the library
+      // coerces to the first element and the row lands.
+      recordAudit({
+        dashboardId,
+        actor: { id: null, email: 'vcc-callback', role: 'system' },
+        action: 'array.ip.direct',
+        ip: /** @type {any} */ (['10.0.0.1', '10.0.0.2']),
+        userAgent: 'curl/8.0',
+      });
+      const row = db
+        .prepare(`SELECT ip, user_agent FROM audit_log WHERE action = ?`)
+        .get('array.ip.direct');
+      assert.ok(row, 'audit row must land despite array ip — pre-fix this row was LOST');
+      assert.equal(row.ip, '10.0.0.1');
+      assert.equal(row.user_agent, 'curl/8.0');
+    });
+
+    it('direct recordAudit call with array-valued userAgent lands the row', () => {
+      recordAudit({
+        dashboardId,
+        actor: { id: null, email: 'vcc-callback', role: 'system' },
+        action: 'array.ua.direct',
+        ip: '10.0.0.1',
+        userAgent: /** @type {any} */ (['agent-a', 'agent-b']),
+      });
+      const row = db
+        .prepare(`SELECT ip, user_agent FROM audit_log WHERE action = ?`)
+        .get('array.ua.direct');
+      assert.ok(row);
+      assert.equal(row.user_agent, 'agent-a');
+    });
+
+    it('direct recordAudit call with null ip and null userAgent still lands', () => {
+      recordAudit({
+        dashboardId,
+        actor: { email: 'system', role: 'owner' },
+        action: 'null.headers.direct',
+        ip: null,
+        userAgent: null,
+      });
+      const row = db
+        .prepare(`SELECT ip, user_agent FROM audit_log WHERE action = ?`)
+        .get('null.headers.direct');
+      assert.ok(row);
+      assert.equal(row.ip, null);
+      assert.equal(row.user_agent, null);
+    });
+
+    it('direct recordAudit call with plain strings is unchanged (regression guard)', () => {
+      recordAudit({
+        dashboardId,
+        actor: { email: 'system', role: 'owner' },
+        action: 'string.headers.direct',
+        ip: '198.51.100.7',
+        userAgent: 'nodejs-sdk/1.2.3',
+      });
+      const row = db
+        .prepare(`SELECT ip, user_agent FROM audit_log WHERE action = ?`)
+        .get('string.headers.direct');
+      assert.equal(row.ip, '198.51.100.7');
+      assert.equal(row.user_agent, 'nodejs-sdk/1.2.3');
+    });
   });
 });

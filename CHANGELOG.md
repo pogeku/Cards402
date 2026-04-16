@@ -158,6 +158,23 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a typeof guard to `decryptToken` so a non-string
   `system_state.value` can't wedge the token path with an opaque
   TypeError. Audit F1/F2/F3-vcc-client.
+- **Audit log library-boundary coercion** — moved the defensive
+  `string | string[]` coercion for `ip` and `userAgent` from
+  `recordAuditFromReq` into `recordAudit` itself. Pre-fix, direct
+  callers of `recordAudit` (`vcc-callback.js` and `internal.js`)
+  passed raw `req.headers['x-forwarded-for']` / `req.headers['user-agent']`
+  values through without coercion. Node's http parser returns an
+  array for duplicated headers; better-sqlite3 rejected the array
+  bind with a TypeError; the outer try/catch swallowed it; the
+  audit row was **silently lost** — defeating the whole point of
+  audit logging. `recordAuditFromReq` already had the coercion
+  (F6-audit) but there was no protection for direct callers.
+  Fix adds a `coerceTextColumn` helper inside `lib/audit.js` that
+  handles strings, arrays (takes first non-empty element), null,
+  undefined, numbers, bigints, plain objects, and Proxy-toString-
+  throws — so every present and future caller of `recordAudit` is
+  protected at the library boundary without having to audit each
+  call site. Audit F7-audit.
 - **Reconciler hard-fail race — treasury loss on concurrent delivery** —
   two fixes in `jobs.js`, both closing a narrow but reproducible race
   that could charge an agent AND send them a refund. In

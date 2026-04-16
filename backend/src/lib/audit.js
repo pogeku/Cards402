@@ -120,6 +120,48 @@ function serialiseDetails(details) {
   );
 }
 
+/**
+ * F7-audit (2026-04-16): defensive coercion of string|string[]|null
+ * values that get bound to TEXT columns. Node's http parser returns
+ * an array for duplicated headers (x-forwarded-for, user-agent),
+ * and better-sqlite3 rejects array binds with
+ * `TypeError: SQLite3 can only bind numbers, strings, bigints,
+ * buffers, and null`. Pre-fix, the outer try/catch around insertStmt
+ * below caught that TypeError and SWALLOWED it — meaning the audit
+ * row was silently lost any time a direct caller of recordAudit()
+ * (vcc-callback, internal, etc.) passed a raw req.headers[...] value
+ * without coercing it first. `recordAuditFromReq` already coerced
+ * (F6-audit), but direct callers bypass that helper. Moving the
+ * coercion into `recordAudit` itself means every present and future
+ * caller is protected at the library boundary without having to
+ * audit each call site.
+ *
+ * Also coerces numbers and other non-string scalars via String() so
+ * a caller that accidentally passes a numeric-like value still
+ * lands in a valid TEXT column instead of triggering the
+ * better-sqlite3 bind type check.
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+function coerceTextColumn(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    // Take the first non-empty string element; fall back to null.
+    for (const v of value) {
+      if (typeof v === 'string' && v.length > 0) return v;
+    }
+    return null;
+  }
+  // Objects, numbers, bigints — coerce via String() in a try/catch in
+  // case toString throws (Proxy, revoked, etc.).
+  try {
+    return String(value);
+  } catch {
+    return null;
+  }
+}
+
 /** @param {AuditEvent} event */
 function recordAudit(event) {
   // F1-audit: fail loud on a missing required field instead of letting
@@ -152,8 +194,11 @@ function recordAudit(event) {
       resource_type: event.resourceType ?? null,
       resource_id: event.resourceId ?? null,
       details: serialiseDetails(event.details),
-      ip: event.ip ?? null,
-      user_agent: event.userAgent ?? null,
+      // F7-audit: coerce at the library boundary so direct callers
+      // (vcc-callback, internal, etc.) don't have to remember to
+      // sanitize header values themselves.
+      ip: coerceTextColumn(event.ip),
+      user_agent: coerceTextColumn(event.userAgent),
     });
   } catch (err) {
     console.error(
@@ -259,4 +304,10 @@ function safeParse(s) {
   }
 }
 
-module.exports = { recordAudit, recordAuditFromReq, listAudit };
+module.exports = {
+  recordAudit,
+  recordAuditFromReq,
+  listAudit,
+  // Test-only export for the 2026-04-16 F7-audit hardening.
+  _coerceTextColumn: coerceTextColumn,
+};
