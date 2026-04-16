@@ -98,9 +98,12 @@ export default function PlatformAgentsPage() {
                     <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
                       {a.suspended ? <Pill tone="red">suspended</Pill> : null}
                       {!a.enabled ? <Pill tone="neutral">disabled</Pill> : null}
-                      {a.agent_state && <Pill tone="neutral">{a.agent_state}</Pill>}
-                      {!a.suspended && a.enabled && !a.agent_state && (
+                      {a.agent?.state === 'active' ? (
                         <Pill tone="green">active</Pill>
+                      ) : a.agent?.state ? (
+                        <Pill tone="neutral">{a.agent.label ?? a.agent.state}</Pill>
+                      ) : (
+                        a.agent_state && <Pill tone="neutral">{a.agent_state}</Pill>
                       )}
                     </div>
                   </td>

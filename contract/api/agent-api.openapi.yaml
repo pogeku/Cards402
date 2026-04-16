@@ -96,12 +96,15 @@ paths:
             enum:
               [
                 pending_payment,
+                payment_confirmed,
+                claim_received,
+                stage1_done,
                 ordering,
+                awaiting_approval,
                 delivered,
                 failed,
                 refunded,
                 refund_pending,
-                awaiting_approval,
                 expired,
                 rejected,
               ]
@@ -264,7 +267,7 @@ components:
       properties:
         amount_usdc:
           type: string
-          pattern: '^\d+(\.\d+)?$'
+          pattern: '^\d+(\.\d{1,2})?$'
           description: |
             Card value in USD as a positive decimal string, e.g. "10.00".
             Minimum "0.01" and maximum "10000.00" per order — orders

@@ -406,7 +406,7 @@ export interface operations {
     listOrders: {
         parameters: {
             query?: {
-                status?: "pending_payment" | "ordering" | "delivered" | "failed" | "refunded" | "refund_pending" | "awaiting_approval" | "expired" | "rejected";
+                status?: "pending_payment" | "payment_confirmed" | "claim_received" | "stage1_done" | "ordering" | "awaiting_approval" | "delivered" | "failed" | "refunded" | "refund_pending" | "expired" | "rejected";
                 limit?: number;
                 offset?: number;
                 /** @description Only orders created at or after this timestamp. */

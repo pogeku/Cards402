@@ -75,6 +75,14 @@ jobs:
       - run: npm test --if-present
         env:
           NODE_ENV: test
+      - name: Install backend deps
+        working-directory: backend
+        run: npm ci
+      - name: Backend tests
+        working-directory: backend
+        run: npm test
+        env:
+          NODE_ENV: test
 
   audit:
     name: Security Audit

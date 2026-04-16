@@ -464,6 +464,13 @@ export interface PlatformAgent {
   order_count: number;
   delivered_count: number;
   refunded_count: number;
+  agent: {
+    state: string;
+    label: string;
+    detail: string | null;
+    since: string | null;
+    wallet_public_key: string | null;
+  } | null;
 }
 
 export interface PlatformUser {

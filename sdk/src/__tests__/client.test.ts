@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// Allow http:// base URLs in tests (assertSafeBaseUrl rejects them otherwise)
+process.env.CARDS402_ALLOW_INSECURE_BASE_URL = '1';
+
 import { Cards402Client } from '../client';
 import {
   AuthError,

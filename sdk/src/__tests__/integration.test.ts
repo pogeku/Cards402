@@ -5,6 +5,10 @@
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
+
+// Allow http:// base URLs in tests (assertSafeBaseUrl rejects them otherwise)
+process.env.CARDS402_ALLOW_INSECURE_BASE_URL = '1';
+
 import type { Cards402Client as Cards402ClientType } from '../client';
 
 describe('SDK integration (sandbox mode)', () => {

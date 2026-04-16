@@ -207,7 +207,7 @@ components:
           description: cards402 order UUID
         amount_usdc:
           type: string
-          pattern: '^\d+(\.\d+)?$'
+          pattern: '^\d+(\.\d{1,2})?$'
         callback_url:
           type: string
           format: uri

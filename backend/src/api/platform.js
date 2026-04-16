@@ -295,6 +295,7 @@ router.get('/orders', (req, res) => {
 // ── GET /agents ───────────────────────────────────────────────────────────────
 // Every api_key across every dashboard, with owner info and lifetime stats.
 router.get('/agents', (req, res) => {
+  const { deriveAgentState, batchDeliveredCounts } = require('../lib/agent-state');
   const rows = /** @type {any[]} */ (
     db
       .prepare(
@@ -320,7 +321,13 @@ router.get('/agents', (req, res) => {
       )
       .all()
   );
-  res.json(rows);
+  const counts = batchDeliveredCounts(rows.map((r) => r.id));
+  res.json(
+    rows.map((row) => ({
+      ...row,
+      agent: deriveAgentState(row, { deliveredCount: counts.get(row.id) ?? 0 }),
+    })),
+  );
 });
 
 // ── GET /users ────────────────────────────────────────────────────────────────
