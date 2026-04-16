@@ -15,6 +15,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as crypto from 'crypto';
 
 import { loadCards402Config } from '../config';
 import { purchaseCardOWS, getOWSBalance } from '../ows';
@@ -139,7 +140,11 @@ function saveLastOrder(state: LastOrderState): void {
     // loadLastOrder would silently skip — losing the resume context
     // for the very error that triggered the save.
     const body = JSON.stringify({ savedAt: new Date().toISOString(), ...state }, null, 2);
-    const tmp = `${p}.tmp-${process.pid}`;
+    // F3-purchase (2026-04-16): use crypto.randomBytes for the temp
+    // suffix instead of process.pid alone. PID is predictable and
+    // collision-prone across container restarts that recycle PIDs.
+    // Matches config.ts's F3-config hardening.
+    const tmp = `${p}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
     try {
       fs.writeFileSync(tmp, body, { mode: 0o600 });
       fs.renameSync(tmp, p);
@@ -159,7 +164,16 @@ function saveLastOrder(state: LastOrderState): void {
       /* non-fatal */
     }
   } catch {
-    /* non-fatal — resume context is best-effort */
+    // F2-purchase (2026-04-16): warn on save failure instead of
+    // swallowing silently. Pre-fix, a disk-full or permission-denied
+    // error produced zero signal — the purchase output said "saved to
+    // ~/.cards402/last-order" and told the user to --resume, but the
+    // file didn't exist. Now we print a warning so the user knows to
+    // copy the order ID from the error message manually.
+    process.stderr.write(
+      '⚠ Could not save resume state to ~/.cards402/last-order.\n' +
+        '  Copy the order ID from the error above if you need to --resume later.\n',
+    );
   }
 }
 
@@ -170,8 +184,16 @@ function saveLastOrder(state: LastOrderState): void {
  * doesn't lose their resume context. Returns null if the file is
  * missing, unreadable, or has no parseable orderId.
  */
+// F1-purchase (2026-04-16): size cap matching config.ts's MAX_CONFIG_BYTES.
+// The last-order file is tiny (<1 KB typically). A multi-GB file from disk
+// corruption or a symlink to a large file would OOM the process.
+const MAX_LAST_ORDER_BYTES = 16 * 1024;
+
 export function loadLastOrder(): LastOrderState | null {
   try {
+    // F1-purchase: check size before reading.
+    const stat = fs.statSync(lastOrderFile());
+    if (stat.size > MAX_LAST_ORDER_BYTES) return null;
     const raw = fs.readFileSync(lastOrderFile(), 'utf8');
     const trimmed = raw.trim();
     if (!trimmed) return null;

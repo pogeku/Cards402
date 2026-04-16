@@ -158,6 +158,17 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a typeof guard to `decryptToken` so a non-string
   `system_state.value` can't wedge the token path with an opaque
   TypeError. Audit F1/F2/F3-vcc-client.
+- **SDK purchase command — last-order size cap + save warning +
+  temp suffix** — three fixes in `sdk/src/commands/purchase.ts`.
+  (1) `loadLastOrder` had no size cap. A multi-GB `~/.cards402/last-order`
+  file (disk corruption, symlink to a large file) would OOM the process.
+  Added 16 KB cap matching config.ts. (2) `saveLastOrder` outer catch
+  silently swallowed all errors — disk-full, permission-denied, etc. —
+  with zero user signal. The purchase output then told the user to
+  `--resume` but the file didn't exist. Now prints a warning.
+  (3) Temp-file suffix was PID-only — predictable and collision-prone.
+  Changed to `crypto.randomBytes(4)` matching config.ts. Audit
+  F1/F2/F3-purchase.
 - **SDK onboard command — claim timeout + api_key shape check** —
   two fixes in `sdk/src/commands/onboard.ts`. (1) **Claim fetch had no
   timeout**. A slow or hanging backend would block the onboard command
