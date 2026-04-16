@@ -158,6 +158,16 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a typeof guard to `decryptToken` so a non-string
   `system_state.value` can't wedge the token path with an opaque
   TypeError. Audit F1/F2/F3-vcc-client.
+- **SDK wallet trustline — missing passphrase** — `cards402 wallet
+trustline` called `addUsdcTrustlineOWS` without passing the wallet
+  passphrase from config. Any agent onboarded with `--passphrase-env`
+  (encrypted OWS vault) got a cryptic decrypt error when trying to
+  open a USDC trustline via the CLI. The `purchase` command and the
+  MCP `setup_wallet` tool both correctly passed the passphrase;
+  `wallet.ts` was the only caller that missed it. Fix resolves
+  `passphrase_env` from config (with CLI `--passphrase-env` override)
+  and passes the decrypted value through to `addUsdcTrustlineOWS`.
+  Also added `--passphrase-env` to the usage text. Audit F1-wallet.
 - **SDK version-check — state file + registry response body caps** —
   two fixes in `sdk/src/version-check.ts`. (1) `readState` had no
   file-size cap — a multi-GB `~/.cards402/version-check.json` would

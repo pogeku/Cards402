@@ -8,7 +8,7 @@ import { getOWSPublicKey, getOWSBalance, addUsdcTrustlineOWS } from '../ows';
 
 function usage(): void {
   process.stderr
-    .write(`Usage: cards402 wallet <subcommand> [--vault-path <path>] [--name <walletname>]
+    .write(`Usage: cards402 wallet <subcommand> [--vault-path <path>] [--name <walletname>] [--passphrase-env <ENVNAME>]
 
 Subcommands:
   address              Print the Stellar address for this agent's wallet
@@ -70,8 +70,19 @@ export async function walletCommand(argv: string[]): Promise<number> {
     );
     return 1;
   }
-  // F12: vault_path comes from config first, CLI flag overrides.
+  // F12: vault_path and passphrase_env come from config first, CLI
+  // flag overrides. The passphrase value is read from process.env at
+  // call time; only the env var NAME is ever stored in config.
   const vaultPath = parseFlag(rest, '--vault-path') || config.vault_path;
+  // F1-wallet (2026-04-16): resolve passphrase for the trustline
+  // subcommand. Pre-fix, addUsdcTrustlineOWS was called without a
+  // passphrase — so agents onboarded with --passphrase-env couldn't
+  // open a USDC trustline via the CLI (the OWS vault couldn't decrypt
+  // the signing key and threw a cryptic error). The purchase command
+  // and the MCP setup_wallet tool both correctly pass the passphrase;
+  // wallet.ts was the only caller that missed it.
+  const passphraseEnv = parseFlag(rest, '--passphrase-env') || config.passphrase_env;
+  const passphrase = passphraseEnv ? process.env[passphraseEnv] : undefined;
 
   if (sub === 'address') {
     try {
@@ -137,7 +148,7 @@ export async function walletCommand(argv: string[]): Promise<number> {
     try {
       const publicKey = getOWSPublicKey(walletName, vaultPath);
       process.stdout.write(`→ Opening USDC trustline for ${publicKey}…\n`);
-      const txHash = await addUsdcTrustlineOWS({ walletName, vaultPath });
+      const txHash = await addUsdcTrustlineOWS({ walletName, passphrase, vaultPath });
       if (txHash === null) {
         process.stdout.write(`✓ USDC trustline already exists on this wallet — nothing to do.\n`);
         return 0;
