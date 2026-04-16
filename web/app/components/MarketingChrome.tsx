@@ -27,11 +27,8 @@ export function MarketingChrome({ children }: { children: ReactNode }) {
       </a>
       <div className="grain" aria-hidden />
       <nav
+        className="marketing-nav"
         style={{
-          borderBottom: '1px solid var(--border)',
-          background: 'rgba(5,5,5,0.72)',
-          backdropFilter: 'blur(16px) saturate(140%)',
-          WebkitBackdropFilter: 'blur(16px) saturate(140%)',
           position: 'sticky',
           top: 0,
           zIndex: 50,

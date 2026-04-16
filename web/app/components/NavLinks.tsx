@@ -1,14 +1,13 @@
 'use client';
 
-// Top marketing nav. Single-level links on the left, a Product menu with
-// everything else, plus the primary CTA. On viewports < 720px the menu
-// collapses to a hamburger.
+// Top marketing nav — a single responsive menu that renders as a
+// horizontal bar on desktop (>860px) and collapses to a hamburger
+// with a fullscreen sheet on mobile. Links are rendered once; CSS
+// handles the layout switch.
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import type { MouseEvent } from 'react';
 
 const PRIMARY: { href: string; label: string }[] = [
   { href: '/pricing', label: 'Pricing' },
@@ -28,106 +27,82 @@ const MORE: { href: string; label: string; body: string }[] = [
 export function NavLinks() {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
-  // SSR-safe portal guard. createPortal(document.body) can't run on the
-  // server because document doesn't exist; flip `mounted` on after the
-  // first client-side render so the portal only mounts in the browser.
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const [menuOpen, setMenuOpen] = useState(false);
   const moreWrapRef = useRef<HTMLDivElement>(null);
 
-  // ESC closes the dropdown, and a click outside the wrapper closes
-  // it too so the menu doesn't stay pinned open when the user moves
-  // on. Only wired up while the menu is actually open.
+  // ESC closes any open menu.
   useEffect(() => {
-    if (!moreOpen) return;
+    if (!moreOpen && !menuOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setMoreOpen(false);
-    };
-    const onClick = (e: globalThis.MouseEvent) => {
-      if (!moreWrapRef.current) return;
-      if (!moreWrapRef.current.contains(e.target as Node)) setMoreOpen(false);
-    };
-    window.addEventListener('keydown', onKey);
-    window.addEventListener('mousedown', onClick);
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      window.removeEventListener('mousedown', onClick);
-    };
-  }, [moreOpen]);
-
-  // ESC closes the mobile sheet too. Only while it's open.
-  useEffect(() => {
-    if (!mobileOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setMobileOpen(false);
+      if (e.key === 'Escape') {
+        setMoreOpen(false);
+        setMenuOpen(false);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [mobileOpen]);
+  }, [moreOpen, menuOpen]);
 
-  // Also close the More menu whenever the route changes — otherwise
-  // clicking a link inside it leaves the menu pinned open after the
-  // new page has rendered (the onClick handler fires before the
-  // navigation, but the component re-renders with the same state).
+  // Click outside closes the More dropdown. Only wired while open.
+  useEffect(() => {
+    if (!moreOpen) return;
+    const onClick = (e: globalThis.MouseEvent) => {
+      if (!moreWrapRef.current?.contains(e.target as Node)) setMoreOpen(false);
+    };
+    window.addEventListener('mousedown', onClick);
+    return () => window.removeEventListener('mousedown', onClick);
+  }, [moreOpen]);
+
+  // Route change closes everything.
   useEffect(() => {
     setMoreOpen(false);
-    setMobileOpen(false);
+    setMenuOpen(false);
   }, [pathname]);
+
+  // Lock page scroll while the mobile menu is open. Both html and body
+  // need overflow:hidden — iOS Safari ignores it on body alone.
+  useEffect(() => {
+    if (!menuOpen) return;
+    document.documentElement.style.overflow = 'hidden';
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.documentElement.style.overflow = '';
+      document.body.style.overflow = '';
+    };
+  }, [menuOpen]);
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + '/');
 
-  const linkStyle = (href: string): React.CSSProperties => ({
-    textDecoration: 'none',
-    color: isActive(href) ? 'var(--fg)' : 'var(--fg-muted)',
-    fontSize: '0.84rem',
-    fontFamily: 'var(--font-body)',
-    fontWeight: 500,
-    padding: '0.45rem 0.7rem',
-    borderRadius: 6,
-    transition: 'color 0.3s var(--ease-out)',
-    position: 'relative',
-    whiteSpace: 'nowrap',
-  });
-
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '0.1rem' }}>
-      {/* Desktop links */}
-      <div className="nav-desktop" style={{ display: 'flex', alignItems: 'center', gap: '0.1rem' }}>
+      {/* Single nav menu — row on desktop, fullscreen column on mobile */}
+      <div
+        className={`nav-menu${menuOpen ? ' nav-menu--open' : ''}`}
+        onClick={() => setMenuOpen(false)}
+      >
         {PRIMARY.map((l) => (
-          <Link key={l.href} href={l.href} style={linkStyle(l.href)}>
+          <Link
+            key={l.href}
+            href={l.href}
+            className="nav-menu-link"
+            data-active={isActive(l.href) || undefined}
+          >
             {l.label}
           </Link>
         ))}
 
-        {/* More dropdown */}
+        {/* More — dropdown on desktop, items flow inline on mobile */}
         <div
           ref={moreWrapRef}
-          style={{ position: 'relative' }}
+          className="nav-more"
           onMouseEnter={() => setMoreOpen(true)}
           onMouseLeave={() => setMoreOpen(false)}
         >
           <button
-            // Hover controls both open and close (onMouseEnter/Leave on
-            // the wrapper above). Click used to toggle, which created a
-            // clunky "hover opens → click closes" flow: most users read
-            // the button as a navigable target and click it, instantly
-            // dismissing the dropdown they just opened. Now click only
-            // OPENS (never closes) — keyboard users can still activate
-            // the dropdown via Enter/Space since click → open, and ESC
-            // + click-outside still handle dismissal.
+            className="nav-more-btn"
             onClick={() => setMoreOpen(true)}
             aria-expanded={moreOpen}
             aria-haspopup="true"
-            style={{
-              ...linkStyle('#'),
-              background: 'transparent',
-              border: 'none',
-              cursor: 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '0.35rem',
-            }}
           >
             More
             <svg
@@ -151,113 +126,35 @@ export function NavLinks() {
               />
             </svg>
           </button>
-          {moreOpen && (
-            <div
-              role="menu"
-              style={{
-                position: 'absolute',
-                // Sit flush against the button with no gap, then use top
-                // padding to push the visible card down. The padding is
-                // still part of the element's hit area so the mouse never
-                // crosses an un-hovered region between the button and the
-                // dropdown — which is what was closing it prematurely.
-                top: '100%',
-                paddingTop: '0.5rem',
-                right: 0,
-                minWidth: 280,
-                zIndex: 60,
-              }}
-            >
-              <div
-                style={{
-                  background: 'var(--surface)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 12,
-                  boxShadow: 'var(--shadow-float)',
-                  padding: '0.45rem',
-                }}
-              >
-                {MORE.map((item) => (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    onClick={() => setMoreOpen(false)}
-                    style={{
-                      display: 'block',
-                      padding: '0.65rem 0.75rem',
-                      textDecoration: 'none',
-                      color: 'var(--fg)',
-                      borderRadius: 8,
-                      transition: 'background 0.2s var(--ease-out)',
-                    }}
-                    onMouseEnter={(e: MouseEvent<HTMLAnchorElement>) => {
-                      e.currentTarget.style.background = 'var(--surface-hover)';
-                    }}
-                    onMouseLeave={(e: MouseEvent<HTMLAnchorElement>) => {
-                      e.currentTarget.style.background = 'transparent';
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontFamily: 'var(--font-body)',
-                        fontSize: '0.85rem',
-                        fontWeight: 500,
-                        color: 'var(--fg)',
-                        marginBottom: '0.15rem',
-                      }}
-                    >
-                      {item.label}
-                    </div>
-                    <div
-                      style={{
-                        fontFamily: 'var(--font-body)',
-                        fontSize: '0.72rem',
-                        color: 'var(--fg-dim)',
-                      }}
-                    >
-                      {item.body}
-                    </div>
-                  </Link>
-                ))}
-              </div>
+          <div className={`nav-more-dropdown${moreOpen ? ' nav-more-dropdown--open' : ''}`}>
+            <div className="nav-more-dropdown-card">
+              {MORE.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className="nav-more-item"
+                  data-active={isActive(item.href) || undefined}
+                  onClick={() => setMoreOpen(false)}
+                >
+                  <div className="nav-more-item-label">{item.label}</div>
+                  <div className="nav-more-item-body">{item.body}</div>
+                </Link>
+              ))}
             </div>
-          )}
+          </div>
         </div>
 
-        <Link href="/dashboard" style={{ ...linkStyle('/dashboard'), marginLeft: '0.25rem' }}>
+        <Link
+          href="/dashboard"
+          className="nav-menu-link nav-menu-link--dashboard"
+          data-active={isActive('/dashboard') || undefined}
+        >
           Dashboard
         </Link>
       </div>
 
       {/* Primary CTA */}
-      <Link
-        href="/dashboard"
-        className="nav-cta"
-        style={{
-          marginLeft: '0.6rem',
-          textDecoration: 'none',
-          fontSize: '0.78rem',
-          fontFamily: 'var(--font-body)',
-          fontWeight: 600,
-          padding: '0.52rem 0.95rem',
-          borderRadius: 999,
-          background: 'var(--fg)',
-          color: 'var(--bg)',
-          transition: 'transform 0.3s var(--ease-out), box-shadow 0.3s var(--ease-out)',
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: '0.4rem',
-          whiteSpace: 'nowrap',
-        }}
-        onMouseEnter={(e: MouseEvent<HTMLAnchorElement>) => {
-          e.currentTarget.style.transform = 'translateY(-1px)';
-          e.currentTarget.style.boxShadow = '0 8px 24px -8px var(--green-glow)';
-        }}
-        onMouseLeave={(e: MouseEvent<HTMLAnchorElement>) => {
-          e.currentTarget.style.transform = 'translateY(0)';
-          e.currentTarget.style.boxShadow = 'none';
-        }}
-      >
+      <Link href="/dashboard" className="nav-cta">
         Get started
         <svg
           width="13"
@@ -277,29 +174,16 @@ export function NavLinks() {
         </svg>
       </Link>
 
-      {/* Mobile hamburger */}
+      {/* Hamburger — visible only on mobile */}
       <button
-        className="nav-mobile-toggle"
-        onClick={() => setMobileOpen((v) => !v)}
-        aria-expanded={mobileOpen}
+        className="nav-toggle"
+        onClick={() => setMenuOpen((v) => !v)}
+        aria-expanded={menuOpen}
         aria-label="Menu"
-        style={{
-          display: 'none',
-          marginLeft: '0.5rem',
-          width: 36,
-          height: 36,
-          alignItems: 'center',
-          justifyContent: 'center',
-          background: 'transparent',
-          border: '1px solid var(--border)',
-          borderRadius: 8,
-          color: 'var(--fg)',
-          cursor: 'pointer',
-        }}
       >
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
           <path
-            d={mobileOpen ? 'M3 3L13 13M13 3L3 13' : 'M2 4h12M2 8h12M2 12h12'}
+            d={menuOpen ? 'M3 3L13 13M13 3L3 13' : 'M2 4h12M2 8h12M2 12h12'}
             stroke="currentColor"
             strokeWidth="1.5"
             strokeLinecap="round"
@@ -307,62 +191,188 @@ export function NavLinks() {
         </svg>
       </button>
 
-      {/* Mobile sheet — portaled to document.body to escape the nav's
-          containing block. The sticky nav uses `backdrop-filter`, which
-          turns the nav into a containing block for `position: fixed`
-          descendants. Without the portal, the sheet's `top: 64, bottom: 0`
-          was calculated relative to the 64px-tall nav instead of the
-          viewport — collapsing to ~0px content height. Portaling to
-          document.body puts the sheet at the top of the DOM tree where
-          its fixed positioning is genuinely viewport-relative. */}
-      {mounted &&
-        mobileOpen &&
-        createPortal(
-          <div
-            className="nav-mobile-sheet"
-            style={{
-              position: 'fixed',
-              top: 64,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              background: 'rgba(5,5,5,0.96)',
-              backdropFilter: 'blur(16px)',
-              WebkitBackdropFilter: 'blur(16px)',
-              zIndex: 40,
-              padding: '1.5rem 1.35rem',
-              overflowY: 'auto',
-            }}
-            onClick={() => setMobileOpen(false)}
-          >
-            {[...PRIMARY, ...MORE, { href: '/dashboard', label: 'Dashboard', body: '' }].map(
-              (l) => (
-                <Link
-                  key={l.href}
-                  href={l.href}
-                  style={{
-                    display: 'block',
-                    padding: '1rem 0',
-                    fontSize: '1.2rem',
-                    fontFamily: 'var(--font-display)',
-                    color: 'var(--fg)',
-                    textDecoration: 'none',
-                    borderBottom: '1px solid var(--border)',
-                  }}
-                >
-                  {l.label}
-                </Link>
-              ),
-            )}
-          </div>,
-          document.body,
-        )}
-
       <style>{`
+        /* Pseudo-element carries the nav's backdrop so the <nav> itself
+           doesn't create a containing block for position:fixed children
+           (the mobile menu). Background + border live here too. */
+        .marketing-nav::before {
+          content: '';
+          position: absolute;
+          inset: 0;
+          z-index: -1;
+          background: rgba(5,5,5,0.72);
+          backdrop-filter: blur(16px) saturate(140%);
+          -webkit-backdrop-filter: blur(16px) saturate(140%);
+          border-bottom: 1px solid var(--border);
+        }
+
+        /* ---- Desktop (default) ---- */
+        .nav-menu {
+          display: flex;
+          align-items: center;
+          gap: 0.1rem;
+        }
+        .nav-menu-link {
+          text-decoration: none;
+          color: var(--fg-muted);
+          font-size: 0.84rem;
+          font-family: var(--font-body);
+          font-weight: 500;
+          padding: 0.45rem 0.7rem;
+          border-radius: 6px;
+          transition: color 0.3s var(--ease-out);
+          white-space: nowrap;
+        }
+        .nav-menu-link[data-active] { color: var(--fg); }
+        .nav-menu-link--dashboard { margin-left: 0.25rem; }
+
+        .nav-more { position: relative; }
+        .nav-more-btn {
+          color: var(--fg-muted);
+          font-size: 0.84rem;
+          font-family: var(--font-body);
+          font-weight: 500;
+          padding: 0.45rem 0.7rem;
+          border-radius: 6px;
+          transition: color 0.3s var(--ease-out);
+          white-space: nowrap;
+          background: transparent;
+          border: none;
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          gap: 0.35rem;
+        }
+        .nav-more-dropdown {
+          display: none;
+          position: absolute;
+          top: 100%;
+          padding-top: 0.5rem;
+          right: 0;
+          min-width: 280px;
+          z-index: 60;
+        }
+        .nav-more-dropdown--open { display: block; }
+        .nav-more-dropdown-card {
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          box-shadow: var(--shadow-float);
+          padding: 0.45rem;
+        }
+        .nav-more-item {
+          display: block;
+          padding: 0.65rem 0.75rem;
+          text-decoration: none;
+          color: var(--fg);
+          border-radius: 8px;
+          transition: background 0.2s var(--ease-out);
+        }
+        .nav-more-item:hover { background: var(--surface-hover); }
+        .nav-more-item-label {
+          font-family: var(--font-body);
+          font-size: 0.85rem;
+          font-weight: 500;
+          color: var(--fg);
+          margin-bottom: 0.15rem;
+        }
+        .nav-more-item-body {
+          font-family: var(--font-body);
+          font-size: 0.72rem;
+          color: var(--fg-dim);
+        }
+
+        .nav-cta {
+          margin-left: 0.6rem;
+          text-decoration: none;
+          font-size: 0.78rem;
+          font-family: var(--font-body);
+          font-weight: 600;
+          padding: 0.52rem 0.95rem;
+          border-radius: 999px;
+          background: var(--fg);
+          color: var(--bg);
+          transition: transform 0.3s var(--ease-out), box-shadow 0.3s var(--ease-out);
+          display: inline-flex;
+          align-items: center;
+          gap: 0.4rem;
+          white-space: nowrap;
+        }
+        .nav-cta:hover {
+          transform: translateY(-1px);
+          box-shadow: 0 8px 24px -8px var(--green-glow);
+        }
+
+        .nav-toggle {
+          display: none;
+          margin-left: 0.5rem;
+          width: 36px;
+          height: 36px;
+          align-items: center;
+          justify-content: center;
+          background: transparent;
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          color: var(--fg);
+          cursor: pointer;
+        }
+
+        /* ---- Mobile (≤ 860px) ---- */
         @media (max-width: 860px) {
-          .nav-desktop { display: none !important; }
-          .nav-mobile-toggle { display: inline-flex !important; }
-          .nav-cta { display: none !important; }
+          .nav-toggle { display: inline-flex; }
+          .nav-cta { display: none; }
+
+          .nav-menu {
+            display: none;
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            height: calc(100vh - 64px);
+            height: calc(100dvh - 64px);
+            flex-direction: column;
+            align-items: stretch;
+            background: rgba(5,5,5,0.96);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            z-index: 40;
+            padding: 1.5rem 1.35rem;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+          }
+          .nav-menu--open { display: flex; }
+
+          .nav-menu-link {
+            padding: 1rem 0;
+            font-size: 1.2rem;
+            font-family: var(--font-display);
+            color: var(--fg);
+            border-bottom: 1px solid var(--border);
+            border-radius: 0;
+            white-space: normal;
+          }
+          .nav-menu-link--dashboard { margin-left: 0; }
+
+          /* Flatten the More wrapper so its items flow in the column */
+          .nav-more { display: contents; }
+          .nav-more-btn { display: none; }
+          .nav-more-dropdown { display: contents !important; }
+          .nav-more-dropdown-card { display: contents; }
+          .nav-more-item {
+            padding: 1rem 0;
+            font-size: 1.2rem;
+            font-family: var(--font-display);
+            color: var(--fg);
+            border-bottom: 1px solid var(--border);
+            border-radius: 0;
+          }
+          .nav-more-item:hover { background: transparent; }
+          .nav-more-item-label {
+            font-size: inherit;
+            font-family: inherit;
+            margin-bottom: 0;
+          }
+          .nav-more-item-body { display: none; }
         }
       `}</style>
     </div>

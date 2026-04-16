@@ -33,6 +33,8 @@ const CSP = [
 // refuse plaintext HTTP even on first visit.
 const HSTS = 'max-age=63072000; includeSubDomains; preload';
 
+const isDev = process.env.NODE_ENV === 'development';
+
 const nextConfig: NextConfig = {
   turbopack: {
     root: path.resolve(__dirname, '..'),
@@ -43,7 +45,9 @@ const nextConfig: NextConfig = {
         source: '/:path*',
         headers: [
           { key: 'Strict-Transport-Security', value: HSTS },
-          { key: 'Content-Security-Policy', value: CSP },
+          // CSP blocks eval(), which Turbopack needs for HMR in dev.
+          // Only enforce in production.
+          ...(isDev ? [] : [{ key: 'Content-Security-Policy', value: CSP }]),
           { key: 'X-Frame-Options', value: 'DENY' },
           { key: 'X-Content-Type-Options', value: 'nosniff' },
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
