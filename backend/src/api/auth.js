@@ -113,6 +113,28 @@ function clientUserAgent(req) {
   return String(ua);
 }
 
+// F1-auth-routes (2026-04-16): extract and sanitise the Bearer token
+// from the Authorization header. Mirrors the F1/F2-requireAuth fix but
+// applied to /auth/logout and /auth/me which bypass the requireAuth
+// middleware entirely.
+//
+// Two pre-fix bugs:
+//   (1) Array-valued Authorization header (Node returns string[] on
+//       duplicates). Arrays have no `.replace` method → the token
+//       value was `undefined` → `hashToken(undefined)` threw
+//       `TypeError: The "data" argument must be of type string...`
+//       from crypto.Hash.update → 500 response instead of 401.
+//   (2) Trailing whitespace preserved after strip: 'Bearer xyz '
+//       → 'xyz ' → hashToken('xyz ') ≠ hashToken('xyz') → session
+//       lookup misses → silent logout failure or phantom 401 on /me.
+function extractBearerToken(req) {
+  let raw = req.headers?.authorization;
+  if (Array.isArray(raw)) raw = raw[0];
+  if (typeof raw !== 'string') return null;
+  const token = raw.replace(/^Bearer\s+/i, '').trim();
+  return token.length > 0 ? token : null;
+}
+
 // ── POST /auth/login ─────────────────────────────────────────────────────────
 
 router.post('/login', loginLimiter, async (req, res) => {
@@ -385,7 +407,7 @@ router.post('/verify', verifyLimiter, (req, res) => {
 // ── POST /auth/logout ────────────────────────────────────────────────────────
 
 router.post('/logout', (req, res) => {
-  const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+  const token = extractBearerToken(req);
   if (token) {
     // Look up the user + dashboard BEFORE deleting the session so the
     // audit row can be attributed to the right dashboard_id. If the
@@ -421,7 +443,7 @@ router.post('/logout', (req, res) => {
 // ── GET /auth/me ─────────────────────────────────────────────────────────────
 
 router.get('/me', (req, res) => {
-  const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+  const token = extractBearerToken(req);
   if (!token) return res.status(401).json({ error: 'unauthorized' });
 
   const row = /** @type {any} */ (

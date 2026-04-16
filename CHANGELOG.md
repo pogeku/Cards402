@@ -158,6 +158,20 @@ here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a typeof guard to `decryptToken` so a non-string
   `system_state.value` can't wedge the token path with an opaque
   TypeError. Audit F1/F2/F3-vcc-client.
+- **Auth routes token extraction hardened** — `/auth/logout` and
+  `/auth/me` extract the Bearer token themselves (they bypass the
+  `requireAuth` middleware). Pre-fix they had the same two bugs that
+  `requireAuth` had before its own audit: (1) array-valued
+  `Authorization` header (from a duplicate-header proxy or hostile
+  client) made `Array.prototype.replace` resolve to `undefined`,
+  propagated to `hashToken(undefined)`, and crashed with a 500
+  instead of a clean 401. (2) Trailing whitespace (`'Bearer xyz '`)
+  stayed in the extracted token after the regex strip, so
+  `hashToken('xyz ')` ≠ `hashToken('xyz')` and the session lookup
+  silently failed — `/auth/me` returned 401 (confusing for a client
+  that just logged in), `/auth/logout` silently didn't delete the
+  session. Added a shared `extractBearerToken(req)` helper with
+  array coercion + trim, wired into both routes. Audit F1-auth-routes.
 - **Audit log library-boundary coercion** — moved the defensive
   `string | string[]` coercion for `ip` and `userAgent` from
   `recordAuditFromReq` into `recordAudit` itself. Pre-fix, direct
