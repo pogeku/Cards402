@@ -206,7 +206,7 @@ describe('errorBreakdown', () => {
 });
 
 describe('marginSummary', () => {
-  it('computes revenue, CTX cost, and margin with 4.5% discount', () => {
+  it('computes revenue, CTX cost, and margin with default 2.5% discount', () => {
     const orders = [
       makeOrder({ id: '1', status: 'delivered', amount_usdc: '100' }),
       makeOrder({ id: '2', status: 'delivered', amount_usdc: '50' }),
@@ -214,9 +214,9 @@ describe('marginSummary', () => {
     ];
     const result = marginSummary(orders);
     expect(result.revenue).toBe(150);
-    expect(result.estimatedCtxCost).toBeCloseTo(150 * 0.955, 2);
-    expect(result.estimatedMargin).toBeCloseTo(150 * 0.045, 2);
-    expect(result.marginPct).toBeCloseTo(4.5, 2);
+    expect(result.estimatedCtxCost).toBeCloseTo(150 * 0.975, 2);
+    expect(result.estimatedMargin).toBeCloseTo(150 * 0.025, 2);
+    expect(result.marginPct).toBeCloseTo(2.5, 2);
     expect(result.deliveredCount).toBe(2);
   });
 

@@ -752,4 +752,111 @@ router.post('/unfreeze', (req, res) => {
   res.json({ ok: true, frozen: false });
 });
 
+// ── GET /dashboard/platform/margins ──────────────────────────────────────────
+//
+// Per-order and aggregate margin data for delivered orders. Uses REAL
+// cost data when available (ctx_invoice_xlm × settlement_xlm_usd_rate)
+// and falls back to the discount estimate for historical orders.
+//
+// Platform owner only — margin data is operator-sensitive.
+
+router.get('/margins', async (req, res) => {
+  const limitRaw = parseInt(/** @type {string} */ (req.query.limit) || '200', 10);
+  const limit = Math.min(Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 200), 1000);
+
+  const rows = /** @type {any[]} */ (
+    db
+      .prepare(
+        `
+      SELECT o.id, o.amount_usdc, o.ctx_invoice_xlm, o.settlement_xlm_usd_rate,
+             o.payment_asset, o.created_at, o.updated_at, o.status,
+             k.label AS api_key_label, d.name AS dashboard_name
+      FROM orders o
+      LEFT JOIN api_keys k ON o.api_key_id = k.id
+      LEFT JOIN dashboards d ON k.dashboard_id = d.id
+      WHERE o.status = 'delivered'
+      ORDER BY o.created_at DESC
+      LIMIT ?
+    `,
+      )
+      .all(limit)
+  );
+
+  // No estimates — only real settlement data drives the margin numbers.
+  // Orders without ctx_invoice_xlm + settlement_xlm_usd_rate show as
+  // "no data" on the frontend. This is honest: the upstream discount
+  // varies by product and amount tier, and a hardcoded percentage would
+  // be wrong for micro-orders (where CTX likely charges face value with
+  // no discount). As new orders come in with real settlement data, the
+  // margins page fills in automatically.
+
+  let totalRevenue = 0;
+  let totalCtxCost = 0;
+  let totalMargin = 0;
+  let ordersWithCost = 0;
+
+  const enriched = rows.map((row) => {
+    const revenue = parseFloat(row.amount_usdc) || 0;
+    totalRevenue += revenue;
+
+    let ctxCostUsd = null;
+    let marginUsd = null;
+    let marginPct = null;
+    let effectiveDiscount = null;
+    let hasCostData = false;
+
+    if (row.ctx_invoice_xlm && row.settlement_xlm_usd_rate) {
+      const invoiceXlm = parseFloat(row.ctx_invoice_xlm);
+      const xlmRate = parseFloat(row.settlement_xlm_usd_rate);
+      if (Number.isFinite(invoiceXlm) && Number.isFinite(xlmRate) && xlmRate > 0) {
+        ctxCostUsd = invoiceXlm * xlmRate;
+        marginUsd = revenue - ctxCostUsd;
+        marginPct = revenue > 0 ? (marginUsd / revenue) * 100 : 0;
+        effectiveDiscount = revenue > 0 ? ((revenue - ctxCostUsd) / revenue) * 100 : 0;
+        hasCostData = true;
+        ordersWithCost++;
+        totalCtxCost += ctxCostUsd;
+        totalMargin += marginUsd;
+      }
+    }
+
+    return {
+      id: row.id,
+      amount_usdc: row.amount_usdc,
+      ctx_invoice_xlm: row.ctx_invoice_xlm,
+      settlement_xlm_usd_rate: row.settlement_xlm_usd_rate,
+      ctx_cost_usd: ctxCostUsd !== null ? ctxCostUsd.toFixed(4) : null,
+      margin_usd: marginUsd !== null ? marginUsd.toFixed(4) : null,
+      margin_pct: marginPct !== null ? marginPct.toFixed(2) : null,
+      effective_discount_pct: effectiveDiscount !== null ? effectiveDiscount.toFixed(2) : null,
+      has_cost_data: hasCostData,
+      payment_asset: row.payment_asset,
+      api_key_label: row.api_key_label,
+      dashboard_name: row.dashboard_name,
+      created_at: row.created_at,
+    };
+  });
+
+  // Revenue from orders WITH cost data only — so margin % is accurate
+  // and not diluted by historical orders we can't price.
+  const revenueWithCost = enriched
+    .filter((o) => o.has_cost_data)
+    .reduce((s, o) => s + (parseFloat(o.amount_usdc) || 0), 0);
+
+  res.json({
+    summary: {
+      total_revenue_usdc: Number(totalRevenue.toFixed(4)),
+      revenue_with_cost_data_usdc: Number(revenueWithCost.toFixed(4)),
+      total_ctx_cost_usd: Number(totalCtxCost.toFixed(4)),
+      total_margin_usd: Number(totalMargin.toFixed(4)),
+      margin_pct:
+        revenueWithCost > 0 ? Number(((totalMargin / revenueWithCost) * 100).toFixed(2)) : null,
+      delivered_count: rows.length,
+      orders_with_cost_data: ordersWithCost,
+      orders_without_cost_data: rows.length - ordersWithCost,
+    },
+    orders: enriched,
+  });
+});
+
 module.exports = router;

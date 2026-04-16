@@ -817,9 +817,33 @@ applyMigration(25, () => {
 // a column that doesn't exist yet) manifests as a SQLite error on the
 // first query.
 //
+// Migration 26: per-order margin tracking. Stores the actual CTX
+// invoice amount (in XLM) and the XLM/USD rate at settlement time so
+// the platform dashboard can compute real per-order margins instead of
+// estimating from a hardcoded discount percentage. The effective
+// discount varies by upstream provider and product; capturing the
+// actual numbers means margin reporting automatically reflects changes
+// in CTX's pricing without a code deploy.
+applyMigration(26, () => {
+  for (const sql of [
+    // The XLM amount CTX invoiced for this order, parsed from the
+    // payment_url. NULL for pre-migration orders (use estimate).
+    `ALTER TABLE orders ADD COLUMN ctx_invoice_xlm TEXT`,
+    // XLM/USD spot rate at the time we paid CTX. Lets the dashboard
+    // convert ctx_invoice_xlm to USD for margin = revenue - cost.
+    `ALTER TABLE orders ADD COLUMN settlement_xlm_usd_rate TEXT`,
+  ]) {
+    try {
+      db.prepare(sql).run();
+    } catch (err) {
+      if (!/duplicate column name/.test(/** @type {Error} */ (err)?.message || '')) throw err;
+    }
+  }
+});
+
 // EXPECTED_SCHEMA_VERSION must match the last `applyMigration(N)` call
 // above. Bump it in lock-step with any new migration.
-const EXPECTED_SCHEMA_VERSION = 25;
+const EXPECTED_SCHEMA_VERSION = 26;
 const actualVersion = getSchemaVersion();
 if (actualVersion > EXPECTED_SCHEMA_VERSION) {
   console.error(

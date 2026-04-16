@@ -374,9 +374,40 @@ async function handlePayment({
       order.amount_usdc,
       order.request_id,
     );
+    // Extract the CTX invoice XLM amount from the payment URL for
+    // margin tracking. Also snapshot the XLM/USD rate so the dashboard
+    // can compute cost-of-sale in USD without a retrospective oracle.
+    // Both are non-critical telemetry — if parsing or the price oracle
+    // fails, the order still proceeds; the margin page just shows
+    // "no data" for this row.
+    let ctxInvoiceXlm = null;
+    let settlementRate = null;
+    try {
+      const sender = require('./payments/xlm-sender');
+      if (typeof sender.parseStellarPayUri === 'function') {
+        const invoiceParsed = sender.parseStellarPayUri(paymentUrl);
+        ctxInvoiceXlm = invoiceParsed.amount || null;
+      }
+    } catch {
+      /* non-critical */
+    }
+    try {
+      const { getXlmUsdPrice } = require('./payments/xlm-price');
+      settlementRate = String(await getXlmUsdPrice());
+    } catch {
+      /* non-critical */
+    }
     db.prepare(
-      `UPDATE orders SET vcc_job_id = ?, callback_nonce = ?, updated_at = ? WHERE id = ?`,
-    ).run(vccJobId, callbackNonce, new Date().toISOString(), orderId);
+      `UPDATE orders SET vcc_job_id = ?, callback_nonce = ?, ctx_invoice_xlm = ?,
+       settlement_xlm_usd_rate = ?, updated_at = ? WHERE id = ?`,
+    ).run(
+      vccJobId,
+      callbackNonce,
+      ctxInvoiceXlm,
+      settlementRate,
+      new Date().toISOString(),
+      orderId,
+    );
 
     // Branch Stellar payment on what the agent paid us:
     //   - XLM → forward as-is from treasury (single-op payment)

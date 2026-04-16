@@ -156,12 +156,14 @@ export interface MarginSummary {
 }
 
 /**
- * CTX merchant discount is 4.5% on the Visa eReward card, so a $10
- * order costs us ~$9.55 to fulfil. The dashboard shows this as a
- * transparent margin card — the number is directional, not audited
- * P&L, and it deliberately ignores Stellar fees (sub-cent).
+ * CTX partner discount is 250 bips (2.5%) on the Visa eReward card,
+ * so a $10 order costs us ~$9.75 to fulfil. This is a CLIENT-SIDE
+ * ESTIMATE used by the analytics page for quick KPIs. The platform
+ * margins page (/dashboard/platform/margins) uses real per-order
+ * cost data captured at settlement time; this function is a fallback
+ * for the lightweight analytics view.
  */
-export function marginSummary(orders: Order[], discountPct = 4.5): MarginSummary {
+export function marginSummary(orders: Order[], discountPct = 2.5): MarginSummary {
   const delivered = orders.filter((o) => o.status === 'delivered');
   const revenue = delivered.reduce((s, o) => s + (parseFloat(o.amount_usdc) || 0), 0);
   const estimatedCtxCost = revenue * (1 - discountPct / 100);

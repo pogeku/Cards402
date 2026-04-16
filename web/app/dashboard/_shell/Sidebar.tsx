@@ -181,6 +181,11 @@ const SECTIONS: Section[] = [
         icon: <Icon d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />,
       },
       {
+        href: '/dashboard/platform/margins',
+        label: 'Margins',
+        icon: <Icon d="M3 3v18h18M7 16l4-8 4 4 6-8" />,
+      },
+      {
         href: '/dashboard/platform/webhooks',
         label: 'Webhooks',
         icon: (

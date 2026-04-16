@@ -314,6 +314,40 @@ export async function fetchPlatformHealth(): Promise<PlatformHealth> {
   return json(await fetch(`${PLATFORM_BASE}/health`));
 }
 
+export interface PlatformMarginOrder {
+  id: string;
+  amount_usdc: string;
+  ctx_invoice_xlm: string | null;
+  settlement_xlm_usd_rate: string | null;
+  ctx_cost_usd: string | null;
+  margin_usd: string | null;
+  margin_pct: string | null;
+  effective_discount_pct: string | null;
+  has_cost_data: boolean;
+  payment_asset: string | null;
+  api_key_label: string | null;
+  dashboard_name: string | null;
+  created_at: string;
+}
+
+export interface PlatformMargins {
+  summary: {
+    total_revenue_usdc: number;
+    revenue_with_cost_data_usdc: number;
+    total_ctx_cost_usd: number;
+    total_margin_usd: number;
+    margin_pct: number | null;
+    delivered_count: number;
+    orders_with_cost_data: number;
+    orders_without_cost_data: number;
+  };
+  orders: PlatformMarginOrder[];
+}
+
+export async function fetchPlatformMargins(limit = 200): Promise<PlatformMargins> {
+  return json(await fetch(`${PLATFORM_BASE}/margins?limit=${limit}`));
+}
+
 export async function postPlatformUnfreeze(): Promise<{ ok: boolean; frozen: boolean }> {
   return json(
     await fetch(`${PLATFORM_BASE}/unfreeze`, {
