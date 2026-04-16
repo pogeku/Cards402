@@ -96,7 +96,6 @@ async function main() {
   try {
     order = await client.createOrder({
       amount_usdc: AMOUNT_USDC,
-      payment_asset: PAYMENT_ASSET,
     });
   } catch (err) {
     console.error('✖ createOrder failed:', err?.message ?? err);

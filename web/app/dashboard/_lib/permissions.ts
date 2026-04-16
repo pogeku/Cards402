@@ -86,9 +86,10 @@ const MATRIX: Record<Role, ReadonlyArray<Permission | typeof ALL>> = {
 const KNOWN_ROLES: readonly Role[] = ['owner', 'admin', 'operator', 'viewer'];
 
 export function normalizeRole(role: string | null | undefined): Role {
-  if (role === 'user') return 'owner'; // legacy schema value
-  if (role && (KNOWN_ROLES as readonly string[]).includes(role)) {
-    return role as Role;
+  const r = typeof role === 'string' ? role.trim().toLowerCase() : '';
+  if (r === 'user') return 'owner'; // legacy schema value
+  if (r && (KNOWN_ROLES as readonly string[]).includes(r)) {
+    return r as Role;
   }
   return 'viewer';
 }

@@ -236,6 +236,7 @@ router.get('/', (req, res) => {
     spend_limit_usdc: d.spend_limit_usdc,
     frozen: d.frozen === 1,
     created_at: d.created_at,
+    network: process.env.STELLAR_NETWORK || 'mainnet',
     stats: { ...stats, active_keys: activeKeys, pending_approvals: pendingApprovals },
   });
 });

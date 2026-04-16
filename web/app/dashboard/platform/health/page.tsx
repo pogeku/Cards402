@@ -48,16 +48,18 @@ export default function PlatformHealthPage() {
   }, [user?.is_platform_owner]);
 
   async function handleUnfreeze() {
-    if (
-      !confirm(
-        'Clear the frozen flag and reset consecutive_failures to 0? This will let order fulfillment resume.',
-      )
-    ) {
+    const reason = prompt(
+      'Why are you unfreezing the platform? (min 10 characters)\n\n' +
+        'This is captured in the audit trail so the next operator can see why the freeze was lifted.',
+    );
+    if (reason === null) return;
+    if (reason.trim().length < 10) {
+      toast.push('Reason must be at least 10 characters', 'error');
       return;
     }
     setUnfreezing(true);
     try {
-      const result = await postPlatformUnfreeze();
+      const result = await postPlatformUnfreeze(reason.trim());
       toast.push(result.frozen === false ? 'Platform unfrozen' : 'Unfreeze failed', 'success');
       await load();
     } catch (err) {

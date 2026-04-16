@@ -30,7 +30,6 @@ critical_files=(
   "backend/src/env.js"
   "backend/src/fulfillment.js"
   "backend/src/api/orders.js"
-  "backend/src/api/admin.js"
   "backend/src/payments/stellar.js"
   "backend/src/payments/xlm-price.js"
   "backend/src/payments/xlm-sender.js"

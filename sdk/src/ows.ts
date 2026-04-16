@@ -41,7 +41,6 @@ import {
 } from './soroban';
 
 const USDC_ISSUER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
-const HORIZON_URL = 'https://horizon.stellar.org';
 const STELLAR_CHAIN = 'stellar';
 
 function withTimeout<T>(promise: Promise<T>, ms = 15000): Promise<T> {
@@ -126,9 +125,10 @@ export function getOWSPublicKey(walletName: string, vaultPath?: string): string 
 export async function getOWSBalance(
   walletName: string,
   vaultPath?: string,
+  networkPassphrase?: string,
 ): Promise<{ xlm: string; usdc: string }> {
   const publicKey = getOWSPublicKey(walletName, vaultPath);
-  const server = new Horizon.Server(HORIZON_URL);
+  const server = new Horizon.Server(getHorizonUrl(networkPassphrase));
   const account = await withTimeout(server.loadAccount(publicKey));
   let xlm = '0',
     usdc = '0';
@@ -279,10 +279,7 @@ export async function checkSorobanTxLanded(
   txHash: string,
   opts: { networkPassphrase?: string } = {},
 ): Promise<'landed' | 'dropped' | 'pending'> {
-  const horizonUrl =
-    opts.networkPassphrase === Networks.TESTNET
-      ? 'https://horizon-testnet.stellar.org'
-      : HORIZON_URL;
+  const horizonUrl = getHorizonUrl(opts.networkPassphrase);
   try {
     const res = await fetch(`${horizonUrl}/transactions/${txHash}`, {
       signal: AbortSignal.timeout(10_000),
@@ -329,8 +326,7 @@ export interface TrustlineOpts {
 export async function addUsdcTrustlineOWS(opts: TrustlineOpts): Promise<string | null> {
   const { walletName, passphrase, vaultPath, networkPassphrase = Networks.PUBLIC } = opts;
   const publicKey = getOWSPublicKey(walletName, vaultPath);
-  const horizonUrl =
-    networkPassphrase === Networks.TESTNET ? 'https://horizon-testnet.stellar.org' : HORIZON_URL;
+  const horizonUrl = getHorizonUrl(networkPassphrase);
 
   const server = new Horizon.Server(horizonUrl);
   const account = await withTimeout(server.loadAccount(publicKey));
@@ -670,7 +666,7 @@ export async function purchaseCardOWS(
         const bal = await getOWSBalance(opts.walletName, opts.vaultPath);
         if (bal.usdc === '0') {
           const publicKey = getOWSPublicKey(opts.walletName, opts.vaultPath);
-          const server = new Horizon.Server(HORIZON_URL);
+          const server = new Horizon.Server(getHorizonUrl(opts.networkPassphrase));
           const account = await withTimeout(server.loadAccount(publicKey));
           const hasTrustline = account.balances.some(
             (b) =>

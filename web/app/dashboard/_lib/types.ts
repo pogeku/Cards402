@@ -85,6 +85,7 @@ export interface DashboardInfo {
   spend_limit_usdc: string | null;
   frozen: boolean;
   created_at: string;
+  network: 'mainnet' | 'testnet';
   stats: DashboardStats;
 }
 

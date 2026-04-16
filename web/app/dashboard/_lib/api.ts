@@ -348,11 +348,14 @@ export async function fetchPlatformMargins(limit = 200): Promise<PlatformMargins
   return json(await fetch(`${PLATFORM_BASE}/margins?limit=${limit}`));
 }
 
-export async function postPlatformUnfreeze(): Promise<{ ok: boolean; frozen: boolean }> {
+export async function postPlatformUnfreeze(
+  reason: string,
+): Promise<{ ok: boolean; frozen: boolean }> {
   return json(
     await fetch(`${PLATFORM_BASE}/unfreeze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
     }),
   );
 }

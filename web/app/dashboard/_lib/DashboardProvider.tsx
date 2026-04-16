@@ -64,9 +64,11 @@ interface HorizonBalanceResponse {
   }>;
 }
 
-async function fetchHorizonBalance(publicKey: string): Promise<WalletBalance> {
+async function fetchHorizonBalance(publicKey: string, network?: string): Promise<WalletBalance> {
   try {
-    const res = await fetch(`https://horizon.stellar.org/accounts/${publicKey}`);
+    const horizonUrl =
+      network === 'testnet' ? 'https://horizon-testnet.stellar.org' : 'https://horizon.stellar.org';
+    const res = await fetch(`${horizonUrl}/accounts/${publicKey}`);
     if (!res.ok) return { xlm: '0', usdc: '0' };
     const data: HorizonBalanceResponse = await res.json();
     let xlm = '0';
@@ -221,7 +223,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     async function pollAll() {
       const entries = await Promise.all(
         agentsWithWallets.map(async (a) => {
-          const bal = await fetchHorizonBalance(a.wallet_public_key!);
+          const bal = await fetchHorizonBalance(a.wallet_public_key!, info?.network);
           return [a.id, bal] as const;
         }),
       );
@@ -239,7 +241,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [user, agentsWithWallets]);
+  }, [user, agentsWithWallets, info?.network]);
 
   const value = useMemo<DashboardState>(
     () => ({
