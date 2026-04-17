@@ -841,9 +841,23 @@ applyMigration(26, () => {
   }
 });
 
+// Migration 27: track the API surface that originated each order.
+//   'v1_orders' (default) → classic POST /v1/orders + event-watcher path
+//   'mpp'                 → MPP 402-challenge/retry path (phased rollout)
+// Platform dashboards can break revenue/conversion down by source without
+// joining through mpp_challenges. All existing rows get 'v1_orders' via
+// the default, so this migration is a pure add — no backfill needed.
+applyMigration(27, () => {
+  try {
+    db.prepare(`ALTER TABLE orders ADD COLUMN source TEXT NOT NULL DEFAULT 'v1_orders'`).run();
+  } catch (err) {
+    if (!/duplicate column name/.test(/** @type {Error} */ (err)?.message || '')) throw err;
+  }
+});
+
 // EXPECTED_SCHEMA_VERSION must match the last `applyMigration(N)` call
 // above. Bump it in lock-step with any new migration.
-const EXPECTED_SCHEMA_VERSION = 26;
+const EXPECTED_SCHEMA_VERSION = 27;
 const actualVersion = getSchemaVersion();
 if (actualVersion > EXPECTED_SCHEMA_VERSION) {
   console.error(

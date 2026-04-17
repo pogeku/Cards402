@@ -14,6 +14,7 @@ const { checkPolicy, recordDecision } = require('../policy');
 const { usdToXlm } = require('../payments/xlm-price');
 const { sendApprovalEmail, sendSpendAlertEmail } = require('../lib/email');
 const { event: bizEvent } = require('../lib/logger');
+const { insertPendingPaymentOrder } = require('../orders/core');
 
 const router = Router();
 
@@ -606,12 +607,7 @@ router.post('/', orderCreateLimiter, async (req, res) => {
       usdc: { amount: String(amount), asset: `USDC:${USDC_ISSUER}` },
       ...(xlmAmount && { xlm: { amount: xlmAmount } }),
     };
-    db.prepare(
-      `INSERT INTO orders (id, status, amount_usdc, expected_xlm_amount, api_key_id,
-                           webhook_url, metadata, vcc_payment_json, request_id)
-       VALUES (@id, 'pending_payment', @amount_usdc, @expected_xlm_amount, @api_key_id,
-               @webhook_url, @metadata, @vcc_payment_json, @request_id)`,
-    ).run({
+    insertPendingPaymentOrder({
       id,
       amount_usdc: String(amount),
       expected_xlm_amount: xlmAmount || null,

@@ -8,9 +8,10 @@
 // The last-seen ledger is persisted to the database so no payments are missed
 // across restarts of any duration.
 
-const { rpc, scValToNative, Address } = require('@stellar/stellar-sdk');
+const { rpc } = require('@stellar/stellar-sdk');
 const { event: bizEvent } = require('../lib/logger');
 const db = require('../db');
+const { parsePaymentEvent } = require('./parse-payment-event');
 
 const NETWORK = process.env.STELLAR_NETWORK || 'mainnet';
 const SOROBAN_RPC_URL =
@@ -277,21 +278,6 @@ async function poll(onPayment, log) {
   }
 }
 
-// Convert a non-negative 7-decimal-place i128 (USDC micro-units or XLM
-// stroops) to a decimal string. Asserts non-negative input because the
-// formatter's modulus math produces nonsense strings on negative BigInts
-// (e.g. -5_000_000n → "0.-5000000"), and the only path that could feed
-// a negative i128 here is a malformed/hostile contract event which is
-// already being rejected upstream at parse time. Keeping the assertion
-// as belt-and-braces for any future caller.
-function stroopsToDecimal(i128) {
-  if (typeof i128 !== 'bigint') throw new Error('stroopsToDecimal: expected bigint');
-  if (i128 < 0n) throw new Error('stroopsToDecimal: negative amount');
-  const whole = i128 / 10_000_000n;
-  const frac = String(i128 % 10_000_000n).padStart(7, '0');
-  return `${whole}.${frac}`;
-}
-
 // Serialise an arbitrary Soroban event for the dead-letter table. Events
 // contain BigInts (the XDR decoder hands them back for i128 slots) which
 // JSON.stringify refuses by default; coerce them to strings so the dead
@@ -445,115 +431,81 @@ async function handlePaymentEvent(event, onPayment, log) {
   // transient DB error during onPayment silently advanced the cursor
   // past a real payment — losing the event forever with no trace. See
   // db.js migration 23.
+  //
+  // The actual parse logic lives in parse-payment-event.js so the MPP
+  // synchronous verifier can share the same event shape checks.
 
-  let parsed;
-  try {
-    if (event.topic.length < 3) return;
+  const result = parsePaymentEvent(event);
 
-    // topic[0] = Symbol("pay_usdc") or Symbol("pay_xlm")
-    // topic[1] = Bytes(order_id utf-8)
-    // topic[2] = Address(from)
-    // value    = i128 amount (micro-USDC or stroops)
-    const eventSymbol = scValToNative(event.topic[0]); // 'pay_usdc' or 'pay_xlm'
+  if (!result.ok && result.kind === 'skip') return;
 
-    // F2: cap the orderId bytes length before the Buffer allocation.
-    // A malformed/hostile contract event with a 10KB orderId would
-    // otherwise bloat logs, dead-letter rows, and the downstream SQL
-    // parameter. UUIDs are 36 chars and our short-ids top out well
-    // below 64; anything larger is definitionally invalid.
-    const orderIdBytes = scValToNative(event.topic[1]);
-    if (!orderIdBytes || orderIdBytes.length === 0 || orderIdBytes.length > 64) {
-      throw new Error(`orderId bytes length out of range: ${orderIdBytes?.length}`);
-    }
-    const orderId = Buffer.from(orderIdBytes).toString('utf-8');
-    // Reject non-printable / control bytes — a well-formed order id is
-    // ASCII hex with dashes. Anything else is an attempt to smuggle
-    // control chars into log lines or the SQL parameter.
-    if (!/^[\x20-\x7e]+$/.test(orderId)) {
-      throw new Error('orderId contains non-printable bytes');
-    }
-
-    const senderAddress = Address.fromScVal(event.topic[2]).toString();
-
-    // F1 + F4: enforce non-negative, non-zero amount at parse time.
-    // A zero event is a no-op that shouldn't traverse the pipeline,
-    // and a negative one is either a bug or an attack. Either way it
-    // belongs in the dead-letter table, not dispatched to onPayment.
-    const amountI128 = BigInt(scValToNative(event.value));
-    if (amountI128 <= 0n) {
-      throw new Error(`non-positive amount i128: ${amountI128}`);
-    }
-    const amountDecimal = stroopsToDecimal(amountI128);
-
-    parsed = { eventSymbol, orderId, senderAddress, amountDecimal };
-  } catch (err) {
-    log(`[stellar] event parse error at ledger ${event.ledger} tx=${event.txHash}: ${err.message}`);
+  if (!result.ok && result.kind === 'parse_error') {
+    log(
+      `[stellar] event parse error at ledger ${event.ledger} tx=${event.txHash}: ${result.error}`,
+    );
     bizEvent('stellar.event_parse_error', {
       ledger: event.ledger,
       tx_hash: event.txHash,
-      error: err.message,
+      error: result.error,
     });
     try {
       db.prepare(
         `INSERT OR IGNORE INTO stellar_dead_letter (tx_hash, ledger, raw_event, error)
          VALUES (?, ?, ?, ?)`,
-      ).run(event.txHash, event.ledger, serialiseEventForDeadLetter(event), err.message);
+      ).run(event.txHash, event.ledger, serialiseEventForDeadLetter(event), result.error);
     } catch (dbErr) {
       log(`[stellar] dead-letter insert failed for ${event.txHash}: ${dbErr.message}`);
     }
     return;
   }
 
-  const { eventSymbol, orderId, senderAddress, amountDecimal } = parsed;
-
-  /** @type {{txid:string, paymentAsset:string, amountUsdc:string|null, amountXlm:string|null, senderAddress:string, orderId:string} | null} */
-  let dispatchPayload = null;
-
-  if (eventSymbol === 'pay_usdc') {
-    log(
-      `[stellar] pay_usdc: $${amountDecimal} USDC, order=${orderId}, from=${senderAddress}, tx=${event.txHash}`,
-    );
-    bizEvent('payment.received', {
-      asset: 'usdc',
-      amount: amountDecimal,
-      order_id: orderId,
-      txid: event.txHash,
-    });
-    dispatchPayload = {
-      txid: event.txHash,
-      paymentAsset: 'usdc_soroban',
-      amountUsdc: amountDecimal,
-      amountXlm: null,
-      senderAddress,
-      orderId,
-    };
-  } else if (eventSymbol === 'pay_xlm') {
-    log(
-      `[stellar] pay_xlm: ${amountDecimal} XLM, order=${orderId}, from=${senderAddress}, tx=${event.txHash}`,
-    );
-    bizEvent('payment.received', {
-      asset: 'xlm',
-      amount: amountDecimal,
-      order_id: orderId,
-      txid: event.txHash,
-    });
-    dispatchPayload = {
-      txid: event.txHash,
-      paymentAsset: 'xlm_soroban',
-      amountUsdc: null,
-      amountXlm: amountDecimal,
-      senderAddress,
-      orderId,
-    };
-  } else {
-    log(`[stellar] unknown event symbol: ${eventSymbol} tx=${event.txHash}`);
+  if (!result.ok && result.kind === 'unknown_symbol') {
+    log(`[stellar] unknown event symbol: ${result.symbol} tx=${event.txHash}`);
     bizEvent('stellar.unknown_event_symbol', {
       ledger: event.ledger,
       tx_hash: event.txHash,
-      symbol: String(eventSymbol),
+      symbol: result.symbol,
     });
     return;
   }
+
+  // ok === true — we have a dispatch payload.
+  const { payload } = /** @type {any} */ (result);
+  const { orderId, senderAddress, amountUsdc, amountXlm, paymentAsset } = payload;
+
+  if (paymentAsset === 'usdc_soroban') {
+    log(
+      `[stellar] pay_usdc: $${amountUsdc} USDC, order=${orderId}, from=${senderAddress}, tx=${event.txHash}`,
+    );
+    bizEvent('payment.received', {
+      asset: 'usdc',
+      amount: amountUsdc,
+      order_id: orderId,
+      txid: event.txHash,
+    });
+  } else if (paymentAsset === 'xlm_soroban') {
+    log(
+      `[stellar] pay_xlm: ${amountXlm} XLM, order=${orderId}, from=${senderAddress}, tx=${event.txHash}`,
+    );
+    bizEvent('payment.received', {
+      asset: 'xlm',
+      amount: amountXlm,
+      order_id: orderId,
+      txid: event.txHash,
+    });
+  }
+
+  // The dispatch payload shape the rest of the system expects doesn't
+  // include eventSymbol — strip it before passing to onPayment.
+  /** @type {{txid:string, paymentAsset:string, amountUsdc:string|null, amountXlm:string|null, senderAddress:string, orderId:string}} */
+  const dispatchPayload = {
+    txid: payload.txid,
+    paymentAsset,
+    amountUsdc,
+    amountXlm,
+    senderAddress,
+    orderId,
+  };
 
   // F2 audit: bounded-retry dispatch. If onPayment rejects, count the
   // failure. Below MAX_DISPATCH_RETRIES we rethrow so the outer poll
