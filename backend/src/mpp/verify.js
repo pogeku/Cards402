@@ -54,7 +54,7 @@ function _setHandlePayment(fn) {
 }
 
 /**
- * @typedef {{ok: true, orderId: string, receiptId: string, challengeId: string, txHash: string}
+ * @typedef {{ok: true, orderId: string, receiptId: string, challengeId: string, txHash: string, idempotent?: boolean}
  *   | {ok: false, status: number, reason: string, detail?: string}} VerifyVerdict
  */
 
@@ -70,9 +70,10 @@ function _setHandlePayment(fn) {
 async function verifyAndCreateMppOrder(opts) {
   const parsed = parsePaymentCredential(opts.authHeader);
   if (!parsed.ok) {
-    return { ok: false, status: 400, reason: 'malformed_credential', detail: parsed.reason };
+    const reason = /** @type {any} */ (parsed).reason;
+    return { ok: false, status: 400, reason: 'malformed_credential', detail: reason };
   }
-  const { credential } = parsed;
+  const { credential } = /** @type {{ok:true, credential:any}} */ (parsed);
 
   const challenge = loadChallenge(credential.challenge);
   if (!challenge) {

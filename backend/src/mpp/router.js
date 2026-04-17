@@ -14,7 +14,7 @@
 const { Router } = require('express');
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const { event: bizEvent } = require('../lib/logger');
-const { unsealCard } = require('../lib/card-vault');
+const { openCard } = require('../lib/card-vault');
 const { usdToXlm } = require('../payments/xlm-price');
 const { createChallenge, loadChallenge, loadOrderByReceiptId } = require('./challenge');
 const { buildDiscoveryDoc, buildChallengeBody, buildWwwAuthenticate } = require('./discovery');
@@ -102,13 +102,14 @@ function buildMppRouter(opts = {}) {
         expectedXlmAmount: amountXlmQuote,
       });
       if (!verdict.ok) {
+        const v = /** @type {any} */ (verdict);
         bizEvent('mpp.verify_rejected', {
-          status: verdict.status,
-          reason: verdict.reason,
+          status: v.status,
+          reason: v.reason,
         });
-        return res.status(verdict.status).json({
-          error: verdict.reason,
-          ...(verdict.detail && { detail: verdict.detail }),
+        return res.status(v.status).json({
+          error: v.reason,
+          ...(v.detail && { detail: v.detail }),
         });
       }
       return handleDeliveryForVerdict(req, res, verdict);
@@ -217,7 +218,7 @@ async function handleDeliveryForVerdict(req, res, verdict) {
 function extractCardFields(row) {
   if (!row.card_number) return null;
   try {
-    return unsealCard({
+    return openCard({
       number: row.card_number,
       cvv: row.card_cvv,
       expiry: row.card_expiry,
