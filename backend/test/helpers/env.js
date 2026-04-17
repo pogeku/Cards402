@@ -47,3 +47,11 @@ process.env.RETRY_BACKOFF_MS = '0';
 // test for the limiter (which lowers it explicitly via its own
 // helpers) exercises the cap.
 process.env.AUTH_FAILURE_LIMIT_PER_WINDOW = '10000';
+
+// Machine Payments Protocol — feature-flagged in production. Tests
+// always exercise the flag-on path so the routes are mounted and
+// reachable. A separate tiny unit test verifies the flag-off behavior.
+process.env.MPP_ENABLED = 'true';
+// Generous challenge rate limit in tests — the limiter has its own
+// dedicated regression test that lowers it explicitly.
+process.env.MPP_CHALLENGE_RATE_LIMIT = '10000';

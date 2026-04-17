@@ -678,6 +678,20 @@ const authFailureLimiter = rateLimit({
     }),
 });
 
+// Mount MPP routes BEFORE the auth chain — the whole point of MPP is
+// unauthenticated payment discovery, so /v1/.well-known/mpp,
+// /v1/cards/:product/:amount, and /v1/mpp/receipts/:id must be reachable
+// without an X-Api-Key header. The router's handlers only match those
+// specific paths; any other /v1 request falls through via next() into
+// authFailureLimiter + auth below, so no other endpoint accidentally
+// loses authentication.
+//
+// Gated by MPP_ENABLED so the code can ship dark in prod before rollout.
+if ((process.env.MPP_ENABLED || 'false') === 'true') {
+  const { buildMppRouter } = require('./mpp/router');
+  app.use('/v1', buildMppRouter());
+}
+
 // Order is critical: authFailureLimiter MUST run before auth. If it
 // runs after, the bcrypt compare has already executed and the cap is
 // pointless. The limiter internally checks the counter at request

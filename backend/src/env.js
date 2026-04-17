@@ -226,6 +226,27 @@ const EnvSchema = z
     STUCK_FAIL_AFTER_MS: z.string().regex(/^\d+$/).optional(),
     MAX_FULFILLMENT_ATTEMPTS: z.string().regex(/^\d+$/).optional(),
 
+    // Machine Payments Protocol (MPP). Off by default — the routes
+    // don't even mount unless MPP_ENABLED is explicitly set to 'true'.
+    // Phased rollout: ship the code dark in prod, flip the flag after
+    // staging bake.
+    MPP_ENABLED: z.enum(['true', 'false']).optional().default('false'),
+    // Challenge TTL in milliseconds. 10 minutes is tight for the
+    // Stellar confirmation timeline (~5s) but gives agents ample slack.
+    MPP_CHALLENGE_TTL_MS: z
+      .string()
+      .regex(/^\d+$/, 'MPP_CHALLENGE_TTL_MS must be a positive integer (milliseconds)')
+      .optional()
+      .default('600000'),
+    // Max seconds a 402 retry blocks waiting for card fulfillment before
+    // handing off to a 202 + Location receipt URL. Keep well under any
+    // reverse-proxy idle timeout (nginx 60s, Cloudflare 100s).
+    MPP_SYNC_WAIT_MS: z
+      .string()
+      .regex(/^\d+$/, 'MPP_SYNC_WAIT_MS must be a positive integer (milliseconds)')
+      .optional()
+      .default('10000'),
+
     // Admin UI session key — 32 bytes (64 hex) of entropy. Required if the
     // admin/ Next.js app is being served alongside the backend. Audit finding
     // A-6 is about documenting the generation script; this just forces the

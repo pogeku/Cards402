@@ -855,9 +855,74 @@ applyMigration(27, () => {
   }
 });
 
+// Migration 28: MPP (Machine Payments Protocol) groundwork.
+//   - mpp_challenges: short-lived pre-order rows that pair an unauthenticated
+//     GET /v1/cards/:product/:amount with the Stellar tx that pays for it.
+//     Bounded TTL + nightly sweep so an unauthenticated endpoint can't
+//     bloat the table.
+//   - orders.mpp_challenge_id: FK-style column (soft — SQLite ALTER can't
+//     add a FK cleanly) binding an MPP-sourced order to its challenge.
+//   - mpp_receipt_id: stable alias for the 202+Location flow so clients
+//     can poll a short URL instead of the opaque order id.
+//   - seed row api_keys('mpp-anonymous', disabled): satisfies the existing
+//     orders.api_key_id FK on MPP-sourced orders without perverting the
+//     auth table. enabled=0 means it can never be used for X-Api-Key auth.
+applyMigration(28, () => {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS mpp_challenges (
+      id                 TEXT PRIMARY KEY,
+      resource_path      TEXT NOT NULL,
+      amount_usdc        TEXT NOT NULL,
+      order_id           TEXT,
+      client_ip          TEXT,
+      created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+      expires_at         TEXT NOT NULL,
+      redeemed_at        TEXT,
+      redeemed_tx_hash   TEXT,
+      FOREIGN KEY (order_id) REFERENCES orders(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_mpp_challenges_expires
+      ON mpp_challenges(expires_at)
+      WHERE redeemed_at IS NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mpp_challenges_tx_hash
+      ON mpp_challenges(redeemed_tx_hash)
+      WHERE redeemed_tx_hash IS NOT NULL;
+  `);
+
+  for (const sql of [
+    `ALTER TABLE orders ADD COLUMN mpp_challenge_id TEXT`,
+    `ALTER TABLE orders ADD COLUMN mpp_receipt_id TEXT`,
+  ]) {
+    try {
+      db.prepare(sql).run();
+    } catch (err) {
+      if (!/duplicate column name/.test(/** @type {Error} */ (err)?.message || '')) throw err;
+    }
+  }
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_mpp_challenge_id
+      ON orders(mpp_challenge_id)
+      WHERE mpp_challenge_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_mpp_receipt_id
+      ON orders(mpp_receipt_id)
+      WHERE mpp_receipt_id IS NOT NULL;
+  `);
+
+  // Seed the anonymous api_key row. Key-hash is a sentinel value that
+  // can never be produced by bcrypt (bcrypt hashes start with $2), so
+  // no X-Api-Key input can ever match it. enabled=0 is belt-and-braces:
+  // even if a code change accidentally compared against this row, the
+  // auth middleware rejects disabled keys.
+  db.prepare(
+    `INSERT OR IGNORE INTO api_keys (id, key_hash, label, enabled, key_prefix, mode)
+     VALUES ('mpp-anonymous', 'mpp-anonymous-sentinel-no-hash', 'MPP anonymous', 0, 'mpp_', 'live')`,
+  ).run();
+});
+
 // EXPECTED_SCHEMA_VERSION must match the last `applyMigration(N)` call
 // above. Bump it in lock-step with any new migration.
-const EXPECTED_SCHEMA_VERSION = 27;
+const EXPECTED_SCHEMA_VERSION = 28;
 const actualVersion = getSchemaVersion();
 if (actualVersion > EXPECTED_SCHEMA_VERSION) {
   console.error(
