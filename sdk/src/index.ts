@@ -59,5 +59,8 @@ export {
 
 export { InsufficientFeeError } from './soroban';
 
+export { mppCharge } from './mpp';
+export type { MppChargeOpts, MppChargeResult } from './mpp';
+
 export { loadCards402Config, saveCards402Config, resolveCredentials } from './config';
 export type { Cards402Config } from './config';
