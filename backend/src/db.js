@@ -920,9 +920,24 @@ applyMigration(28, () => {
   ).run();
 });
 
+// Migration 29: store the quoted XLM amount on the challenge row.
+// Without this, the retry handler re-quotes XLM at verification time,
+// and any price drift between challenge issuance and the client's
+// retry causes the on-chain amount to mismatch what the verifier
+// expects — the client paid what the challenge quoted but the server
+// now expects a different number. Snapshotting the quote at challenge
+// creation time is the fix.
+applyMigration(29, () => {
+  try {
+    db.prepare(`ALTER TABLE mpp_challenges ADD COLUMN amount_xlm TEXT`).run();
+  } catch (err) {
+    if (!/duplicate column name/.test(/** @type {Error} */ (err)?.message || '')) throw err;
+  }
+});
+
 // EXPECTED_SCHEMA_VERSION must match the last `applyMigration(N)` call
 // above. Bump it in lock-step with any new migration.
-const EXPECTED_SCHEMA_VERSION = 28;
+const EXPECTED_SCHEMA_VERSION = 29;
 const actualVersion = getSchemaVersion();
 if (actualVersion > EXPECTED_SCHEMA_VERSION) {
   console.error(

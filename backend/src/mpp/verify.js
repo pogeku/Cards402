@@ -63,7 +63,6 @@ function _setHandlePayment(fn) {
  *   authHeader: string | undefined,
  *   resourcePath: string,
  *   expectedAmount: string,
- *   expectedXlmAmount: string | null,
  * }} opts
  * @returns {Promise<VerifyVerdict>}
  */
@@ -107,12 +106,15 @@ async function verifyAndCreateMppOrder(opts) {
     }
   }
 
-  // Try USDC first. If the tx paid in XLM, verify against the XLM quote.
+  // Try USDC first. If the tx paid in XLM, verify against the XLM
+  // amount snapshotted on the challenge row at issuance time — NOT a
+  // fresh price quote, which would drift under the client.
   let verified = null;
   const expectedContractId = process.env.RECEIVER_CONTRACT_ID || '';
   const rpcServer = getRpcServer();
+  const expectedXlmAmount = challenge.amount_xlm || null;
 
-  for (const candidate of buildCandidates(opts.expectedAmount, opts.expectedXlmAmount)) {
+  for (const candidate of buildCandidates(opts.expectedAmount, expectedXlmAmount)) {
     const v = await verifyStellarPayment({
       txHash: credential.txHash,
       expectedContractId,
@@ -156,7 +158,7 @@ async function verifyAndCreateMppOrder(opts) {
     contract_id: expectedContractId,
     order_id: orderId,
     usdc: { amount: opts.expectedAmount },
-    ...(opts.expectedXlmAmount && { xlm: { amount: opts.expectedXlmAmount } }),
+    ...(expectedXlmAmount && { xlm: { amount: expectedXlmAmount } }),
   };
 
   // The order row inserts inside a transaction together with the
@@ -168,7 +170,7 @@ async function verifyAndCreateMppOrder(opts) {
       insertPendingPaymentOrder({
         id: orderId,
         amount_usdc: opts.expectedAmount,
-        expected_xlm_amount: opts.expectedXlmAmount,
+        expected_xlm_amount: expectedXlmAmount,
         api_key_id: 'mpp-anonymous',
         webhook_url: null,
         metadata: null,

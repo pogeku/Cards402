@@ -81,25 +81,15 @@ function buildMppRouter(opts = {}) {
     const resourcePath = `/v1/cards/visa/${amountStr}`;
     const amountUsdc = normaliseAmount(amountStr);
 
-    // XLM quote — same path as the classic orders API. A price-oracle
-    // outage must not wedge the whole surface, so an XLM failure just
-    // omits the XLM method from the challenge; the USDC method always
-    // stands.
-    let amountXlmQuote = null;
-    try {
-      const xlm = await usdToXlm(amountUsdc);
-      if (xlm) amountXlmQuote = xlm;
-    } catch (err) {
-      bizEvent('mpp.xlm_quote_failed', { amount: amountUsdc, error: err?.message });
-    }
-
-    // Credential present → verification + fulfillment path.
+    // Credential present → verification + fulfillment path. The XLM
+    // amount to verify against comes from the stored challenge row,
+    // NOT a fresh usdToXlm() call, so price drift between challenge
+    // issuance and retry doesn't cause spurious mismatches.
     if (req.headers.authorization && /^Payment\b/i.test(req.headers.authorization)) {
       const verdict = await verifyAndCreateMppOrder({
         authHeader: req.headers.authorization,
         resourcePath,
         expectedAmount: amountUsdc,
-        expectedXlmAmount: amountXlmQuote,
       });
       if (!verdict.ok) {
         const v = /** @type {any} */ (verdict);
@@ -115,10 +105,22 @@ function buildMppRouter(opts = {}) {
       return handleDeliveryForVerdict(req, res, verdict);
     }
 
-    // No credential → issue a fresh 402 challenge.
+    // No credential → issue a fresh 402 challenge. Quote XLM at issuance
+    // time and snapshot it onto the challenge row; retry verification
+    // uses the stored value so any subsequent price movement doesn't
+    // make a paid tx look like an amount mismatch.
+    let amountXlmQuote = null;
+    try {
+      const xlm = await usdToXlm(amountUsdc);
+      if (xlm) amountXlmQuote = xlm;
+    } catch (err) {
+      bizEvent('mpp.xlm_quote_failed', { amount: amountUsdc, error: err?.message });
+    }
+
     const challenge = createChallenge({
       resourcePath,
       amountUsdc,
+      amountXlm: amountXlmQuote,
       clientIp: clientIpOf(req),
       ttlMs: ttlMs(),
     });

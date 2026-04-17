@@ -36,13 +36,16 @@ function generateReceiptId() {
  * @typedef {object} CreateChallengeOpts
  * @property {string} resourcePath - The URL path the client requested.
  * @property {string} amountUsdc - Decimal string, e.g. '10.00'.
+ * @property {string|null} amountXlm - Quoted XLM amount at challenge time, or null if unquoted.
  * @property {string|null} clientIp - Source IP for forensic/rate-limit context.
  * @property {number} ttlMs - Milliseconds until expiry.
  */
 
 /**
  * Insert a new challenge row. Returns the challenge record so the caller
- * can shape it into the 402 response body.
+ * can shape it into the 402 response body. The XLM quote is snapshotted
+ * at creation time — a retry verifies against the snapshotted amount,
+ * not a freshly-quoted price (which may have drifted).
  * @param {CreateChallengeOpts} opts
  */
 function createChallenge(opts) {
@@ -50,12 +53,14 @@ function createChallenge(opts) {
   const createdAt = new Date();
   const expiresAt = new Date(createdAt.getTime() + opts.ttlMs);
   db.prepare(
-    `INSERT INTO mpp_challenges (id, resource_path, amount_usdc, client_ip, created_at, expires_at)
-     VALUES (@id, @resource_path, @amount_usdc, @client_ip, @created_at, @expires_at)`,
+    `INSERT INTO mpp_challenges
+        (id, resource_path, amount_usdc, amount_xlm, client_ip, created_at, expires_at)
+     VALUES (@id, @resource_path, @amount_usdc, @amount_xlm, @client_ip, @created_at, @expires_at)`,
   ).run({
     id,
     resource_path: opts.resourcePath,
     amount_usdc: opts.amountUsdc,
+    amount_xlm: opts.amountXlm ?? null,
     client_ip: opts.clientIp,
     created_at: createdAt.toISOString(),
     expires_at: expiresAt.toISOString(),
@@ -64,6 +69,7 @@ function createChallenge(opts) {
     id,
     resourcePath: opts.resourcePath,
     amountUsdc: opts.amountUsdc,
+    amountXlm: opts.amountXlm ?? null,
     createdAt,
     expiresAt,
   };
