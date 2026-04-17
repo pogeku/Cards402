@@ -91,12 +91,12 @@ describe('GET /v1/cards/visa/:amount — 402 challenge', () => {
     assert.equal(res.body.retry_url, '/v1/cards/visa/5');
   });
 
-  it('Phase 1: rejects credential retry with 501 (verification not enabled)', async () => {
+  it('rejects malformed credentials at parse time (400)', async () => {
     const res = await request
       .get('/v1/cards/visa/10.00')
       .set('Authorization', 'Payment scheme="stellar", challenge="x", tx_hash="y"');
-    assert.equal(res.status, 501);
-    assert.equal(res.body.error, 'not_implemented');
+    assert.equal(res.status, 400);
+    assert.equal(res.body.error, 'malformed_credential');
   });
 
   it('each call creates a new challenge (no caching)', async () => {

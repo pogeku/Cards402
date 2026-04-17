@@ -14,9 +14,12 @@
 const { Router } = require('express');
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const { event: bizEvent } = require('../lib/logger');
+const { unsealCard } = require('../lib/card-vault');
 const { usdToXlm } = require('../payments/xlm-price');
 const { createChallenge, loadChallenge, loadOrderByReceiptId } = require('./challenge');
 const { buildDiscoveryDoc, buildChallengeBody, buildWwwAuthenticate } = require('./discovery');
+const { verifyAndCreateMppOrder } = require('./verify');
+const { waitForDelivery } = require('./wait-for-delivery');
 
 // Per-IP rate limit on challenge creation. An unauthenticated endpoint
 // must never be a free DoS amplifier — each GET creates a row in
@@ -75,17 +78,6 @@ function buildMppRouter(opts = {}) {
       });
     }
 
-    // If the client sent an Authorization: Payment credential, Phase 2
-    // will verify it and return the card. In Phase 1 we reject credentials
-    // with 501 so the wire contract is honest about capability.
-    if (req.headers.authorization && /^Payment\b/i.test(req.headers.authorization)) {
-      return res.status(501).json({
-        error: 'not_implemented',
-        message:
-          'MPP credential verification is not enabled yet. Retry with the current 402 challenge when rollout completes.',
-      });
-    }
-
     const resourcePath = `/v1/cards/visa/${amountStr}`;
     const amountUsdc = normaliseAmount(amountStr);
 
@@ -101,6 +93,28 @@ function buildMppRouter(opts = {}) {
       bizEvent('mpp.xlm_quote_failed', { amount: amountUsdc, error: err?.message });
     }
 
+    // Credential present → verification + fulfillment path.
+    if (req.headers.authorization && /^Payment\b/i.test(req.headers.authorization)) {
+      const verdict = await verifyAndCreateMppOrder({
+        authHeader: req.headers.authorization,
+        resourcePath,
+        expectedAmount: amountUsdc,
+        expectedXlmAmount: amountXlmQuote,
+      });
+      if (!verdict.ok) {
+        bizEvent('mpp.verify_rejected', {
+          status: verdict.status,
+          reason: verdict.reason,
+        });
+        return res.status(verdict.status).json({
+          error: verdict.reason,
+          ...(verdict.detail && { detail: verdict.detail }),
+        });
+      }
+      return handleDeliveryForVerdict(req, res, verdict);
+    }
+
+    // No credential → issue a fresh 402 challenge.
     const challenge = createChallenge({
       resourcePath,
       amountUsdc,
@@ -121,16 +135,32 @@ function buildMppRouter(opts = {}) {
   });
 
   // ── Receipt polling (202 → 200 transition) ────────────────────────────
-  //
-  // Phase 1 stub: the receipt endpoint exists but always returns 404
-  // since no challenges have been redeemed yet. Phase 2 fleshes out the
-  // delivered / fulfilling states.
   router.get('/mpp/receipts/:id', (req, res) => {
     const row = loadOrderByReceiptId(req.params.id);
     if (!row) {
       return res.status(404).json({
         error: 'receipt_not_found',
         message: 'No receipt matches this id. It may have expired or never existed.',
+      });
+    }
+    if (row.status === 'delivered') {
+      return res
+        .status(200)
+        .set('Payment-Receipt', buildPaymentReceiptHeader(row))
+        .json({
+          state: 'delivered',
+          receipt_id: req.params.id,
+          order_id: row.id,
+          amount_usdc: row.amount_usdc,
+          card: extractCardFields(row),
+        });
+    }
+    if (row.status === 'failed') {
+      return res.status(502).json({
+        state: 'failed',
+        receipt_id: req.params.id,
+        order_id: row.id,
+        message: 'Fulfillment failed. Funds are being refunded to the sender address.',
       });
     }
     return res.status(202).json({
@@ -142,6 +172,74 @@ function buildMppRouter(opts = {}) {
   });
 
   return router;
+}
+
+// ── Delivery handoff ─────────────────────────────────────────────────
+//
+// After synchronous verification succeeds the order is created and
+// handlePayment has dispatched. Wait up to MPP_SYNC_WAIT_MS for the
+// order to reach 'delivered'; beyond that, hand off to a 202 + Location.
+async function handleDeliveryForVerdict(req, res, verdict) {
+  const syncWaitMs = parseInt(process.env.MPP_SYNC_WAIT_MS || '10000', 10);
+  const result = await waitForDelivery({ orderId: verdict.orderId, timeoutMs: syncWaitMs });
+
+  if (result.state === 'delivered') {
+    res.set('Payment-Receipt', buildPaymentReceiptHeader(result.order));
+    return res.status(200).json({
+      state: 'delivered',
+      receipt_id: verdict.receiptId,
+      order_id: verdict.orderId,
+      amount_usdc: result.order.amount_usdc,
+      card: extractCardFields(result.order),
+      challenge_id: verdict.challengeId,
+      tx_hash: verdict.txHash,
+    });
+  }
+  if (result.state === 'failed') {
+    return res.status(502).json({
+      state: 'failed',
+      receipt_id: verdict.receiptId,
+      order_id: verdict.orderId,
+      message: 'Fulfillment failed. Funds are being refunded to the sender address.',
+    });
+  }
+  // timeout — hand off to the receipt polling endpoint.
+  const location = `/v1/mpp/receipts/${verdict.receiptId}`;
+  res.set('Location', location);
+  return res.status(202).json({
+    state: 'fulfilling',
+    receipt_id: verdict.receiptId,
+    order_id: verdict.orderId,
+    poll_url: location,
+  });
+}
+
+function extractCardFields(row) {
+  if (!row.card_number) return null;
+  try {
+    return unsealCard({
+      number: row.card_number,
+      cvv: row.card_cvv,
+      expiry: row.card_expiry,
+      brand: row.card_brand,
+    });
+  } catch {
+    return {
+      number: row.card_number,
+      cvv: row.card_cvv,
+      expiry: row.card_expiry,
+      brand: row.card_brand,
+    };
+  }
+}
+
+function buildPaymentReceiptHeader(row) {
+  const parts = [`challenge="${row.mpp_challenge_id ?? ''}"`];
+  // stellar_txid column on orders stores the Stellar tx hash once
+  // handlePayment marks the order paid. Fall back to empty if missing.
+  if (row.stellar_txid) parts.push(`tx_hash="${row.stellar_txid}"`);
+  parts.push(`settled_at="${new Date().toISOString()}"`);
+  return parts.join(', ');
 }
 
 function clientIpOf(req) {
