@@ -16,4 +16,16 @@ if [ -n "$staged_env" ]; then
   exit 1
 fi
 
-npx lint-staged
+# Use local binary directly; avoids shell differences in GitHub Desktop.
+if [ -x "./node_modules/.bin/lint-staged" ]; then
+  ./node_modules/.bin/lint-staged
+  exit $?
+fi
+
+if command -v npx >/dev/null 2>&1; then
+  npx lint-staged
+  exit $?
+fi
+
+echo "ERROR: lint-staged is not available (install dependencies first)."
+exit 127

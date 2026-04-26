@@ -34,21 +34,8 @@ const CSP = [
 const HSTS = 'max-age=63072000; includeSubDomains; preload';
 
 const isDev = process.env.NODE_ENV === 'development';
-const isGitHubPages = process.env.GITHUB_ACTIONS === 'true';
 
 const nextConfig: NextConfig = {
-  output: 'export',
-  images: {
-    unoptimized: true,
-  },
-  trailingSlash: true,
-  ...(isGitHubPages
-    ? {
-        // Project pages are served under /<repo-name>.
-        basePath: '/Cards402',
-        assetPrefix: '/Cards402/',
-      }
-    : {}),
   turbopack: {
     root: path.resolve(__dirname, '..'),
   },

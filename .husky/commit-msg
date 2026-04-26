@@ -1,2 +1,14 @@
 #!/bin/sh
-npx --no -- commitlint --edit "$1"
+# Use local binary directly to avoid Windows cmd argument mangling.
+if [ -x "./node_modules/.bin/commitlint" ]; then
+  ./node_modules/.bin/commitlint --edit "$1"
+  exit $?
+fi
+
+if command -v npx >/dev/null 2>&1; then
+  npx --no -- commitlint --edit "$1"
+  exit $?
+fi
+
+echo "ERROR: commitlint is not available (install dependencies first)."
+exit 127
