@@ -1,11 +1,11 @@
 #!/bin/sh
 
 run_npm() {
-  if command -v npm >/dev/null 2>&1; then
-    npm "$@"
-  elif command -v cmd.exe >/dev/null 2>&1; then
-    # GitHub Desktop on Windows can miss npm in Bash PATH; cmd resolves npm.cmd.
+  if command -v cmd.exe >/dev/null 2>&1; then
+    # Prefer cmd on Windows: GitHub Desktop's bash may resolve `npm` to a non-executable path.
     cmd.exe /c npm "$@"
+  elif command -v npm >/dev/null 2>&1; then
+    npm "$@"
   else
     echo "ERROR: npm is not available in PATH."
     exit 127
