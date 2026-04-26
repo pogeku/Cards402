@@ -1,4 +1,17 @@
 #!/bin/sh
-npm run typecheck
-npm run lint
-npm test --workspaces --if-present
+
+run_npm() {
+  if command -v npm >/dev/null 2>&1; then
+    npm "$@"
+  elif command -v cmd.exe >/dev/null 2>&1; then
+    # GitHub Desktop on Windows can miss npm in Bash PATH; cmd resolves npm.cmd.
+    cmd.exe /c npm "$@"
+  else
+    echo "ERROR: npm is not available in PATH."
+    exit 127
+  fi
+}
+
+run_npm run typecheck
+run_npm run lint
+run_npm test --workspaces --if-present
