@@ -50,12 +50,12 @@ jobs:
 
     steps:
       - name: Checkout cards402
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: cards402
 
       - name: Checkout vcc
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ github.repository_owner }}/vcc
           ref: ${{ inputs.vcc_ref || 'main' }}
